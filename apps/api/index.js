@@ -175,7 +175,7 @@ app.get("/api/twitter/auth/start", async (req, res) => {
       createdAt: Date.now(),
     });
 
-    const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
+    const authUrl = new URL("https://x.com/i/oauth2/authorize");
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("client_id", process.env.TWITTER_CLIENT_ID);
     authUrl.searchParams.set("redirect_uri", callbackUrl);
