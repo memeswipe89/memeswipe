@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, Alert } from "react-native";
 
-const API_BASE = "https://memeswipe-api.onrender.com";
+const API_BASE = "https://memeswipe.onrender.com";
 const TEST_USER_ID = "11111111-1111-1111-1111-111111111111";
 
 export default function HomeScreen() {
