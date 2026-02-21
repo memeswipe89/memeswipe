@@ -1,14 +1,148 @@
-import React, { useState } from "react";
+import * as Linking from "expo-linking";
+import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, Alert } from "react-native";
 
 const API_BASE = "https://memeswipe.onrender.com";
 const TEST_USER_ID = "11111111-1111-1111-1111-111111111111";
+
+const tryParseJson = (raw: string) => {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const firstLine = (value: string) => value.split("\n").map((line) => line.trim()).find(Boolean) || "";
 
 export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
   const [tokens, setTokens] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [creatingOrder, setCreatingOrder] = useState(false);
+  const [checkingTwitter, setCheckingTwitter] = useState(true);
+  const [twitterConnectLoading, setTwitterConnectLoading] = useState(false);
+  const [showTwitterPrompt, setShowTwitterPrompt] = useState(false);
+  const [twitterConnection, setTwitterConnection] = useState<{
+    username: string;
+    id: string;
+  } | null>(null);
+
+  const checkTwitterConnection = async () => {
+    try {
+      setCheckingTwitter(true);
+      const res = await fetch(`${API_BASE}/api/twitter/connection/${TEST_USER_ID}`);
+      const raw = await res.text();
+      const data = tryParseJson(raw);
+
+      if (!res.ok) {
+        const apiError =
+          (data && typeof data.error === "string" && data.error) ||
+          firstLine(raw) ||
+          "Could not check Twitter connection";
+        throw new Error(`Twitter check failed (${res.status}): ${apiError}`);
+      }
+
+      if (!data) {
+        throw new Error(`Twitter check returned non-JSON (${res.status})`);
+      }
+
+      if (data.connected) {
+        setTwitterConnection({
+          username: data.twitterUsername,
+          id: data.twitterUserId,
+        });
+        setShowTwitterPrompt(false);
+      } else {
+        setShowTwitterPrompt(true);
+      }
+    } catch (error) {
+      console.log(error);
+      setShowTwitterPrompt(true);
+    } finally {
+      setCheckingTwitter(false);
+    }
+  };
+
+  const handleTwitterRedirect = (url: string) => {
+    const parsed = Linking.parse(url);
+    const path = parsed.path || "";
+    const host = parsed.hostname || "";
+    const isTwitterCallback = path.includes("twitter-connected") || host === "twitter-connected";
+    if (!isTwitterCallback) return;
+
+    const status = parsed.queryParams?.status;
+    if (status !== "success") {
+      setTwitterConnectLoading(false);
+      const error = parsed.queryParams?.error;
+      Alert.alert("Twitter Connect", `Twitter connection failed${error ? `: ${error}` : "."}`);
+      return;
+    }
+
+    const twitterUsername = parsed.queryParams?.twitterUsername;
+    const twitterUserId = parsed.queryParams?.twitterUserId;
+    if (typeof twitterUsername !== "string" || typeof twitterUserId !== "string") {
+      setTwitterConnectLoading(false);
+      Alert.alert("Twitter Connect", "Twitter profile data missing");
+      return;
+    }
+
+    setTwitterConnection({ username: twitterUsername, id: twitterUserId });
+    setShowTwitterPrompt(false);
+    setTwitterConnectLoading(false);
+    Alert.alert("Connected", `Connected as @${twitterUsername}`);
+  };
+
+  useEffect(() => {
+    const sub = Linking.addEventListener("url", ({ url }) => {
+      handleTwitterRedirect(url);
+    });
+
+    Linking.getInitialURL().then((url) => {
+      if (url) handleTwitterRedirect(url);
+    });
+
+    checkTwitterConnection();
+
+    return () => sub.remove();
+  }, []);
+
+  const connectTwitter = async () => {
+    try {
+      setTwitterConnectLoading(true);
+      const returnUrl = Linking.createURL("twitter-connected");
+
+      const startRes = await fetch(
+        `${API_BASE}/api/twitter/auth/start?userId=${encodeURIComponent(TEST_USER_ID)}&returnUrl=${encodeURIComponent(returnUrl)}`
+      );
+      const raw = await startRes.text();
+      const startJson = tryParseJson(raw);
+
+      if (!startRes.ok) {
+        const apiError =
+          (startJson && typeof startJson.error === "string" && startJson.error) ||
+          firstLine(raw) ||
+          "Failed to start Twitter auth";
+        throw new Error(`Twitter start failed (${startRes.status}): ${apiError}`);
+      }
+
+      if (!startJson?.authUrl) {
+        throw new Error("Twitter start endpoint returned no authUrl");
+      }
+      const canOpen = await Linking.canOpenURL(startJson.authUrl);
+      if (!canOpen) {
+        throw new Error("Cannot open Twitter authorization URL");
+      }
+      await Linking.openURL(startJson.authUrl);
+    } catch (error: any) {
+      console.log(error);
+      Alert.alert("Twitter Connect", error?.message || "Failed to connect Twitter");
+      setTwitterConnectLoading(false);
+    } finally {
+      // Intentionally kept loading while user is in Twitter/browser.
+      // It is reset when callback URL is received or if an error is thrown above.
+    }
+  };
 
   const loadTokens = async () => {
     try {
@@ -85,9 +219,45 @@ export default function HomeScreen() {
 
   const currentToken = tokens[currentIndex];
 
+  if (checkingTwitter) {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator />
+        <Text style={{ color: "#fff", marginTop: 12 }}>Checking Twitter connection...</Text>
+      </View>
+    );
+  }
+
+  if (showTwitterPrompt && !twitterConnection) {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#000", padding: 20, justifyContent: "center" }}>
+        <Text style={{ color: "#fff", fontSize: 28, fontWeight: "bold", textAlign: "center" }}>
+          Connect Twitter
+        </Text>
+        <Text style={{ color: "#bbb", marginTop: 12, textAlign: "center" }}>
+          Please connect your Twitter/X account to continue.
+        </Text>
+        <Pressable
+          onPress={connectTwitter}
+          style={{ marginTop: 24, padding: 16, backgroundColor: "#fff", borderRadius: 10 }}
+          disabled={twitterConnectLoading}
+        >
+          <Text style={{ color: "#000", textAlign: "center", fontWeight: "bold" }}>
+            {twitterConnectLoading ? "Connecting..." : "Connect Twitter"}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1, backgroundColor: "#000", padding: 20, justifyContent: "center" }}>
       <Text style={{ color: "#fff", fontSize: 24, fontWeight: "bold" }}>MemeSwipe</Text>
+      {twitterConnection ? (
+        <Text style={{ color: "#7fff9f", marginTop: 6 }}>
+          Connected: @{twitterConnection.username} ({twitterConnection.id})
+        </Text>
+      ) : null}
 
       {tokens.length === 0 ? (
         <>
