@@ -146,6 +146,20 @@ app.get("/api/twitter/connection/:userId", async (req, res) => {
   }
 });
 
+app.delete("/api/twitter/connection/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+    await ensureTwitterConnectionsTable();
+    await pool.query(`delete from twitter_connections where user_id = $1`, [userId]);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("Twitter disconnect error:", err);
+    return res.status(500).json({ error: "Failed to disconnect Twitter" });
+  }
+});
+
 app.get("/api/twitter/auth/start", async (req, res) => {
   try {
     const { userId, returnUrl } = req.query;
