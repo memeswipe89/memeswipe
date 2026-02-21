@@ -2,6 +2,8 @@ import * as Linking from "expo-linking";
 import * as FileSystem from "expo-file-system/legacy";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, Alert } from "react-native";
+import { router } from "expo-router";
+import { useWalletContext } from "@/contexts/wallet-context";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 const USER_ID_FILE = FileSystem.documentDirectory
@@ -28,6 +30,7 @@ const createUuidV4 = () =>
   });
 
 export default function HomeScreen() {
+  const { onTwitterLoginSuccess, onTwitterLogoutSuccess } = useWalletContext();
   const connectInProgressRef = useRef(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,7 +82,7 @@ export default function HomeScreen() {
     return newId;
   };
 
-  const checkTwitterConnection = async (currentUserId: string) => {
+  const checkTwitterConnection = useCallback(async (currentUserId: string) => {
     try {
       setCheckingTwitter(true);
       const res = await fetch(`${API_BASE}/api/twitter/connection/${currentUserId}`);
@@ -99,9 +102,14 @@ export default function HomeScreen() {
       }
 
       if (data.connected) {
-        setTwitterConnection({
+        const profile = {
           username: data.twitterUsername,
           id: data.twitterUserId,
+        };
+        setTwitterConnection(profile);
+        onTwitterLoginSuccess(profile).catch((error) => {
+          console.log(error);
+          Alert.alert("Wallet", "Twitter connected, but wallet creation failed. You can retry from Wallet tab.");
         });
         setShowTwitterPrompt(false);
       } else {
@@ -113,7 +121,7 @@ export default function HomeScreen() {
     } finally {
       setCheckingTwitter(false);
     }
-  };
+  }, [onTwitterLoginSuccess]);
 
   const handleTwitterRedirect = useCallback((url: string) => {
     // Ignore stale deep links unless user is currently connecting.
@@ -144,11 +152,16 @@ export default function HomeScreen() {
     }
 
     connectInProgressRef.current = false;
-    setTwitterConnection({ username: twitterUsername, id: twitterUserId });
+    const profile = { username: twitterUsername, id: twitterUserId };
+    setTwitterConnection(profile);
+    onTwitterLoginSuccess(profile).catch((error) => {
+      console.log(error);
+      Alert.alert("Wallet", "Twitter connected, but wallet creation failed. You can retry from Wallet tab.");
+    });
     setShowTwitterPrompt(false);
     setTwitterConnectLoading(false);
     Alert.alert("Connected", `Connected as @${twitterUsername}`);
-  }, []);
+  }, [onTwitterLoginSuccess]);
 
   useEffect(() => {
     const sub = Linking.addEventListener("url", ({ url }) => {
@@ -173,7 +186,7 @@ export default function HomeScreen() {
     })();
 
     return () => sub.remove();
-  }, [handleTwitterRedirect]);
+  }, [checkTwitterConnection, handleTwitterRedirect]);
 
   const connectTwitter = async () => {
     try {
@@ -241,6 +254,7 @@ export default function HomeScreen() {
       await rotateLocalUserId();
       setTwitterConnection(null);
       setShowTwitterPrompt(true);
+      onTwitterLogoutSuccess();
       Alert.alert("Disconnected", "Twitter has been disconnected.");
     } catch (error: any) {
       console.log(error);
@@ -377,6 +391,12 @@ export default function HomeScreen() {
             <Text style={{ color: "#fff", textAlign: "center", fontWeight: "600" }}>
               {twitterConnectLoading ? "Disconnecting..." : "Disconnect Twitter"}
             </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.push("/wallet")}
+            style={{ marginTop: 10, padding: 12, backgroundColor: "#fff", borderRadius: 10 }}
+          >
+            <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Add SOL</Text>
           </Pressable>
         </>
       ) : null}
