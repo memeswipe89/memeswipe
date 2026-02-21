@@ -2,7 +2,7 @@ import * as Linking from "expo-linking";
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, Alert } from "react-native";
 
-const API_BASE = "https://memeswipe.onrender.com";
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 const TEST_USER_ID = "11111111-1111-1111-1111-111111111111";
 
 const tryParseJson = (raw: string) => {
@@ -14,6 +14,7 @@ const tryParseJson = (raw: string) => {
 };
 
 const firstLine = (value: string) => value.split("\n").map((line) => line.trim()).find(Boolean) || "";
+const looksLikeHtml = (value: string) => /^\s*</.test(value);
 
 export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
@@ -119,6 +120,11 @@ export default function HomeScreen() {
       const startJson = tryParseJson(raw);
 
       if (!startRes.ok) {
+        if (startRes.status === 404 && looksLikeHtml(raw)) {
+          throw new Error(
+            "Twitter API route not found on server. Deploy latest backend code (apps/api/index.js) or fix API_BASE URL."
+          );
+        }
         const apiError =
           (startJson && typeof startJson.error === "string" && startJson.error) ||
           firstLine(raw) ||
