@@ -16,12 +16,13 @@ import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, deductBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
 
-const API_BASE = 'https://memeswipe.onrender.com';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const TEST_USER_ID = '11111111-1111-1111-1111-111111111111';
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
 const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
 const LAST_ROI_KEY = '@memeswipe:lastROI';
+const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const PAGE_LIMIT = 50;
 const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
@@ -63,23 +64,6 @@ const buildFallbackChart = (priceUsd: number) => {
   const base = priceUsd || Math.random() * 0.02 + 0.002;
   return [base * 0.96, base * 1.02, base, base * 1.08, base * 1.04, base * 1.12];
 };
-
-const generateMockTokens = (offset = 0): SwipeToken[] =>
-  Array.from({ length: 30 }, (_, i) => {
-    const idx = offset + i + 1;
-    return {
-      name: `Demo Coin ${idx}`,
-      symbol: `DC${idx}`,
-      address: `DEMO${idx}`,
-      priceUsd: Math.random() * 0.001,
-      liquidityUsd: Math.random() * 50000,
-      volume24hUsd: Math.random() * 900000,
-      marketCapUsd: Math.random() * 3000000,
-      change24hPct: (Math.random() - 0.5) * 30,
-      chartData: buildFallbackChart(Math.random() * 0.001 + 0.00001).slice(-20),
-      graduationTime: new Date().toISOString(),
-    };
-  });
 
 const mapApiToken = (token: ApiToken): SwipeToken => {
   const price = toNumber(token.priceUsd, 0);
@@ -169,12 +153,10 @@ export default function HomeScreen() {
   const [segmentDepleted, setSegmentDepleted] = useState<Record<RemoteSegment, boolean>>(
     makeSegmentMap(() => false)
   );
-  const [isFallback, setIsFallback] = useState(false);
   const [isSwiping, setIsSwiping] = useState(false);
   const [balance, setBalanceState] = useState(0);
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI } = useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
-  const mockOffsetRef = useRef(0);
   const lastFeedFetchRef = useRef(0);
   const blockedUntilRef = useRef(0);
   const retryDelayRef = useRef(10000);
@@ -212,6 +194,25 @@ export default function HomeScreen() {
 
   useEffect(() => {
     getDevBalance().then(setBalanceState).catch(() => setBalanceState(1000));
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const applyOneTimeBonus = async () => {
+      try {
+        const applied = await AsyncStorage.getItem(BONUS_2000_APPLIED_KEY);
+        if (applied === 'true') return;
+        const updated = await addBalance(2000);
+        await AsyncStorage.setItem(BONUS_2000_APPLIED_KEY, 'true');
+        if (active) setBalanceState(updated);
+      } catch (err) {
+        console.log('failed to apply bonus balance', err);
+      }
+    };
+    void applyOneTimeBonus();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -298,20 +299,7 @@ export default function HomeScreen() {
     async (segmentType: RemoteSegment, initial = false) => {
       if (segmentLoadingMore[segmentType]) return [];
       if (!segmentHasMore[segmentType] && !initial) return [];
-      if (!canFetchFeed()) {
-        if (initial && segmentCache[segmentType].length === 0) {
-          const mock = generateMockTokens(mockOffsetRef.current);
-          mockOffsetRef.current += mock.length;
-          console.log("⚠️ Using fallback demo tokens");
-          setIsFallback(true);
-          setSegmentCache((prev) => ({
-            ...prev,
-            [segmentType]: [...prev[segmentType], ...mock],
-          }));
-          return mock;
-        }
-        return [];
-      }
+      if (!canFetchFeed()) return [];
 
       setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: true }));
       if (initial) setLoading(true);
@@ -327,31 +315,11 @@ export default function HomeScreen() {
         const res = await fetch(`${API_BASE}${endpoint}${q}`);
         if (!res.ok) {
           onFeedError(res.status);
-          const mock = generateMockTokens(mockOffsetRef.current);
-          mockOffsetRef.current += mock.length;
-          console.log("⚠️ Using fallback demo tokens");
-          setIsFallback(true);
-          setSegmentCache((prev) => ({
-            ...prev,
-            [segmentType]: [...prev[segmentType], ...mock],
-          }));
-          return mock;
+          return [];
         }
         onFeedSuccess();
-        const data = (await res.json()) as { tokens?: ApiToken[]; cursor?: string | null; fallback?: boolean };
+        const data = (await res.json()) as { tokens?: ApiToken[]; cursor?: string | null };
         const incoming = Array.isArray(data.tokens) ? data.tokens.map(mapApiToken) : [];
-        if (data.fallback || incoming.length === 0) {
-          const mock = generateMockTokens(mockOffsetRef.current);
-          mockOffsetRef.current += mock.length;
-          console.log("⚠️ Using fallback demo tokens");
-          setIsFallback(true);
-          setSegmentCache((prev) => ({
-            ...prev,
-            [segmentType]: [...prev[segmentType], ...mock],
-          }));
-          return mock;
-        }
-        setIsFallback(false);
         const seen = loadedAddressRef.current[segmentType];
 
         const deduped = incoming.filter((token) => {
@@ -375,15 +343,7 @@ export default function HomeScreen() {
         return deduped;
       } catch (err) {
         console.log(err);
-        const mock = generateMockTokens(mockOffsetRef.current);
-        mockOffsetRef.current += mock.length;
-        console.log("⚠️ Using fallback demo tokens");
-        setIsFallback(true);
-        setSegmentCache((prev) => ({
-          ...prev,
-          [segmentType]: [...prev[segmentType], ...mock],
-        }));
-        return mock;
+        return [];
       } finally {
         setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: false }));
         if (initial) setLoading(false);
@@ -395,7 +355,6 @@ export default function HomeScreen() {
       hiddenTokenAddresses,
       onFeedError,
       onFeedSuccess,
-      segmentCache,
       segmentCursor,
       segmentHasMore,
       segmentLoadingMore,
@@ -460,20 +419,6 @@ export default function HomeScreen() {
       void ensureDeckRefill(segment);
     }
   }, [ensureDeckRefill, hiddenTokenAddresses, segment, segmentCache, segmentLoadingMore]);
-
-  useEffect(() => {
-    if (!isRemoteSegment(segment)) return;
-    if (!isFallback) return;
-    const visibleCount = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length;
-    if (visibleCount >= LOW_DECK_THRESHOLD) return;
-
-    const mock = generateMockTokens(mockOffsetRef.current);
-    mockOffsetRef.current += mock.length;
-    setSegmentCache((prev) => ({
-      ...prev,
-      [segment]: [...prev[segment], ...mock],
-    }));
-  }, [hiddenTokenAddresses, isFallback, segment, segmentCache]);
 
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
@@ -575,6 +520,8 @@ export default function HomeScreen() {
         Alert.alert('Error', 'Token address missing in API response');
         return false;
       }
+      const amount = Number.isFinite(tradeAmount) ? Math.max(1, tradeAmount) : 1;
+      const targetRoi = Number.isFinite(tpROI) ? Math.max(1, tpROI) : 1;
 
       try {
         setCreatingOrder(true);
@@ -586,9 +533,20 @@ export default function HomeScreen() {
             userId: TEST_USER_ID,
             chain: activeChain || 'solana',
             tokenAddress: token.address,
-            amountUSDT: tradeAmount,
-            roiTarget: tpROI,
+            tokenName: token.name,
+            tokenSymbol: token.symbol,
+            amountUsd: amount,
+            tpRoi: targetRoi,
+            amountUSDT: amount,
+            roiTarget: targetRoi,
             stopLoss,
+            priceUsd: token.priceUsd,
+            liquidityUsd: token.liquidityUsd,
+            volume24hUsd: token.volume24hUsd,
+            marketCapUsd: token.marketCapUsd,
+            change24hPct: token.change24hPct,
+            graduationTime: token.graduationTime || null,
+            chartData: Array.isArray(token.chartData) ? token.chartData : [],
           }),
         });
 
@@ -737,7 +695,7 @@ export default function HomeScreen() {
               <FeedSegmentedControl
                 value={segment}
                 onChange={setSegment}
-                segments={['trending', 'stalker', 'bigcap']}
+                segments={['trending', 'stalker', 'bigcap', 'smart', 'favorites']}
               />
             </View>
           </View>
@@ -758,18 +716,14 @@ export default function HomeScreen() {
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'
-                  : isFallback
-                    ? 'Demo mode active'
-                    : isRemoteSegment(segment) && segmentDepleted[segment]
+                  : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'No more tokens available right now'
                     : 'Deck complete'
               }
               emptySubtitle={
                 segment === 'favorites'
                   ? 'Tap the heart to save tokens for later'
-                  : isFallback
-                    ? 'Fallback demo tokens are loaded for infinite swipe testing.'
-                    : isRemoteSegment(segment) && segmentDepleted[segment]
+                  : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'Please check back shortly for fresh listings.'
                     : 'No more tokens in this segment.'
               }
