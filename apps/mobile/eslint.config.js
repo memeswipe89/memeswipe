@@ -7,4 +7,14 @@ module.exports = defineConfig([
   {
     ignores: ['dist/*'],
   },
+  {
+    settings: {
+      'import/resolver': {
+        node: {
+          // Support running lint from monorepo root and from apps/mobile.
+          moduleDirectory: ['node_modules', 'apps/mobile/node_modules'],
+        },
+      },
+    },
+  },
 ]);

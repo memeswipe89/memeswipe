@@ -346,26 +346,20 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   onSwipeStateChange,
   onActiveCardChange,
 }: SwipeTokenDeckProps) {
-  const [index, setIndex] = useState(0);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const buyFlash = useSharedValue(0);
   const buyBadge = useSharedValue(0);
 
   useEffect(() => {
-    if (index >= tokens.length) {
-      setIndex(Math.max(0, tokens.length - 1));
-    }
-  }, [index, tokens.length]);
-
-  useEffect(() => {
-    setIndex(0);
     translateX.value = 0;
     translateY.value = 0;
   }, [resetKey, translateX, translateY]);
 
-  const currentToken = useMemo(() => tokens[index], [index, tokens]);
-  const nextTokens = useMemo(() => tokens.slice(index + 1, index + 4), [index, tokens]);
+  // The parent removes the swiped token from `tokens`.
+  // Use array head as the active card to avoid double-advancing.
+  const currentToken = useMemo(() => tokens[0], [tokens]);
+  const nextTokens = useMemo(() => tokens.slice(1, 4), [tokens]);
 
   useEffect(() => {
     onActiveCardChange?.(currentToken || null);
@@ -373,7 +367,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
 
   const commitSwipe = useCallback(
     (direction: SwipeDirection) => {
-      const token = tokens[index];
+      const token = currentToken;
       if (!token) return;
 
       if (direction === 'right') {
@@ -388,11 +382,10 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
         onReject(token);
       }
 
-      setIndex((prev) => prev + 1);
       translateX.value = 0;
       translateY.value = 0;
     },
-    [buyBadge, buyFlash, index, onBuy, onReject, tokens, translateX, translateY]
+    [buyBadge, buyFlash, currentToken, onBuy, onReject, translateX, translateY]
   );
 
   const panGesture = useMemo(

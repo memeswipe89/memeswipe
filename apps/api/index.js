@@ -22,15 +22,6 @@ const FEED_CACHE_TTL_MS = 60 * 1000;
 const QUOTA_BLOCK_MS = 60 * 60 * 1000;
 const feedCache = new Map();
 let moralisBlockedUntil = 0;
-const generateMockTokens = () =>
-  Array.from({ length: 30 }, (_, i) => ({
-    name: `Demo Coin ${i + 1}`,
-    symbol: `DC${i + 1}`,
-    address: `DEMO${i + 1}`,
-    priceUsd: Math.random() * 0.001,
-    liquidityUsd: Math.random() * 50000,
-    graduatedAt: new Date().toISOString(),
-  }));
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -88,15 +79,15 @@ const isAllowedReturnUrl = (value) => {
   return value.startsWith("mobile://") || value.startsWith("exp://");
 };
 
-app.get("/api/feed/solana/graduated", async (req, res) => {
+const fetchGraduatedFeed = async (req, res) => {
   try {
+    if (!process.env.MORALIS_API_KEY) {
+      return res.status(500).json({ error: "MORALIS_API_KEY is not configured" });
+    }
+
     const now = Date.now();
     if (now < moralisBlockedUntil) {
-      return res.json({
-        tokens: generateMockTokens(),
-        cursor: null,
-        fallback: true,
-      });
+      return res.status(429).json({ error: "Moralis feed temporarily rate limited" });
     }
 
     const limit = req.query.limit || 50;
@@ -124,10 +115,9 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
       if (r.status === 401 || r.status === 429 || lowerText.includes("quota")) {
         moralisBlockedUntil = Date.now() + QUOTA_BLOCK_MS;
       }
-      return res.json({
-        tokens: generateMockTokens(),
-        cursor: null,
-        fallback: true,
+      return res.status(r.status).json({
+        error: "Failed to fetch feed from Moralis",
+        details: text || null,
       });
     }
 
@@ -143,26 +133,25 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
       graduatedAt: t.graduatedAt ?? null,
     }));
 
-    if (!tokens.length) {
-      return res.json({
-        tokens: generateMockTokens(),
-        cursor: null,
-        fallback: true,
-      });
-    }
-
-    const payload = { tokens, cursor: data.cursor || null, fallback: false };
+    const payload = { tokens, cursor: data.cursor || null };
     feedCache.set(cacheKey, { payload, lastFetch: now });
-    res.json(payload);
+    return res.json(payload);
   } catch (e) {
     console.error(e);
-    res.json({
-      tokens: generateMockTokens(),
-      cursor: null,
-      fallback: true,
+    return res.status(500).json({
+      error: "Failed to fetch graduated tokens",
     });
   }
-});
+};
+
+app.get("/api/feed/solana/graduated", fetchGraduatedFeed);
+app.get("/api/feed/solana/stalker", fetchGraduatedFeed);
+app.get("/api/feed/solana/bigcap", fetchGraduatedFeed);
+app.get("/api/feed/solana/smart", fetchGraduatedFeed);
+app.get("/api/feed/base/graduated", fetchGraduatedFeed);
+app.get("/api/feed/base/stalker", fetchGraduatedFeed);
+app.get("/api/feed/base/bigcap", fetchGraduatedFeed);
+app.get("/api/feed/base/smart", fetchGraduatedFeed);
 
 app.get("/api/twitter/connection/:userId", async (req, res) => {
   try {
@@ -380,10 +369,26 @@ app.get("/api/health/db", async (req, res) => {
 
   app.post("/api/orders", async (req, res) => {
     try {
-      const { userId, chain, tokenAddress, amountUsd, tpRoi } = req.body;
+      const userId = typeof req.body.userId === "string" ? req.body.userId.trim() : "";
+      const chain = typeof req.body.chain === "string" ? req.body.chain.trim() : "";
+      const tokenAddress = typeof req.body.tokenAddress === "string" ? req.body.tokenAddress.trim() : "";
+      const amountRaw = req.body.amountUsd ?? req.body.amountUSDT;
+      const tpRoiRaw = req.body.tpRoi ?? req.body.roiTarget;
+      const amountUsd = Number(amountRaw);
+      const tpRoi = Number(tpRoiRaw);
+
+      const missingFields = [];
+      if (!userId) missingFields.push("userId");
+      if (!chain) missingFields.push("chain");
+      if (!tokenAddress) missingFields.push("tokenAddress");
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) missingFields.push("amountUsd");
+      if (!Number.isFinite(tpRoi) || tpRoi <= 0) missingFields.push("tpRoi");
   
-      if (!userId || !chain || !tokenAddress || !amountUsd || !tpRoi) {
-        return res.status(400).json({ error: "Missing required fields" });
+      if (missingFields.length > 0) {
+        return res.status(400).json({
+          error: "Missing required fields",
+          missingFields,
+        });
       }
   
       const result = await pool.query(

@@ -7,10 +7,17 @@ import {
   usePrivy,
 } from "@privy-io/expo";
 
+export type TwitterProfile = {
+  id: string;
+  username: string;
+};
+
 type WalletContextValue = {
+  twitterProfile: TwitterProfile | null;
   walletAddress: string | null;
   walletLoading: boolean;
   walletError: string | null;
+  setTwitterProfile: (profile: TwitterProfile | null) => void;
   getOrCreateEmbeddedWalletAddress: () => Promise<string>;
   refreshWalletAddress: () => Promise<string | null>;
 };
@@ -61,6 +68,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const { create: createGuestAccount } = useCreateGuestAccount();
   const solanaWallet = useEmbeddedSolanaWallet();
 
+  const [twitterProfile, setTwitterProfile] = useState<TwitterProfile | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [walletLoading, setWalletLoading] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
@@ -183,13 +191,15 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<WalletContextValue>(
     () => ({
+      twitterProfile,
       walletAddress,
       walletLoading,
       walletError,
+      setTwitterProfile,
       getOrCreateEmbeddedWalletAddress,
       refreshWalletAddress,
     }),
-    [walletAddress, walletLoading, walletError]
+    [twitterProfile, walletAddress, walletLoading, walletError]
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;

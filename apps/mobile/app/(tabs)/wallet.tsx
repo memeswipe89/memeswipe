@@ -12,6 +12,7 @@ const truncateMiddle = (value: string, keep = 6) => {
 
 export default function WalletScreen() {
   const {
+    twitterProfile,
     walletAddress,
     walletLoading,
     walletError,
@@ -60,6 +61,22 @@ export default function WalletScreen() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: "#000" }} contentContainerStyle={{ padding: 20 }}>
       <Text style={{ color: "#fff", fontSize: 28, fontWeight: "700" }}>Add SOL</Text>
+      {twitterProfile ? (
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 10,
+            padding: 12,
+            borderWidth: 1,
+            borderColor: "#273149",
+            backgroundColor: "#0e1320",
+          }}
+        >
+          <Text style={{ color: "#7fddff", fontWeight: "700" }}>Connected Twitter</Text>
+          <Text style={{ color: "#fff", marginTop: 4 }}>@{twitterProfile.username}</Text>
+          <Text style={{ color: "#8f9ab7", marginTop: 2, fontSize: 12 }}>ID: {twitterProfile.id}</Text>
+        </View>
+      ) : null}
       <Text style={{ color: "#bbb", marginTop: 12 }}>Your Memeswipe Wallet Address</Text>
 
       {walletLoading ? (

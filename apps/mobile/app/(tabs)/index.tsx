@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import * as Linking from 'expo-linking';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -13,11 +14,12 @@ import { ProfileButton } from '@/components/profile/profile-button';
 import { ProfileSheet, type ProfileSheetRef } from '@/components/profile/profile-sheet';
 import { SwipeHint } from '@/components/swipe-hint-overlay';
 import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
+import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, deductBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
 
 const API_BASE = 'https://memeswipe.onrender.com';
-const TEST_USER_ID = '11111111-1111-1111-1111-111111111111';
+const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
 const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
@@ -63,23 +65,6 @@ const buildFallbackChart = (priceUsd: number) => {
   const base = priceUsd || Math.random() * 0.02 + 0.002;
   return [base * 0.96, base * 1.02, base, base * 1.08, base * 1.04, base * 1.12];
 };
-
-const generateMockTokens = (offset = 0): SwipeToken[] =>
-  Array.from({ length: 30 }, (_, i) => {
-    const idx = offset + i + 1;
-    return {
-      name: `Demo Coin ${idx}`,
-      symbol: `DC${idx}`,
-      address: `DEMO${idx}`,
-      priceUsd: Math.random() * 0.001,
-      liquidityUsd: Math.random() * 50000,
-      volume24hUsd: Math.random() * 900000,
-      marketCapUsd: Math.random() * 3000000,
-      change24hPct: (Math.random() - 0.5) * 30,
-      chartData: buildFallbackChart(Math.random() * 0.001 + 0.00001).slice(-20),
-      graduationTime: new Date().toISOString(),
-    };
-  });
 
 const mapApiToken = (token: ApiToken): SwipeToken => {
   const price = toNumber(token.priceUsd, 0);
@@ -144,7 +129,13 @@ const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
 };
 
 export default function HomeScreen() {
+  const { twitterProfile, setTwitterProfile } = useWalletContext();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
+  const connectInProgressRef = useRef(false);
+  const [userId, setUserId] = useState<string>('');
+  const [checkingTwitter, setCheckingTwitter] = useState(true);
+  const [twitterConnectLoading, setTwitterConnectLoading] = useState(false);
+  const [showTwitterPrompt, setShowTwitterPrompt] = useState(false);
   const [loading, setLoading] = useState(false);
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
@@ -169,15 +160,99 @@ export default function HomeScreen() {
   const [segmentDepleted, setSegmentDepleted] = useState<Record<RemoteSegment, boolean>>(
     makeSegmentMap(() => false)
   );
-  const [isFallback, setIsFallback] = useState(false);
   const [isSwiping, setIsSwiping] = useState(false);
   const [balance, setBalanceState] = useState(0);
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI } = useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
-  const mockOffsetRef = useRef(0);
   const lastFeedFetchRef = useRef(0);
   const blockedUntilRef = useRef(0);
   const retryDelayRef = useRef(10000);
+
+  const createUuidV4 = useCallback(
+    () =>
+      "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
+        const rand = Math.floor(Math.random() * 16);
+        const value = ch === "x" ? rand : (rand & 0x3) | 0x8;
+        return value.toString(16);
+      }),
+    []
+  );
+
+  const getOrCreateLocalUserId = useCallback(async () => {
+    const existing = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
+    if (existing) return existing;
+    const next = createUuidV4();
+    await AsyncStorage.setItem(LOCAL_USER_ID_KEY, next);
+    return next;
+  }, [createUuidV4]);
+
+  const checkTwitterConnection = useCallback(
+    async (resolvedUserId: string) => {
+      try {
+        setCheckingTwitter(true);
+        const res = await fetch(`${API_BASE}/api/twitter/connection/${resolvedUserId}`);
+        if (!res.ok) {
+          setShowTwitterPrompt(true);
+          return;
+        }
+        const data = (await res.json()) as {
+          connected?: boolean;
+          twitterUsername?: string;
+          twitterUserId?: string;
+        };
+        if (data.connected && data.twitterUsername && data.twitterUserId) {
+          setTwitterProfile({
+            username: data.twitterUsername,
+            id: data.twitterUserId,
+          });
+          setShowTwitterPrompt(false);
+          return;
+        }
+        setTwitterProfile(null);
+        setShowTwitterPrompt(true);
+      } catch (error) {
+        console.log(error);
+        setTwitterProfile(null);
+        setShowTwitterPrompt(true);
+      } finally {
+        setCheckingTwitter(false);
+      }
+    },
+    [setTwitterProfile]
+  );
+
+  const handleTwitterRedirect = useCallback(
+    (url: string) => {
+      if (!connectInProgressRef.current) return;
+      const parsed = Linking.parse(url);
+      const path = parsed.path || "";
+      const host = parsed.hostname || "";
+      const isTwitterCallback = path.includes("twitter-connected") || host === "twitter-connected";
+      if (!isTwitterCallback) return;
+
+      connectInProgressRef.current = false;
+      setTwitterConnectLoading(false);
+
+      const status = parsed.queryParams?.status;
+      if (status !== "success") {
+        const error = parsed.queryParams?.error;
+        Alert.alert("Twitter Connect", `Twitter connection failed${error ? `: ${error}` : "."}`);
+        return;
+      }
+
+      const twitterUsername = parsed.queryParams?.twitterUsername;
+      const twitterUserId = parsed.queryParams?.twitterUserId;
+      if (typeof twitterUsername !== "string" || typeof twitterUserId !== "string") {
+        Alert.alert("Twitter Connect", "Twitter profile data missing");
+        return;
+      }
+
+      setTwitterProfile({ username: twitterUsername, id: twitterUserId });
+      setShowTwitterPrompt(false);
+      Alert.alert("Connected", `Connected as @${twitterUsername}`);
+    },
+    [setTwitterProfile]
+  );
 
   const canFetchFeed = useCallback(() => {
     const now = Date.now();
@@ -204,6 +279,56 @@ export default function HomeScreen() {
     const timer = setTimeout(() => setAppLoading(false), 1600);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    const sub = Linking.addEventListener("url", ({ url }) => {
+      handleTwitterRedirect(url);
+    });
+
+    Linking.getInitialURL().then((url) => {
+      if (url) handleTwitterRedirect(url);
+    });
+
+    (async () => {
+      const localUserId = await getOrCreateLocalUserId();
+      setUserId(localUserId);
+      await checkTwitterConnection(localUserId);
+    })();
+
+    return () => sub.remove();
+  }, [checkTwitterConnection, getOrCreateLocalUserId, handleTwitterRedirect]);
+
+  const connectTwitter = useCallback(async () => {
+    try {
+      connectInProgressRef.current = true;
+      setTwitterConnectLoading(true);
+      const returnUrl = Linking.createURL("twitter-connected");
+
+      const startRes = await fetch(
+        `${API_BASE}/api/twitter/auth/start?userId=${encodeURIComponent(userId)}&returnUrl=${encodeURIComponent(returnUrl)}`
+      );
+
+      const startJson = (await startRes.json()) as { authUrl?: string; error?: string };
+      if (!startRes.ok || !startJson?.authUrl) {
+        connectInProgressRef.current = false;
+        setTwitterConnectLoading(false);
+        throw new Error(startJson?.error || "Failed to start Twitter auth");
+      }
+
+      const canOpen = await Linking.canOpenURL(startJson.authUrl);
+      if (!canOpen) {
+        connectInProgressRef.current = false;
+        setTwitterConnectLoading(false);
+        throw new Error("Cannot open Twitter auth URL");
+      }
+      await Linking.openURL(startJson.authUrl);
+    } catch (error: any) {
+      connectInProgressRef.current = false;
+      setTwitterConnectLoading(false);
+      console.log(error);
+      Alert.alert("Twitter Connect", error?.message || "Failed to connect Twitter");
+    }
+  }, [userId]);
 
   useEffect(() => {
     const hideTimer = setTimeout(() => setShowSwipeHint(false), 5000);
@@ -298,20 +423,7 @@ export default function HomeScreen() {
     async (segmentType: RemoteSegment, initial = false) => {
       if (segmentLoadingMore[segmentType]) return [];
       if (!segmentHasMore[segmentType] && !initial) return [];
-      if (!canFetchFeed()) {
-        if (initial && segmentCache[segmentType].length === 0) {
-          const mock = generateMockTokens(mockOffsetRef.current);
-          mockOffsetRef.current += mock.length;
-          console.log("⚠️ Using fallback demo tokens");
-          setIsFallback(true);
-          setSegmentCache((prev) => ({
-            ...prev,
-            [segmentType]: [...prev[segmentType], ...mock],
-          }));
-          return mock;
-        }
-        return [];
-      }
+      if (!canFetchFeed()) return [];
 
       setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: true }));
       if (initial) setLoading(true);
@@ -327,31 +439,12 @@ export default function HomeScreen() {
         const res = await fetch(`${API_BASE}${endpoint}${q}`);
         if (!res.ok) {
           onFeedError(res.status);
-          const mock = generateMockTokens(mockOffsetRef.current);
-          mockOffsetRef.current += mock.length;
-          console.log("⚠️ Using fallback demo tokens");
-          setIsFallback(true);
-          setSegmentCache((prev) => ({
-            ...prev,
-            [segmentType]: [...prev[segmentType], ...mock],
-          }));
-          return mock;
+          return [];
         }
         onFeedSuccess();
-        const data = (await res.json()) as { tokens?: ApiToken[]; cursor?: string | null; fallback?: boolean };
+        const data = (await res.json()) as { tokens?: ApiToken[]; cursor?: string | null };
         const incoming = Array.isArray(data.tokens) ? data.tokens.map(mapApiToken) : [];
-        if (data.fallback || incoming.length === 0) {
-          const mock = generateMockTokens(mockOffsetRef.current);
-          mockOffsetRef.current += mock.length;
-          console.log("⚠️ Using fallback demo tokens");
-          setIsFallback(true);
-          setSegmentCache((prev) => ({
-            ...prev,
-            [segmentType]: [...prev[segmentType], ...mock],
-          }));
-          return mock;
-        }
-        setIsFallback(false);
+        if (incoming.length === 0) return [];
         const seen = loadedAddressRef.current[segmentType];
 
         const deduped = incoming.filter((token) => {
@@ -375,15 +468,7 @@ export default function HomeScreen() {
         return deduped;
       } catch (err) {
         console.log(err);
-        const mock = generateMockTokens(mockOffsetRef.current);
-        mockOffsetRef.current += mock.length;
-        console.log("⚠️ Using fallback demo tokens");
-        setIsFallback(true);
-        setSegmentCache((prev) => ({
-          ...prev,
-          [segmentType]: [...prev[segmentType], ...mock],
-        }));
-        return mock;
+        return [];
       } finally {
         setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: false }));
         if (initial) setLoading(false);
@@ -395,7 +480,6 @@ export default function HomeScreen() {
       hiddenTokenAddresses,
       onFeedError,
       onFeedSuccess,
-      segmentCache,
       segmentCursor,
       segmentHasMore,
       segmentLoadingMore,
@@ -460,20 +544,6 @@ export default function HomeScreen() {
       void ensureDeckRefill(segment);
     }
   }, [ensureDeckRefill, hiddenTokenAddresses, segment, segmentCache, segmentLoadingMore]);
-
-  useEffect(() => {
-    if (!isRemoteSegment(segment)) return;
-    if (!isFallback) return;
-    const visibleCount = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length;
-    if (visibleCount >= LOW_DECK_THRESHOLD) return;
-
-    const mock = generateMockTokens(mockOffsetRef.current);
-    mockOffsetRef.current += mock.length;
-    setSegmentCache((prev) => ({
-      ...prev,
-      [segment]: [...prev[segment], ...mock],
-    }));
-  }, [hiddenTokenAddresses, isFallback, segment, segmentCache]);
 
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
@@ -556,18 +626,21 @@ export default function HomeScreen() {
     });
 
     try {
+      const resolvedUserId = (userId || '').trim() || (await getOrCreateLocalUserId());
       await fetch(`${API_BASE}/api/favorites`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: TEST_USER_ID,
+          userId: resolvedUserId,
+          twitterUserId: twitterProfile?.id || null,
+          twitterUsername: twitterProfile?.username || null,
           tokenAddress: token.address,
         }),
       });
     } catch (err) {
       console.log('Favorite API failed', err);
     }
-  }, [activeChain, persistFavorites]);
+  }, [activeChain, getOrCreateLocalUserId, persistFavorites, twitterProfile?.id, twitterProfile?.username, userId]);
 
   const createOrder = useCallback(
     async (token: SwipeToken) => {
@@ -578,12 +651,20 @@ export default function HomeScreen() {
 
       try {
         setCreatingOrder(true);
+        const resolvedUserId = (userId || '').trim() || (await getOrCreateLocalUserId());
+
+        if (!resolvedUserId) {
+          Alert.alert('Order Failed', 'User session is missing. Please reopen the app and try again.');
+          return false;
+        }
 
         const res = await fetch(`${API_BASE}/api/orders`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            userId: TEST_USER_ID,
+            userId: resolvedUserId,
+            twitterUserId: twitterProfile?.id || null,
+            twitterUsername: twitterProfile?.username || null,
             chain: activeChain || 'solana',
             tokenAddress: token.address,
             amountUSDT: tradeAmount,
@@ -608,7 +689,7 @@ export default function HomeScreen() {
         setCreatingOrder(false);
       }
     },
-    [activeChain, stopLoss, tpROI, tradeAmount]
+    [activeChain, getOrCreateLocalUserId, stopLoss, tpROI, tradeAmount, twitterProfile?.id, twitterProfile?.username, userId]
   );
 
   const handleReject = useCallback((token: SwipeToken) => {
@@ -702,6 +783,45 @@ export default function HomeScreen() {
     setTokens(visible);
   }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache]);
 
+  if (checkingTwitter) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: "#fff", fontSize: 16 }}>Checking Twitter connection...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (showTwitterPrompt) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { justifyContent: "center", paddingHorizontal: 22 }]}>
+        <View style={{ alignItems: "center" }}>
+          <Text style={{ color: "#fff", fontSize: 34, fontWeight: "800", textAlign: "center" }}>
+            Connect Twitter
+          </Text>
+          <Text style={{ color: "#97A0BA", marginTop: 12, textAlign: "center", fontSize: 15 }}>
+            Connect your Twitter/X account to continue.
+          </Text>
+          <Pressable
+            onPress={connectTwitter}
+            disabled={twitterConnectLoading}
+            style={{
+              marginTop: 24,
+              minWidth: 220,
+              borderRadius: 12,
+              backgroundColor: "#fff",
+              paddingVertical: 14,
+              paddingHorizontal: 20,
+            }}
+          >
+            <Text style={{ textAlign: "center", color: "#000", fontWeight: "800" }}>
+              {twitterConnectLoading ? "Connecting..." : "Connect Twitter"}
+            </Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaView edges={['top']} style={styles.safeArea}>
@@ -758,18 +878,14 @@ export default function HomeScreen() {
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'
-                  : isFallback
-                    ? 'Demo mode active'
-                    : isRemoteSegment(segment) && segmentDepleted[segment]
+                  : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'No more tokens available right now'
                     : 'Deck complete'
               }
               emptySubtitle={
                 segment === 'favorites'
                   ? 'Tap the heart to save tokens for later'
-                  : isFallback
-                    ? 'Fallback demo tokens are loaded for infinite swipe testing.'
-                    : isRemoteSegment(segment) && segmentDepleted[segment]
+                  : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'Please check back shortly for fresh listings.'
                     : 'No more tokens in this segment.'
               }
