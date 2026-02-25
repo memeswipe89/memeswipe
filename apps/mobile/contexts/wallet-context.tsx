@@ -7,19 +7,10 @@ import {
   usePrivy,
 } from "@privy-io/expo";
 
-type TwitterProfile = {
-  id: string;
-  username: string;
-};
-
 type WalletContextValue = {
-  twitterProfile: TwitterProfile | null;
-  isTwitterAuthenticated: boolean;
   walletAddress: string | null;
   walletLoading: boolean;
   walletError: string | null;
-  onTwitterLoginSuccess: (profile: TwitterProfile) => Promise<void>;
-  onTwitterLogoutSuccess: () => void;
   getOrCreateEmbeddedWalletAddress: () => Promise<string>;
   refreshWalletAddress: () => Promise<string | null>;
 };
@@ -70,7 +61,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const { create: createGuestAccount } = useCreateGuestAccount();
   const solanaWallet = useEmbeddedSolanaWallet();
 
-  const [twitterProfile, setTwitterProfile] = useState<TwitterProfile | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [walletLoading, setWalletLoading] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
@@ -191,30 +181,15 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const onTwitterLoginSuccess = async (profile: TwitterProfile) => {
-    setTwitterProfile(profile);
-    await getOrCreateEmbeddedWalletAddress();
-  };
-
-  const onTwitterLogoutSuccess = () => {
-    setTwitterProfile(null);
-    setWalletAddress(null);
-    setWalletError(null);
-  };
-
   const value = useMemo<WalletContextValue>(
     () => ({
-      twitterProfile,
-      isTwitterAuthenticated: Boolean(twitterProfile),
       walletAddress,
       walletLoading,
       walletError,
-      onTwitterLoginSuccess,
-      onTwitterLogoutSuccess,
       getOrCreateEmbeddedWalletAddress,
       refreshWalletAddress,
     }),
-    [twitterProfile, walletAddress, walletLoading, walletError]
+    [walletAddress, walletLoading, walletError]
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
@@ -227,4 +202,3 @@ export function useWalletContext() {
   }
   return context;
 }
-

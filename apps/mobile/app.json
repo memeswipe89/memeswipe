@@ -39,14 +39,15 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
     "extra": {
-      "privyAppId": "",
+      "privyAppId": "cmlwc08q900bi0cjyokcd46cf",
       "privyClientId": ""
     }
   }

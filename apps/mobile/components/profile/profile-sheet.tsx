@@ -1,0 +1,464 @@
+import React, {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useState,
+} from 'react';
+import {
+  Alert,
+  Dimensions,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  Easing,
+  Extrapolation,
+  interpolate,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+
+import { useTradeSettings } from '@/contexts/trade-settings-context';
+import { useAuth } from '@/contexts/auth-context';
+import { getBalance as getDevBalance } from '@/lib/devWallet';
+
+import { ChainSwitcher } from './chain-switcher';
+import { TradeSettings } from './trade-settings';
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.8);
+const DRAG_CLOSE_THRESHOLD = 120;
+
+export type ProfileSheetRef = {
+  open: () => void;
+  close: () => void;
+};
+
+type ProfileSheetProps = {
+  onStateChange?: (open: boolean) => void;
+};
+
+export const ProfileSheet = memo(
+  forwardRef<ProfileSheetRef, ProfileSheetProps>(function ProfileSheet({ onStateChange }, ref) {
+    const insets = useSafeAreaInsets();
+    const [mounted, setMounted] = useState(false);
+    const [open, setOpen] = useState(false);
+    const [inputFocused, setInputFocused] = useState(false);
+    const [devBalance, setDevBalance] = useState(0);
+
+    const openProgress = useSharedValue(0);
+    const dragY = useSharedValue(0);
+
+    const {
+      profileName,
+      setProfileName,
+      activeChain,
+      setActiveChain,
+      tradeAmount,
+      tpROI,
+      stopLoss,
+      resetSettings,
+    } = useTradeSettings();
+    const { logout } = useAuth();
+
+    const closeSheet = useCallback(() => {
+      setOpen(false);
+      onStateChange?.(false);
+    }, [onStateChange]);
+
+    const openSheet = useCallback(() => {
+      setMounted(true);
+      setOpen(true);
+      onStateChange?.(true);
+    }, [onStateChange]);
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        open: openSheet,
+        close: closeSheet,
+      }),
+      [closeSheet, openSheet]
+    );
+
+    useEffect(() => {
+      if (open) {
+        getDevBalance().then(setDevBalance).catch(() => setDevBalance(0));
+        openProgress.value = withSpring(1, {
+          damping: 26,
+          stiffness: 240,
+          mass: 0.9,
+          overshootClamping: true,
+        });
+        dragY.value = 0;
+        return;
+      }
+
+      openProgress.value = withSpring(0, {
+        damping: 28,
+        stiffness: 260,
+        mass: 1,
+        overshootClamping: true,
+      }, (finished) => {
+        if (finished) runOnJS(setMounted)(false);
+      });
+      dragY.value = 0;
+    }, [dragY, open, openProgress]);
+
+    const panGesture = Gesture.Pan()
+      .enabled(!inputFocused)
+      .onUpdate((event) => {
+        dragY.value = Math.max(0, event.translationY);
+      })
+      .onEnd(() => {
+        if (dragY.value > DRAG_CLOSE_THRESHOLD) {
+          runOnJS(closeSheet)();
+          return;
+        }
+        dragY.value = withTiming(0, { duration: 260, easing: Easing.out(Easing.cubic) });
+      });
+
+    const backdropStyle = useAnimatedStyle(() => ({
+      opacity: interpolate(openProgress.value, [0, 1], [0, 1], Extrapolation.CLAMP),
+    }));
+
+    const sheetStyle = useAnimatedStyle(() => {
+      const baseY = interpolate(openProgress.value, [0, 1], [SHEET_HEIGHT + 40, 0], Extrapolation.CLAMP);
+      return {
+        transform: [{ translateY: baseY + dragY.value }],
+      };
+    });
+
+    const initials = useMemo(() => {
+      const trimmed = profileName.trim();
+      if (!trimmed) return 'TR';
+      return trimmed.slice(0, 2).toUpperCase();
+    }, [profileName]);
+
+    const handleLogout = useCallback(async () => {
+      try {
+        await logout();
+        resetSettings();
+        closeSheet();
+      } catch (err) {
+        console.log('Failed to logout', err);
+        Alert.alert('Logout failed', 'Please try again.');
+      }
+    }, [closeSheet, logout, resetSettings]);
+
+    if (!mounted) return null;
+
+    return (
+      <Animated.View style={[styles.overlay, backdropStyle]} pointerEvents="auto">
+        <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={styles.dimLayer} />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={() => {
+            if (!inputFocused) closeSheet();
+          }}
+        />
+
+        <KeyboardAvoidingView
+          behavior={Platform.select({ ios: 'padding', android: undefined })}
+          style={styles.keyboardWrap}
+        >
+          <GestureDetector gesture={panGesture}>
+            <Animated.View style={[styles.sheetWrap, sheetStyle]}>
+              <LinearGradient colors={['rgba(82,130,255,0.22)', 'rgba(38,216,179,0.1)']} style={styles.glowHalo} />
+              <BlurView intensity={35} tint="dark" style={styles.sheetBlur}>
+                <LinearGradient
+                  colors={['rgba(255,255,255,0.15)', 'rgba(255,255,255,0.05)']}
+                  style={styles.sheetCard}
+                >
+                  <View style={styles.handleWrap}>
+                    <View style={styles.handle} />
+                  </View>
+
+                  <View style={styles.header}>
+                    <Text style={styles.title}>Profile & Trading</Text>
+                    <Pressable onPress={closeSheet} style={styles.closeBtn}>
+                      <Text style={styles.closeText}>Close</Text>
+                    </Pressable>
+                  </View>
+
+                  <ScrollView
+                    style={styles.scroll}
+                    contentContainerStyle={[styles.content, { paddingBottom: 20 + insets.bottom }]}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    <View style={styles.section}>
+                      <Text style={styles.sectionTitle}>User Info</Text>
+                      <View style={styles.balanceTopWrap}>
+                        <Text style={styles.balanceTopLabel}>Balance</Text>
+                        <Text style={styles.balanceTopValue}>${devBalance.toFixed(2)}</Text>
+                      </View>
+                      <View style={styles.userRow}>
+                        <View style={styles.avatarPlaceholder}>
+                          <Text style={styles.avatarText}>{initials}</Text>
+                        </View>
+                        <View style={styles.userFields}>
+                          <TextInput
+                            value={profileName}
+                            onChangeText={setProfileName}
+                            onFocus={() => setInputFocused(true)}
+                            onBlur={() => setInputFocused(false)}
+                            placeholder="Profile Name"
+                            placeholderTextColor="#8290b3"
+                            style={styles.nameInput}
+                          />
+                          <Text style={styles.userId}>User ID: 1111...1111</Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <TradeSettings onInputFocusChange={setInputFocused} />
+
+                    <View style={styles.actionsWrap}>
+                      <Text style={[styles.sectionTitle, styles.networkTitle]}>Network</Text>
+                      <ChainSwitcher value={activeChain} onChange={setActiveChain} />
+
+                      <Text style={[styles.sectionTitle, styles.networkTitle]}>Actions</Text>
+                      <Pressable style={styles.logoutButton} onPress={handleLogout}>
+                        <Text style={styles.logoutIcon}>⇢</Text>
+                        <Text style={styles.logoutText}>Logout</Text>
+                      </Pressable>
+                      <Text style={styles.version}>Version 1.0.0</Text>
+                    </View>
+
+                    <Text style={styles.footnote}>
+                      Active Config: ${tradeAmount.toFixed(2)} | TP {tpROI}% | SL {stopLoss}%
+                    </Text>
+                  </ScrollView>
+                </LinearGradient>
+              </BlurView>
+            </Animated.View>
+          </GestureDetector>
+        </KeyboardAvoidingView>
+      </Animated.View>
+    );
+  })
+);
+
+const styles = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 45,
+    justifyContent: 'flex-end',
+  },
+  dimLayer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  keyboardWrap: {
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
+  sheetWrap: {
+    width: '100%',
+    height: SHEET_HEIGHT,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  glowHalo: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.9,
+  },
+  sheetBlur: {
+    flex: 1,
+  },
+  sheetCard: {
+    flex: 1,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    borderBottomWidth: 0,
+    backgroundColor: 'rgba(20,20,28,0.96)',
+    paddingTop: 10,
+    paddingHorizontal: 14,
+  },
+  handleWrap: {
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  handle: {
+    width: 40,
+    height: 4,
+    borderRadius: 4,
+    backgroundColor: '#888',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  title: {
+    color: '#f3f7ff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  closeBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  closeText: {
+    color: '#d7e4ff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  scroll: {
+    flex: 1,
+  },
+  content: {
+    paddingBottom: 28,
+  },
+  section: {
+    marginBottom: 8,
+  },
+  sectionTitle: {
+    color: '#a7b4d5',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  userRow: {
+    flexDirection: 'row',
+    gap: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    padding: 12,
+  },
+  avatarPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(124,150,255,0.25)',
+  },
+  avatarText: {
+    color: '#f2f7ff',
+    fontWeight: '800',
+  },
+  userFields: {
+    flex: 1,
+  },
+  nameInput: {
+    color: '#eef3ff',
+    fontSize: 15,
+    fontWeight: '700',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+    paddingBottom: 6,
+  },
+  userId: {
+    marginTop: 8,
+    color: '#91a0c3',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  balanceTopWrap: {
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  balanceTopLabel: {
+    color: '#a7b4d5',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  balanceTopValue: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  balanceRow: {
+    marginTop: 8,
+    alignSelf: 'stretch',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  balanceLabel: {
+    color: '#a7b4d5',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  balanceValue: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  actionsWrap: {
+    marginTop: 16,
+  },
+  networkTitle: {
+    marginTop: 10,
+  },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,107,107,0.3)',
+    backgroundColor: 'rgba(255,80,80,0.12)',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+  },
+  logoutIcon: {
+    color: '#ff6b6b',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  logoutText: {
+    color: '#ff6b6b',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  version: {
+    marginTop: 2,
+    color: '#94a3c8',
+    fontSize: 12,
+  },
+  footnote: {
+    marginTop: 12,
+    color: '#7f8fb5',
+    fontSize: 12,
+  },
+});

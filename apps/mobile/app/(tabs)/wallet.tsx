@@ -3,7 +3,6 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from "rea
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import QRCode from "react-native-qrcode-svg";
-import { router } from "expo-router";
 import { useWalletContext } from "@/contexts/wallet-context";
 
 const truncateMiddle = (value: string, keep = 6) => {
@@ -13,7 +12,6 @@ const truncateMiddle = (value: string, keep = 6) => {
 
 export default function WalletScreen() {
   const {
-    isTwitterAuthenticated,
     walletAddress,
     walletLoading,
     walletError,
@@ -58,23 +56,6 @@ export default function WalletScreen() {
       Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
     }
   };
-
-  if (!isTwitterAuthenticated) {
-    return (
-      <View style={{ flex: 1, backgroundColor: "#000", padding: 20, justifyContent: "center" }}>
-        <Text style={{ color: "#fff", fontSize: 28, fontWeight: "700", textAlign: "center" }}>Add SOL</Text>
-        <Text style={{ color: "#aaa", marginTop: 12, textAlign: "center" }}>
-          Login with Twitter first to create your Memeswipe wallet.
-        </Text>
-        <Pressable
-          onPress={() => router.push("/")}
-          style={{ marginTop: 20, backgroundColor: "#fff", borderRadius: 10, padding: 14 }}
-        >
-          <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Go to Login</Text>
-        </Pressable>
-      </View>
-    );
-  }
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: "#000" }} contentContainerStyle={{ padding: 20 }}>
@@ -152,4 +133,3 @@ export default function WalletScreen() {
     </ScrollView>
   );
 }
-

@@ -1,17 +1,32 @@
+import 'react-native-get-random-values';
+import 'react-native-url-polyfill/auto';
+import { Buffer } from 'buffer';
 import "@ethersproject/shims";
 import "fast-text-encoding";
-import "react-native-get-random-values";
 
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import Constants from "expo-constants";
-import { Stack } from 'expo-router';
+import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Text, View } from "react-native";
 import { PrivyProvider } from "@privy-io/expo";
+import React from 'react';
 
+import { AuthProvider, useAuth } from '@/contexts/auth-context';
+import { TradeSettingsProvider } from '@/contexts/trade-settings-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { WalletProvider } from '@/contexts/wallet-context';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const processPolyfill = require('process');
+
+if (!(globalThis as any).Buffer) {
+  (globalThis as any).Buffer = Buffer;
+}
+if (!(globalThis as any).process) {
+  (globalThis as any).process = processPolyfill;
+}
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -25,6 +40,9 @@ export default function RootLayout() {
   };
   const privyAppId = process.env.EXPO_PUBLIC_PRIVY_APP_ID || extra.privyAppId || "";
   const privyClientId = process.env.EXPO_PUBLIC_PRIVY_CLIENT_ID || extra.privyClientId;
+
+  console.log('Privy App ID:', privyAppId);
+  console.log('Privy Client ID:', privyClientId);
 
   if (!privyAppId) {
     return (
@@ -42,23 +60,57 @@ export default function RootLayout() {
       appId={privyAppId}
       clientId={privyClientId}
       config={{
+        appearance: {
+          theme: 'dark',
+        },
         embedded: {
-          // Solana embedded wallet support for deposit addresses.
+          ethereum: {
+            createOnLogin: "users-without-wallets",
+          },
           solana: {
-            createOnLogin: "off",
+            createOnLogin: "users-without-wallets",
           },
         },
-      }}
+      } as any}
     >
-      <WalletProvider>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-          </Stack>
-          <StatusBar style="auto" />
-        </ThemeProvider>
-      </WalletProvider>
+      <AuthProvider>
+        <WalletProvider>
+          <TradeSettingsProvider>
+            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+              <AuthGatedApp />
+              <StatusBar style="auto" />
+            </ThemeProvider>
+          </TradeSettingsProvider>
+        </WalletProvider>
+      </AuthProvider>
     </PrivyProvider>
+  );
+}
+
+function AuthGatedApp() {
+  const { loading, requiresDeposit, balanceLoading } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  React.useEffect(() => {
+    if (loading || balanceLoading) return;
+    if (requiresDeposit && pathname !== '/deposit') {
+      router.replace('/deposit');
+      return;
+    }
+
+    if (!requiresDeposit && pathname === '/deposit') {
+      router.replace('/(tabs)');
+    }
+  }, [balanceLoading, loading, pathname, requiresDeposit, router]);
+
+  return (
+    <>
+      <Stack>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="deposit" options={{ title: 'Fund Wallet' }} />
+        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+      </Stack>
+    </>
   );
 }

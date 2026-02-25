@@ -18,6 +18,19 @@ app.use(cors());
 
 const oauthStateStore = new Map();
 let ensureTwitterTablePromise = null;
+const FEED_CACHE_TTL_MS = 60 * 1000;
+const QUOTA_BLOCK_MS = 60 * 60 * 1000;
+const feedCache = new Map();
+let moralisBlockedUntil = 0;
+const generateMockTokens = () =>
+  Array.from({ length: 30 }, (_, i) => ({
+    name: `Demo Coin ${i + 1}`,
+    symbol: `DC${i + 1}`,
+    address: `DEMO${i + 1}`,
+    priceUsd: Math.random() * 0.001,
+    liquidityUsd: Math.random() * 50000,
+    graduatedAt: new Date().toISOString(),
+  }));
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -77,9 +90,26 @@ const isAllowedReturnUrl = (value) => {
 
 app.get("/api/feed/solana/graduated", async (req, res) => {
   try {
-    const limit = req.query.limit || 50;
+    const now = Date.now();
+    if (now < moralisBlockedUntil) {
+      return res.json({
+        tokens: generateMockTokens(),
+        cursor: null,
+        fallback: true,
+      });
+    }
 
-    const url = `https://solana-gateway.moralis.io/token/mainnet/exchange/pumpfun/graduated?limit=${limit}`;
+    const limit = req.query.limit || 50;
+    const cursor = req.query.cursor ? String(req.query.cursor) : "";
+    const cacheKey = `graduated:${limit}:${cursor}`;
+    const cached = feedCache.get(cacheKey);
+    if (cached && now - cached.lastFetch < FEED_CACHE_TTL_MS) {
+      return res.json(cached.payload);
+    }
+
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (cursor) qs.set("cursor", cursor);
+    const url = `https://solana-gateway.moralis.io/token/mainnet/exchange/pumpfun/graduated?${qs.toString()}`;
 
     const r = await fetch(url, {
       headers: {
@@ -90,7 +120,15 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
 
     if (!r.ok) {
       const text = await r.text();
-      return res.status(r.status).send(text);
+      const lowerText = String(text || "").toLowerCase();
+      if (r.status === 401 || r.status === 429 || lowerText.includes("quota")) {
+        moralisBlockedUntil = Date.now() + QUOTA_BLOCK_MS;
+      }
+      return res.json({
+        tokens: generateMockTokens(),
+        cursor: null,
+        fallback: true,
+      });
     }
 
     const data = await r.json();
@@ -105,10 +143,24 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
       graduatedAt: t.graduatedAt ?? null,
     }));
 
-    res.json({ tokens, cursor: data.cursor || null });
+    if (!tokens.length) {
+      return res.json({
+        tokens: generateMockTokens(),
+        cursor: null,
+        fallback: true,
+      });
+    }
+
+    const payload = { tokens, cursor: data.cursor || null, fallback: false };
+    feedCache.set(cacheKey, { payload, lastFetch: now });
+    res.json(payload);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "Failed to fetch graduated tokens" });
+    res.json({
+      tokens: generateMockTokens(),
+      cursor: null,
+      fallback: true,
+    });
   }
 });
 

@@ -1,476 +1,949 @@
-import * as Linking from "expo-linking";
-import * as FileSystem from "expo-file-system/legacy";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, ActivityIndicator, Alert } from "react-native";
-import { router } from "expo-router";
-import { useWalletContext } from "@/contexts/wallet-context";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
-const USER_ID_FILE = FileSystem.documentDirectory
-  ? `${FileSystem.documentDirectory}memeswipe_user_id.txt`
-  : null;
+import { AppLoader } from '@/components/app-loader';
+import { FeedSegmentedControl, type FeedSegment } from '@/components/feed-segmented-control';
+import { ProfileButton } from '@/components/profile/profile-button';
+import { ProfileSheet, type ProfileSheetRef } from '@/components/profile/profile-sheet';
+import { SwipeHint } from '@/components/swipe-hint-overlay';
+import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
+import { useTradeSettings } from '@/contexts/trade-settings-context';
+import { addBalance, deductBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
 
-const tryParseJson = (raw: string) => {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+const API_BASE = 'https://memeswipe.onrender.com';
+const TEST_USER_ID = '11111111-1111-1111-1111-111111111111';
+const FAVORITES_KEY = '@memeswipe:favorites:v1';
+const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
+const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
+const LAST_ROI_KEY = '@memeswipe:lastROI';
+const PAGE_LIMIT = 50;
+const LOW_DECK_THRESHOLD = 5;
+const MAX_EMPTY_FETCH_ATTEMPTS = 3;
+type FavoriteToken = {
+  address: string;
+  name: string;
+  symbol: string;
+  chain: string;
+};
+type RemoteSegment = Exclude<FeedSegment, 'favorites'>;
+
+type ApiToken = {
+  name?: string;
+  symbol?: string;
+  address?: string;
+  tokenAddress?: string;
+  mint?: string;
+  baseToken?: { address?: string };
+  priceUsd?: number | string;
+  liquidityUsd?: number | string;
+  volume24hUsd?: number | string;
+  marketCapUsd?: number | string;
+  change24hPct?: number | string;
+  chartData?: number[];
+  chain?: string;
+  graduatedAt?: string;
+  graduationTime?: string;
 };
 
-const firstLine = (value: string) => value.split("\n").map((line) => line.trim()).find(Boolean) || "";
-const looksLikeHtml = (value: string) => /^\s*</.test(value);
-const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const toNumber = (value: unknown, fallback = 0) => {
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
 
-const createUuidV4 = () =>
-  "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
-    const rand = Math.floor(Math.random() * 16);
-    const value = ch === "x" ? rand : (rand & 0x3) | 0x8;
-    return value.toString(16);
+const getTokenAddress = (token: ApiToken) =>
+  token.address || token.tokenAddress || token.mint || token.baseToken?.address || '';
+
+const buildFallbackChart = (priceUsd: number) => {
+  const base = priceUsd || Math.random() * 0.02 + 0.002;
+  return [base * 0.96, base * 1.02, base, base * 1.08, base * 1.04, base * 1.12];
+};
+
+const generateMockTokens = (offset = 0): SwipeToken[] =>
+  Array.from({ length: 30 }, (_, i) => {
+    const idx = offset + i + 1;
+    return {
+      name: `Demo Coin ${idx}`,
+      symbol: `DC${idx}`,
+      address: `DEMO${idx}`,
+      priceUsd: Math.random() * 0.001,
+      liquidityUsd: Math.random() * 50000,
+      volume24hUsd: Math.random() * 900000,
+      marketCapUsd: Math.random() * 3000000,
+      change24hPct: (Math.random() - 0.5) * 30,
+      chartData: buildFallbackChart(Math.random() * 0.001 + 0.00001).slice(-20),
+      graduationTime: new Date().toISOString(),
+    };
   });
 
+const mapApiToken = (token: ApiToken): SwipeToken => {
+  const price = toNumber(token.priceUsd, 0);
+  const chart =
+    Array.isArray(token.chartData) && token.chartData.length > 1
+      ? token.chartData.map((n) => toNumber(n, price || 1)).slice(-20)
+      : buildFallbackChart(price);
+
+  return {
+    name: token.name || 'Unknown Token',
+    symbol: token.symbol || 'MEME',
+    address: getTokenAddress(token),
+    priceUsd: price,
+    liquidityUsd: toNumber(token.liquidityUsd, 0),
+    volume24hUsd: toNumber(token.volume24hUsd, 0),
+    marketCapUsd: toNumber(token.marketCapUsd, 0),
+    change24hPct: toNumber(token.change24hPct, 0),
+    chartData: chart,
+    graduationTime: token.graduationTime || token.graduatedAt || 'Live now',
+  };
+};
+
+const mergeLiveUpdate = (prev: SwipeToken, incoming: SwipeToken): SwipeToken => {
+  const history = [...prev.chartData, incoming.priceUsd].slice(-20);
+
+  const changed =
+    prev.priceUsd !== incoming.priceUsd ||
+    prev.liquidityUsd !== incoming.liquidityUsd ||
+    prev.volume24hUsd !== incoming.volume24hUsd ||
+    prev.marketCapUsd !== incoming.marketCapUsd ||
+    prev.change24hPct !== incoming.change24hPct;
+
+  if (!changed && history.length === prev.chartData.length && history.every((v, i) => v === prev.chartData[i])) {
+    return prev;
+  }
+
+  return {
+    ...prev,
+    priceUsd: incoming.priceUsd,
+    liquidityUsd: incoming.liquidityUsd,
+    volume24hUsd: incoming.volume24hUsd,
+    marketCapUsd: incoming.marketCapUsd,
+    change24hPct: incoming.change24hPct,
+    chartData: history,
+  };
+};
+
+const makeSegmentMap = <T,>(factory: () => T): Record<RemoteSegment, T> => ({
+  trending: factory(),
+  stalker: factory(),
+  bigcap: factory(),
+  smart: factory(),
+});
+
+const isRemoteSegment = (segment: FeedSegment): segment is RemoteSegment => segment !== 'favorites';
+
+const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
+  if (segment === 'stalker') return `/api/feed/${chain}/stalker`;
+  if (segment === 'bigcap') return `/api/feed/${chain}/bigcap`;
+  if (segment === 'smart') return `/api/feed/${chain}/smart`;
+  return `/api/feed/${chain}/graduated`;
+};
+
 export default function HomeScreen() {
-  const { onTwitterLoginSuccess, onTwitterLogoutSuccess } = useWalletContext();
-  const connectInProgressRef = useRef(false);
-  const [userId, setUserId] = useState<string | null>(null);
+  const profileSheetRef = useRef<ProfileSheetRef>(null);
   const [loading, setLoading] = useState(false);
-  const [tokens, setTokens] = useState<any[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [creatingOrder, setCreatingOrder] = useState(false);
-  const [checkingTwitter, setCheckingTwitter] = useState(true);
-  const [twitterConnectLoading, setTwitterConnectLoading] = useState(false);
-  const [showTwitterPrompt, setShowTwitterPrompt] = useState(false);
-  const [twitterConnection, setTwitterConnection] = useState<{
-    username: string;
-    id: string;
-  } | null>(null);
+  const [tokens, setTokens] = useState<SwipeToken[]>([]);
+  const [appLoading, setAppLoading] = useState(true);
+  const [showSwipeHint, setShowSwipeHint] = useState(true);
+  const [segment, setSegment] = useState<FeedSegment>('trending');
+  const [favoriteAddresses, setFavoriteAddresses] = useState<Set<string>>(new Set());
+  const [favoriteTokens, setFavoriteTokens] = useState<FavoriteToken[]>([]);
+  const [hiddenTokenAddresses, setHiddenTokenAddresses] = useState<Set<string>>(new Set());
+  const [segmentCache, setSegmentCache] = useState<Record<RemoteSegment, SwipeToken[]>>(
+    makeSegmentMap(() => [])
+  );
+  const [segmentCursor, setSegmentCursor] = useState<Record<RemoteSegment, string | null>>(
+    makeSegmentMap(() => null)
+  );
+  const [segmentHasMore, setSegmentHasMore] = useState<Record<RemoteSegment, boolean>>(
+    makeSegmentMap(() => true)
+  );
+  const [segmentLoadingMore, setSegmentLoadingMore] = useState<Record<RemoteSegment, boolean>>(
+    makeSegmentMap(() => false)
+  );
+  const [segmentDepleted, setSegmentDepleted] = useState<Record<RemoteSegment, boolean>>(
+    makeSegmentMap(() => false)
+  );
+  const [isFallback, setIsFallback] = useState(false);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [balance, setBalanceState] = useState(0);
+  const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI } = useTradeSettings();
+  const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
+  const mockOffsetRef = useRef(0);
+  const lastFeedFetchRef = useRef(0);
+  const blockedUntilRef = useRef(0);
+  const retryDelayRef = useRef(10000);
 
-  const getOrCreateLocalUserId = async () => {
-    if (USER_ID_FILE) {
-      try {
-        const existing = await FileSystem.readAsStringAsync(USER_ID_FILE);
-        const trimmed = existing.trim();
-        if (uuidRegex.test(trimmed)) {
-          return trimmed;
-        }
-      } catch {
-        // Ignore file-read errors and create a new id below.
-      }
+  const canFetchFeed = useCallback(() => {
+    const now = Date.now();
+    if (now < blockedUntilRef.current) return false;
+    if (now - lastFeedFetchRef.current < 5000) return false;
+    lastFeedFetchRef.current = now;
+    return true;
+  }, []);
 
-      const newId = createUuidV4();
-      try {
-        await FileSystem.writeAsStringAsync(USER_ID_FILE, newId);
-      } catch {
-        // If write fails, still use generated in-memory id for this run.
-      }
-      return newId;
-    }
+  const onFeedSuccess = useCallback(() => {
+    retryDelayRef.current = 10000;
+  }, []);
 
-    return createUuidV4();
-  };
-
-  const rotateLocalUserId = async () => {
-    const newId = createUuidV4();
-    if (USER_ID_FILE) {
-      try {
-        await FileSystem.writeAsStringAsync(USER_ID_FILE, newId);
-      } catch {
-        // Continue even if persisting fails for this session.
-      }
-    }
-    setUserId(newId);
-    return newId;
-  };
-
-  const checkTwitterConnection = useCallback(async (currentUserId: string) => {
-    try {
-      setCheckingTwitter(true);
-      const res = await fetch(`${API_BASE}/api/twitter/connection/${currentUserId}`);
-      const raw = await res.text();
-      const data = tryParseJson(raw);
-
-      if (!res.ok) {
-        const apiError =
-          (data && typeof data.error === "string" && data.error) ||
-          firstLine(raw) ||
-          "Could not check Twitter connection";
-        throw new Error(`Twitter check failed (${res.status}): ${apiError}`);
-      }
-
-      if (!data) {
-        throw new Error(`Twitter check returned non-JSON (${res.status})`);
-      }
-
-      if (data.connected) {
-        const profile = {
-          username: data.twitterUsername,
-          id: data.twitterUserId,
-        };
-        setTwitterConnection(profile);
-        onTwitterLoginSuccess(profile).catch((error) => {
-          console.log(error);
-          Alert.alert("Wallet", "Twitter connected, but wallet creation failed. You can retry from Wallet tab.");
-        });
-        setShowTwitterPrompt(false);
-      } else {
-        setShowTwitterPrompt(true);
-      }
-    } catch (error) {
-      console.log(error);
-      setShowTwitterPrompt(true);
-    } finally {
-      setCheckingTwitter(false);
-    }
-  }, [onTwitterLoginSuccess]);
-
-  const handleTwitterRedirect = useCallback((url: string) => {
-    // Ignore stale deep links unless user is currently connecting.
-    if (!connectInProgressRef.current) return;
-
-    const parsed = Linking.parse(url);
-    const path = parsed.path || "";
-    const host = parsed.hostname || "";
-    const isTwitterCallback = path.includes("twitter-connected") || host === "twitter-connected";
-    if (!isTwitterCallback) return;
-
-    const status = parsed.queryParams?.status;
-    if (status !== "success") {
-      connectInProgressRef.current = false;
-      setTwitterConnectLoading(false);
-      const error = parsed.queryParams?.error;
-      Alert.alert("Twitter Connect", `Twitter connection failed${error ? `: ${error}` : "."}`);
+  const onFeedError = useCallback((status?: number) => {
+    if (status === 401) {
+      blockedUntilRef.current = Date.now() + 60000;
+      retryDelayRef.current = 60000;
       return;
     }
-
-    const twitterUsername = parsed.queryParams?.twitterUsername;
-    const twitterUserId = parsed.queryParams?.twitterUserId;
-    if (typeof twitterUsername !== "string" || typeof twitterUserId !== "string") {
-      connectInProgressRef.current = false;
-      setTwitterConnectLoading(false);
-      Alert.alert("Twitter Connect", "Twitter profile data missing");
-      return;
-    }
-
-    connectInProgressRef.current = false;
-    const profile = { username: twitterUsername, id: twitterUserId };
-    setTwitterConnection(profile);
-    onTwitterLoginSuccess(profile).catch((error) => {
-      console.log(error);
-      Alert.alert("Wallet", "Twitter connected, but wallet creation failed. You can retry from Wallet tab.");
-    });
-    setShowTwitterPrompt(false);
-    setTwitterConnectLoading(false);
-    Alert.alert("Connected", `Connected as @${twitterUsername}`);
-  }, [onTwitterLoginSuccess]);
+    retryDelayRef.current = Math.min(retryDelayRef.current * 2, 60000);
+  }, []);
 
   useEffect(() => {
-    const sub = Linking.addEventListener("url", ({ url }) => {
-      handleTwitterRedirect(url);
-    });
+    const timer = setTimeout(() => setAppLoading(false), 1600);
+    return () => clearTimeout(timer);
+  }, []);
 
-    Linking.getInitialURL().then((url) => {
-      if (url) handleTwitterRedirect(url);
-    });
+  useEffect(() => {
+    const hideTimer = setTimeout(() => setShowSwipeHint(false), 5000);
+    return () => clearTimeout(hideTimer);
+  }, []);
 
-    (async () => {
+  useEffect(() => {
+    getDevBalance().then(setBalanceState).catch(() => setBalanceState(1000));
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const hydrateLastInputs = async () => {
       try {
-        const localUserId = await getOrCreateLocalUserId();
-        setUserId(localUserId);
-        await checkTwitterConnection(localUserId);
-      } catch (error) {
-        console.log(error);
-        setUserId(createUuidV4());
-        setShowTwitterPrompt(true);
-        setCheckingTwitter(false);
+        const [amountRaw, roiRaw] = await Promise.all([
+          AsyncStorage.getItem(LAST_AMOUNT_KEY),
+          AsyncStorage.getItem(LAST_ROI_KEY),
+        ]);
+        if (!mounted) return;
+        const amount = Number(amountRaw);
+        const roi = Number(roiRaw);
+        if (Number.isFinite(amount) && amount > 0) setTradeAmount(amount);
+        if (Number.isFinite(roi) && roi > 0) setTpROI(roi);
+      } catch (err) {
+        console.log('failed to load last input values', err);
       }
-    })();
+    };
+    hydrateLastInputs();
+    return () => {
+      mounted = false;
+    };
+  }, [setTpROI, setTradeAmount]);
 
-    return () => sub.remove();
-  }, [checkTwitterConnection, handleTwitterRedirect]);
+  useEffect(() => {
+    void AsyncStorage.setItem(LAST_AMOUNT_KEY, String(Math.max(1, tradeAmount)));
+  }, [tradeAmount]);
 
-  const connectTwitter = async () => {
-    try {
-      if (!userId) throw new Error("User identity not ready. Please try again.");
-      connectInProgressRef.current = true;
-      setTwitterConnectLoading(true);
-      const returnUrl = Linking.createURL("twitter-connected");
+  useEffect(() => {
+    void AsyncStorage.setItem(LAST_ROI_KEY, String(Math.max(1, tpROI)));
+  }, [tpROI]);
 
-      const startRes = await fetch(
-        `${API_BASE}/api/twitter/auth/start?userId=${encodeURIComponent(userId)}&returnUrl=${encodeURIComponent(returnUrl)}`
-      );
-      const raw = await startRes.text();
-      const startJson = tryParseJson(raw);
+  useEffect(() => {
+    let active = true;
+    const hydrateLocalState = async () => {
+      try {
+        const [favoritesRaw, hiddenRaw] = await Promise.all([
+          AsyncStorage.getItem(FAVORITES_KEY),
+          AsyncStorage.getItem(HIDDEN_TOKENS_KEY),
+        ]);
+        if (!active) return;
 
-      if (!startRes.ok) {
-        if (startRes.status === 404 && looksLikeHtml(raw)) {
-          throw new Error(
-            "Twitter API route not found on server. Deploy latest backend code (apps/api/index.js) or fix API_BASE URL."
-          );
+        if (favoritesRaw) {
+          const parsed = JSON.parse(favoritesRaw) as (string | FavoriteToken)[];
+          const normalized: FavoriteToken[] = parsed
+          .map((item) => {
+            if (typeof item === 'string') {
+              return {
+                address: item,
+                name: item.slice(0, 6),
+                symbol: 'FAV',
+                chain: 'solana',
+              };
+            }
+            if (!item?.address || !item?.symbol) return null;
+            return {
+              address: item.address,
+              name: item.name || item.symbol,
+              symbol: item.symbol,
+              chain: item.chain || 'solana',
+            };
+          })
+          .filter((item): item is FavoriteToken => Boolean(item));
+          setFavoriteTokens(normalized);
+          setFavoriteAddresses(new Set(normalized.map((f) => f.address)));
         }
-        const apiError =
-          (startJson && typeof startJson.error === "string" && startJson.error) ||
-          firstLine(raw) ||
-          "Failed to start Twitter auth";
-        throw new Error(`Twitter start failed (${startRes.status}): ${apiError}`);
+
+        if (hiddenRaw) {
+          const parsedHidden = JSON.parse(hiddenRaw) as string[];
+          setHiddenTokenAddresses(new Set(parsedHidden));
+        }
+      } catch (err) {
+        console.log('Failed to load local state', err);
+      }
+    };
+    hydrateLocalState();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const fetchNextPage = useCallback(
+    async (segmentType: RemoteSegment, initial = false) => {
+      if (segmentLoadingMore[segmentType]) return [];
+      if (!segmentHasMore[segmentType] && !initial) return [];
+      if (!canFetchFeed()) {
+        if (initial && segmentCache[segmentType].length === 0) {
+          const mock = generateMockTokens(mockOffsetRef.current);
+          mockOffsetRef.current += mock.length;
+          console.log("⚠️ Using fallback demo tokens");
+          setIsFallback(true);
+          setSegmentCache((prev) => ({
+            ...prev,
+            [segmentType]: [...prev[segmentType], ...mock],
+          }));
+          return mock;
+        }
+        return [];
       }
 
-      if (!startJson?.authUrl) {
-        throw new Error("Twitter start endpoint returned no authUrl");
-      }
-      const canOpen = await Linking.canOpenURL(startJson.authUrl);
-      if (!canOpen) {
-        throw new Error("Cannot open Twitter authorization URL");
-      }
-      await Linking.openURL(startJson.authUrl);
-    } catch (error: any) {
-      connectInProgressRef.current = false;
-      console.log(error);
-      Alert.alert("Twitter Connect", error?.message || "Failed to connect Twitter");
-      setTwitterConnectLoading(false);
-    } finally {
-      // Intentionally kept loading while user is in Twitter/browser.
-      // It is reset when callback URL is received or if an error is thrown above.
-    }
-  };
+      setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: true }));
+      if (initial) setLoading(true);
 
-  const disconnectTwitter = async () => {
-    try {
-      if (!userId) throw new Error("User identity not ready. Please try again.");
-
-      connectInProgressRef.current = false;
-      setTwitterConnectLoading(true);
-      // Best-effort server cleanup; some deployed backends may not support DELETE yet.
       try {
-        const res = await fetch(`${API_BASE}/api/twitter/connection/${userId}`, {
-          method: "DELETE",
-        });
+        const chain = activeChain === 'base' ? 'base' : 'solana';
+        const endpoint = endpointFor(chain, segmentType);
+        const cursor = segmentCursor[segmentType];
+        const q = cursor
+          ? `?limit=${PAGE_LIMIT}&cursor=${encodeURIComponent(cursor)}`
+          : `?limit=${PAGE_LIMIT}`;
+
+        const res = await fetch(`${API_BASE}${endpoint}${q}`);
         if (!res.ok) {
-          console.log("Disconnect API non-OK:", res.status);
+          onFeedError(res.status);
+          const mock = generateMockTokens(mockOffsetRef.current);
+          mockOffsetRef.current += mock.length;
+          console.log("⚠️ Using fallback demo tokens");
+          setIsFallback(true);
+          setSegmentCache((prev) => ({
+            ...prev,
+            [segmentType]: [...prev[segmentType], ...mock],
+          }));
+          return mock;
         }
-      } catch (error) {
-        console.log("Disconnect API failed:", error);
+        onFeedSuccess();
+        const data = (await res.json()) as { tokens?: ApiToken[]; cursor?: string | null; fallback?: boolean };
+        const incoming = Array.isArray(data.tokens) ? data.tokens.map(mapApiToken) : [];
+        if (data.fallback || incoming.length === 0) {
+          const mock = generateMockTokens(mockOffsetRef.current);
+          mockOffsetRef.current += mock.length;
+          console.log("⚠️ Using fallback demo tokens");
+          setIsFallback(true);
+          setSegmentCache((prev) => ({
+            ...prev,
+            [segmentType]: [...prev[segmentType], ...mock],
+          }));
+          return mock;
+        }
+        setIsFallback(false);
+        const seen = loadedAddressRef.current[segmentType];
+
+        const deduped = incoming.filter((token) => {
+          if (!token.address) return false;
+          if (hiddenTokenAddresses.has(token.address)) return false;
+          if (seen.has(token.address)) return false;
+          seen.add(token.address);
+          return true;
+        });
+
+        if (deduped.length > 0) {
+          setSegmentCache((prev) => ({
+            ...prev,
+            [segmentType]: [...prev[segmentType], ...deduped],
+          }));
+          setSegmentDepleted((prev) => ({ ...prev, [segmentType]: false }));
+        }
+
+        setSegmentCursor((prev) => ({ ...prev, [segmentType]: data.cursor || null }));
+        setSegmentHasMore((prev) => ({ ...prev, [segmentType]: Boolean(data.cursor) }));
+        return deduped;
+      } catch (err) {
+        console.log(err);
+        const mock = generateMockTokens(mockOffsetRef.current);
+        mockOffsetRef.current += mock.length;
+        console.log("⚠️ Using fallback demo tokens");
+        setIsFallback(true);
+        setSegmentCache((prev) => ({
+          ...prev,
+          [segmentType]: [...prev[segmentType], ...mock],
+        }));
+        return mock;
+      } finally {
+        setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: false }));
+        if (initial) setLoading(false);
+      }
+    },
+    [
+      activeChain,
+      canFetchFeed,
+      hiddenTokenAddresses,
+      onFeedError,
+      onFeedSuccess,
+      segmentCache,
+      segmentCursor,
+      segmentHasMore,
+      segmentLoadingMore,
+    ]
+  );
+
+  const fetchTopLive = useCallback(
+    async (segmentType: RemoteSegment, topAddress: string) => {
+      try {
+        if (!canFetchFeed()) return;
+        const chain = activeChain === 'base' ? 'base' : 'solana';
+        const endpoint = endpointFor(chain, segmentType);
+        const res = await fetch(`${API_BASE}${endpoint}?limit=20`);
+        if (!res.ok) {
+          onFeedError(res.status);
+          return;
+        }
+        onFeedSuccess();
+        const data = (await res.json()) as { tokens?: ApiToken[] };
+        const incoming = Array.isArray(data.tokens) ? data.tokens.map(mapApiToken) : [];
+        const match = incoming.find((t) => t.address === topAddress);
+        if (!match) return;
+        setSegmentCache((prev) => ({
+          ...prev,
+          [segmentType]: prev[segmentType].map((t, i) => (i === 0 ? mergeLiveUpdate(t, match) : t)),
+        }));
+      } catch (err) {
+        onFeedError();
+        console.log('live update failed', err);
+      }
+    },
+    [activeChain, canFetchFeed, onFeedError, onFeedSuccess]
+  );
+
+  const ensureDeckRefill = useCallback(
+    async (segmentType: RemoteSegment) => {
+      let attempts = 0;
+      while (
+        attempts < MAX_EMPTY_FETCH_ATTEMPTS &&
+        segmentCache[segmentType].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length < LOW_DECK_THRESHOLD &&
+        segmentHasMore[segmentType]
+      ) {
+        const added = await fetchNextPage(segmentType, false);
+        attempts += 1;
+        if (added.length > 0) break;
       }
 
-      await rotateLocalUserId();
-      setTwitterConnection(null);
-      setShowTwitterPrompt(true);
-      onTwitterLogoutSuccess();
-      Alert.alert("Disconnected", "Twitter has been disconnected.");
-    } catch (error: any) {
-      console.log(error);
-      Alert.alert("Twitter Connect", error?.message || "Failed to disconnect Twitter");
-    } finally {
-      setTwitterConnectLoading(false);
-    }
-  };
+      if (
+        attempts >= MAX_EMPTY_FETCH_ATTEMPTS &&
+        segmentCache[segmentType].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length === 0
+      ) {
+        setSegmentDepleted((prev) => ({ ...prev, [segmentType]: true }));
+      }
+    },
+    [fetchNextPage, hiddenTokenAddresses, segmentCache, segmentHasMore]
+  );
 
-  const loadTokens = async () => {
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) return;
+    const visibleCount = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length;
+    if (visibleCount < LOW_DECK_THRESHOLD && !segmentLoadingMore[segment]) {
+      void ensureDeckRefill(segment);
+    }
+  }, [ensureDeckRefill, hiddenTokenAddresses, segment, segmentCache, segmentLoadingMore]);
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) return;
+    if (!isFallback) return;
+    const visibleCount = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length;
+    if (visibleCount >= LOW_DECK_THRESHOLD) return;
+
+    const mock = generateMockTokens(mockOffsetRef.current);
+    mockOffsetRef.current += mock.length;
+    setSegmentCache((prev) => ({
+      ...prev,
+      [segment]: [...prev[segment], ...mock],
+    }));
+  }, [hiddenTokenAddresses, isFallback, segment, segmentCache]);
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) return;
+    if (segmentCache[segment].length > 0) return;
+    void fetchNextPage(segment, true);
+  }, [fetchNextPage, segment, segmentCache]);
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) return;
+    if (segmentLoadingMore[segment]) return;
+    if (!segmentHasMore[segment]) return;
+    if (segmentCache[segment].length === 0 || segmentCache[segment].length > PAGE_LIMIT) return;
+    // Preload the next page after initial data.
+    void fetchNextPage(segment, false);
+  }, [fetchNextPage, segment, segmentCache, segmentHasMore, segmentLoadingMore]);
+
+  const handleActiveCardChange = useCallback(
+    (token: SwipeToken | null) => {
+      if (!token?.address) return;
+      if (!isRemoteSegment(segment)) return;
+      if (isSwiping || creatingOrder) return;
+      void fetchTopLive(segment, token.address);
+    },
+    [creatingOrder, fetchTopLive, isSwiping, segment]
+  );
+
+  const persistFavorites = useCallback(async (next: FavoriteToken[]) => {
     try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/api/feed/solana/graduated`);
-      if (!res.ok) throw new Error("Network error");
-      const data = await res.json();
-      setTokens(data.tokens || []);
-      setCurrentIndex(0);
+      await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
     } catch (err) {
-      console.log(err);
-      Alert.alert("Error", "Could not load tokens");
-    } finally {
-      setLoading(false);
+      console.log('Failed to save favorites', err);
     }
-  };
+  }, []);
 
-  // Try common fields to find token address safely
-  const getTokenAddress = (t: any) =>
-    t?.address || t?.tokenAddress || t?.mint || t?.baseToken?.address || "";
-
-  const createOrder = async (token: any) => {
-    if (!userId) {
-      Alert.alert("Error", "User identity not ready. Please try again.");
-      return;
+  const persistHiddenTokens = useCallback(async (next: Set<string>) => {
+    try {
+      await AsyncStorage.setItem(HIDDEN_TOKENS_KEY, JSON.stringify(Array.from(next)));
+    } catch (err) {
+      console.log('Failed to save hidden tokens', err);
     }
+  }, []);
 
-    const tokenAddress = getTokenAddress(token);
-    if (!tokenAddress) {
-      Alert.alert("Error", "Token address missing in API response");
-      return;
-    }
+  const hideToken = useCallback(
+    (address: string) => {
+      if (!address) return;
+      setHiddenTokenAddresses((prev) => {
+        const next = new Set(prev);
+        next.add(address);
+        persistHiddenTokens(next);
+        return next;
+      });
+      setSegmentCache((prev) => ({
+        trending: prev.trending.filter((t) => t.address !== address),
+        stalker: prev.stalker.filter((t) => t.address !== address),
+        bigcap: prev.bigcap.filter((t) => t.address !== address),
+        smart: prev.smart.filter((t) => t.address !== address),
+      }));
+      setTokens((prev) => prev.filter((t) => t.address !== address));
+    },
+    [persistHiddenTokens]
+  );
+
+  const handleToggleFavorite = useCallback(async (token: SwipeToken) => {
+    setFavoriteTokens((prev) => {
+      const exists = prev.some((item) => item.address === token.address);
+      const next = exists
+        ? prev.filter((item) => item.address !== token.address)
+        : [
+            ...prev,
+            {
+              address: token.address,
+              name: token.name,
+              symbol: token.symbol,
+              chain: activeChain,
+            },
+          ];
+      persistFavorites(next);
+      setFavoriteAddresses(new Set(next.map((f) => f.address)));
+      return next;
+    });
 
     try {
-      setCreatingOrder(true);
-
-      const res = await fetch(`${API_BASE}/api/orders`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      await fetch(`${API_BASE}/api/favorites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId,
-          chain: token.chain || "solana",
-          tokenAddress,
-          amountUsd: 10, // later from settings screen
-          tpRoi: 0.5,    // later from settings screen
+          userId: TEST_USER_ID,
+          tokenAddress: token.address,
         }),
       });
+    } catch (err) {
+      console.log('Favorite API failed', err);
+    }
+  }, [activeChain, persistFavorites]);
 
-      const json = await res.json();
-
-      if (!res.ok) {
-        console.log("Order error:", json);
-        Alert.alert("Order Failed", json?.error || "Unknown error");
-        return;
+  const createOrder = useCallback(
+    async (token: SwipeToken) => {
+      if (!token.address) {
+        Alert.alert('Error', 'Token address missing in API response');
+        return false;
       }
 
-      console.log("Order created:", json);
-      // Optional: show tiny confirmation
-      // Alert.alert("Success", `Order #${json.order?.id || ""} created`);
-    } catch (e: any) {
-      console.log(e);
-      Alert.alert("Order Failed", e?.message || "Network error");
-    } finally {
-      setCreatingOrder(false);
+      try {
+        setCreatingOrder(true);
+
+        const res = await fetch(`${API_BASE}/api/orders`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: TEST_USER_ID,
+            chain: activeChain || 'solana',
+            tokenAddress: token.address,
+            amountUSDT: tradeAmount,
+            roiTarget: tpROI,
+            stopLoss,
+          }),
+        });
+
+        const json = await res.json();
+
+        if (!res.ok) {
+          console.log('Order error:', json);
+          Alert.alert('Order Failed', json?.error || 'Unknown error');
+          return false;
+        }
+        return true;
+      } catch (err: any) {
+        console.log(err);
+        Alert.alert('Order Failed', err?.message || 'Network error');
+        return false;
+      } finally {
+        setCreatingOrder(false);
+      }
+    },
+    [activeChain, stopLoss, tpROI, tradeAmount]
+  );
+
+  const handleReject = useCallback((token: SwipeToken) => {
+    hideToken(token.address);
+  }, [hideToken]);
+
+  const handleBuy = useCallback(
+    (token: SwipeToken) => {
+      if (balance < tradeAmount) {
+        Alert.alert('Insufficient balance', 'Not enough funds in your dev wallet.');
+        return;
+      }
+      hideToken(token.address);
+      void (async () => {
+        const ok = await createOrder(token);
+        if (!ok) {
+          Alert.alert('Order Failed', `Unable to execute ${token.symbol.toUpperCase()} order.`);
+          return;
+        }
+        const newBalance = await deductBalance(tradeAmount);
+        setBalanceState(newBalance);
+
+        setFavoriteTokens((prev) => {
+          const next = prev.filter((item) => item.address !== token.address);
+          persistFavorites(next);
+          setFavoriteAddresses(new Set(next.map((f) => f.address)));
+          return next;
+        });
+      })();
+    },
+    [balance, createOrder, hideToken, persistFavorites, tradeAmount]
+  );
+
+  const openDevWalletControls = useCallback(() => {
+    Alert.alert('Dev Wallet', `Current balance: $${balance.toFixed(2)}`, [
+      {
+        text: 'Add $100',
+        onPress: async () => {
+          const updated = await addBalance(100);
+          setBalanceState(updated);
+        },
+      },
+      {
+        text: 'Reset $1000',
+        onPress: async () => {
+          await resetBalance();
+          setBalanceState(1000);
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [balance]);
+
+  const updateTradeAmount = useCallback(
+    (delta: number) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+      setTradeAmount(Math.max(1, Math.min(500, tradeAmount + delta)));
+    },
+    [setTradeAmount, tradeAmount]
+  );
+
+  const updateTpRoi = useCallback(
+    (delta: number) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+      setTpROI(Math.max(1, Math.min(200, tpROI + delta)));
+    },
+    [setTpROI, tpROI]
+  );
+
+  useEffect(() => {
+    if (segment === 'favorites') {
+      const filtered = favoriteTokens
+        .filter((item) => item.chain === activeChain && !hiddenTokenAddresses.has(item.address))
+        .map((item): SwipeToken => ({
+          name: item.name,
+          symbol: item.symbol,
+          address: item.address,
+          priceUsd: 0,
+          liquidityUsd: 0,
+          volume24hUsd: 0,
+          marketCapUsd: 0,
+          change24hPct: 0,
+          chartData: [1, 1.02, 1.01, 1.03],
+          graduationTime: 'Favorite',
+        }));
+      setTokens(filtered);
+      return;
     }
-  };
 
-  const nextToken = () => setCurrentIndex((i) => i + 1);
-
-  const handleReject = () => {
-    nextToken();
-  };
-
-  const handleBuy = async () => {
-    const token = tokens[currentIndex];
-    await createOrder(token);
-    nextToken();
-  };
-
-  const currentToken = tokens[currentIndex];
-
-  if (checkingTwitter) {
-    return (
-      <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator />
-        <Text style={{ color: "#fff", marginTop: 12 }}>Checking Twitter connection...</Text>
-      </View>
-    );
-  }
-
-  if (showTwitterPrompt && !twitterConnection) {
-    return (
-      <View style={{ flex: 1, backgroundColor: "#000", padding: 20, justifyContent: "center" }}>
-        <Text style={{ color: "#fff", fontSize: 28, fontWeight: "bold", textAlign: "center" }}>
-          Connect Twitter
-        </Text>
-        <Text style={{ color: "#bbb", marginTop: 12, textAlign: "center" }}>
-          Please connect your Twitter/X account to continue.
-        </Text>
-        <Pressable
-          onPress={connectTwitter}
-          style={{ marginTop: 24, padding: 16, backgroundColor: "#fff", borderRadius: 10 }}
-          disabled={twitterConnectLoading}
-        >
-          <Text style={{ color: "#000", textAlign: "center", fontWeight: "bold" }}>
-            {twitterConnectLoading ? "Connecting..." : "Connect Twitter"}
-          </Text>
-        </Pressable>
-      </View>
-    );
-  }
+    const visible = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address)));
+    setTokens(visible);
+  }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#000", padding: 20, justifyContent: "center" }}>
-      <Text style={{ color: "#fff", fontSize: 24, fontWeight: "bold" }}>MemeSwipe</Text>
-      {twitterConnection ? (
-        <>
-          <Text style={{ color: "#7fff9f", marginTop: 6 }}>
-            Connected: @{twitterConnection.username} ({twitterConnection.id})
-          </Text>
-          <Pressable
-            onPress={disconnectTwitter}
-            style={{ marginTop: 10, padding: 10, backgroundColor: "#222", borderRadius: 10 }}
-            disabled={twitterConnectLoading}
-          >
-            <Text style={{ color: "#fff", textAlign: "center", fontWeight: "600" }}>
-              {twitterConnectLoading ? "Disconnecting..." : "Disconnect Twitter"}
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={() => router.push("/wallet")}
-            style={{ marginTop: 10, padding: 12, backgroundColor: "#fff", borderRadius: 10 }}
-          >
-            <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Add SOL</Text>
-          </Pressable>
-        </>
-      ) : null}
-
-      {tokens.length === 0 ? (
-        <>
-          <Pressable
-            onPress={loadTokens}
-            style={{ marginTop: 20, padding: 15, backgroundColor: "#fff", borderRadius: 10 }}
-            disabled={loading}
-          >
-            <Text style={{ textAlign: "center", fontWeight: "bold" }}>
-              {loading ? "Loading..." : "Load Graduated Tokens"}
-            </Text>
-          </Pressable>
-
-          {loading && <ActivityIndicator style={{ marginTop: 20 }} />}
-        </>
-      ) : currentToken ? (
-        <>
-          {/* Token Card */}
-          <View style={{ backgroundColor: "#111", padding: 20, borderRadius: 16, marginTop: 20 }}>
-            <Text style={{ color: "#fff", fontSize: 20, fontWeight: "bold" }}>
-              {currentToken.name || "Unknown"}
-            </Text>
-            <Text style={{ color: "#aaa", marginTop: 6 }}>
-              {currentToken.symbol || ""}
-            </Text>
-
-            <Text style={{ color: "#555", marginTop: 10, fontSize: 12 }}>
-              {getTokenAddress(currentToken)}
-            </Text>
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaView edges={['top']} style={styles.safeArea}>
+        <View style={styles.screen}>
+          <View style={styles.topBarWrap}>
+            <View style={styles.topBar}>
+              <ProfileButton
+                onPress={() => profileSheetRef.current?.open()}
+                onLongPress={openDevWalletControls}
+                initials={(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}
+                disabled={appLoading}
+              />
+              <View style={styles.controlsRow}>
+                <GlassControlPill
+                  label="Amount"
+                  value={tradeAmount}
+                  suffix="$"
+                  onMinus={() => updateTradeAmount(-5)}
+                  onPlus={() => updateTradeAmount(5)}
+                  onCommit={(v) => setTradeAmount(Math.max(1, Math.min(500, v)))}
+                />
+                <GlassControlPill
+                  label="ROI"
+                  value={tpROI}
+                  suffix="%"
+                  onMinus={() => updateTpRoi(-1)}
+                  onPlus={() => updateTpRoi(1)}
+                  onCommit={(v) => setTpROI(Math.max(1, Math.min(200, v)))}
+                />
+              </View>
+            </View>
+            <View style={styles.filterRow}>
+              <FeedSegmentedControl
+                value={segment}
+                onChange={setSegment}
+                segments={['trending', 'stalker', 'bigcap']}
+              />
+            </View>
           </View>
 
-          {/* Buttons */}
-          <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 20 }}>
-            <Pressable
-              onPress={handleReject}
-              style={{ width: "48%", padding: 16, backgroundColor: "#222", borderRadius: 12 }}
-              disabled={creatingOrder}
-            >
-              <Text style={{ color: "red", textAlign: "center", fontWeight: "bold" }}>
-                REJECT
-              </Text>
-            </Pressable>
-
-            <Pressable
-              onPress={handleBuy}
-              style={{ width: "48%", padding: 16, backgroundColor: "#fff", borderRadius: 12 }}
-              disabled={creatingOrder}
-            >
-              <Text style={{ color: "#000", textAlign: "center", fontWeight: "bold" }}>
-                {creatingOrder ? "BUYING..." : "BUY"}
-              </Text>
-            </Pressable>
+          <View style={styles.deckArea}>
+            <View style={styles.deckWrapper}>
+            <SwipeTokenDeck
+              resetKey={segment}
+              tokens={tokens}
+                onBuy={handleBuy}
+                onReject={handleReject}
+                onToggleFavorite={handleToggleFavorite}
+              favoriteAddresses={favoriteAddresses}
+              isLoading={loading}
+              isInteractionLocked={appLoading}
+              onSwipeStateChange={setIsSwiping}
+              onActiveCardChange={handleActiveCardChange}
+              emptyTitle={
+                segment === 'favorites'
+                  ? '❤️ No favorites yet'
+                  : isFallback
+                    ? 'Demo mode active'
+                    : isRemoteSegment(segment) && segmentDepleted[segment]
+                    ? 'No more tokens available right now'
+                    : 'Deck complete'
+              }
+              emptySubtitle={
+                segment === 'favorites'
+                  ? 'Tap the heart to save tokens for later'
+                  : isFallback
+                    ? 'Fallback demo tokens are loaded for infinite swipe testing.'
+                    : isRemoteSegment(segment) && segmentDepleted[segment]
+                    ? 'Please check back shortly for fresh listings.'
+                    : 'No more tokens in this segment.'
+              }
+            />
+            </View>
           </View>
+        </View>
 
-          <Text style={{ color: "#444", marginTop: 14, textAlign: "center" }}>
-            {currentIndex + 1} / {tokens.length}
-          </Text>
-        </>
-      ) : (
-        <>
-          <Text style={{ color: "#fff", marginTop: 20, textAlign: "center" }}>
-            No more tokens 🎉
-          </Text>
-          <Pressable
-            onPress={loadTokens}
-            style={{ marginTop: 20, padding: 15, backgroundColor: "#fff", borderRadius: 10 }}
-          >
-            <Text style={{ textAlign: "center", fontWeight: "bold" }}>Reload</Text>
-          </Pressable>
-        </>
-      )}
-    </View>
+        <ProfileSheet ref={profileSheetRef} />
+        <SwipeHint visible={showSwipeHint} />
+        <AppLoader visible={appLoading} />
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: '#05070A',
+  },
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#05070A',
+    paddingHorizontal: 0,
+  },
+  topBarWrap: {
+    backgroundColor: '#05070A',
+    zIndex: 30,
+  },
+  screen: {
+    flex: 1,
+  },
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    gap: 12,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  filterRow: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  deckArea: {
+    flex: 1,
+    paddingBottom: 10,
+  },
+  deckWrapper: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  controlRing: {
+    borderRadius: 999,
+    padding: 1,
+  },
+  controlInner: {
+    minHeight: 42,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  controlButton: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  controlButtonText: {
+    color: '#f5f7ff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  controlValueWrap: {
+    minWidth: 62,
+    alignItems: 'center',
+  },
+  controlLabel: {
+    color: 'rgba(214,224,255,0.72)',
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  controlValue: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  controlInput: {
+    minWidth: 72,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    color: '#fff',
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '700',
+    paddingHorizontal: 8,
+  },
+});
+
+const GlassControlPill = ({
+  label,
+  value,
+  suffix,
+  onMinus,
+  onPlus,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  suffix: string;
+  onMinus: () => void;
+  onPlus: () => void;
+  onCommit: (value: number) => void;
+}) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(Math.round(value)));
+
+  useEffect(() => {
+    if (!editing) setDraft(String(Math.round(value)));
+  }, [editing, value]);
+
+  const commit = () => {
+    const next = Number(draft);
+    onCommit(Number.isFinite(next) ? next : 1);
+    setEditing(false);
+  };
+
+  return (
+    <LinearGradient colors={['rgba(115,143,255,0.24)', 'rgba(92,245,190,0.12)']} style={styles.controlRing}>
+      <BlurView intensity={24} tint="dark" style={styles.controlInner}>
+        <Pressable onPress={onMinus} style={styles.controlButton}>
+          <Text style={styles.controlButtonText}>-</Text>
+        </Pressable>
+        <Pressable style={styles.controlValueWrap} onPress={() => setEditing(true)}>
+          <Text style={styles.controlLabel}>{label}</Text>
+          {editing ? (
+            <TextInput
+              autoFocus
+              keyboardType="numeric"
+              value={draft}
+              onChangeText={setDraft}
+              onBlur={commit}
+              onSubmitEditing={commit}
+              style={styles.controlInput}
+            />
+          ) : (
+            <Text style={styles.controlValue}>
+              {suffix === '$' ? `${suffix}${Math.round(value)}` : `${Math.round(value)}${suffix}`}
+            </Text>
+          )}
+        </Pressable>
+        <Pressable onPress={onPlus} style={styles.controlButton}>
+          <Text style={styles.controlButtonText}>+</Text>
+        </Pressable>
+      </BlurView>
+    </LinearGradient>
+  );
+};
