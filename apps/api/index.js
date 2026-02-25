@@ -20,6 +20,7 @@ const oauthStateStore = new Map();
 let ensureTwitterTablePromise = null;
 let ensureFavoritesTablePromise = null;
 let ensureOrdersTablePromise = null;
+const userFkTargetCache = new Map();
 const FEED_CACHE_TTL_MS = 60 * 1000;
 const QUOTA_BLOCK_MS = 60 * 60 * 1000;
 const feedCache = new Map();
@@ -124,6 +125,101 @@ const ensureOrdersTable = async () => {
     await ensureOrdersTablePromise;
   } catch (error) {
     ensureOrdersTablePromise = null;
+    throw error;
+  }
+};
+
+const resolveUserFkTarget = async (sourceTableName) => {
+  if (userFkTargetCache.has(sourceTableName)) {
+    return userFkTargetCache.get(sourceTableName);
+  }
+
+  const result = await pool.query(
+    `
+    select
+      ccu.table_schema as foreign_table_schema,
+      ccu.table_name as foreign_table_name,
+      ccu.column_name as foreign_column_name
+    from information_schema.table_constraints tc
+    join information_schema.key_column_usage kcu
+      on tc.constraint_name = kcu.constraint_name
+      and tc.table_schema = kcu.table_schema
+    join information_schema.constraint_column_usage ccu
+      on ccu.constraint_name = tc.constraint_name
+      and ccu.constraint_schema = tc.table_schema
+    where tc.constraint_type = 'FOREIGN KEY'
+      and tc.table_schema = 'public'
+      and tc.table_name = $1
+      and kcu.column_name = 'user_id'
+    limit 1
+    `,
+    [sourceTableName]
+  );
+
+  const row = result.rows[0]
+    ? {
+        schema: result.rows[0].foreign_table_schema,
+        table: result.rows[0].foreign_table_name,
+        column: result.rows[0].foreign_column_name,
+      }
+    : null;
+
+  userFkTargetCache.set(sourceTableName, row);
+  return row;
+};
+
+const ensureUserExistsForTable = async (sourceTableName, userId) => {
+  const fkTarget = await resolveUserFkTarget(sourceTableName);
+  if (!fkTarget) return;
+
+  const qSchema = `"${String(fkTarget.schema).replace(/"/g, '""')}"`;
+  const qTable = `"${String(fkTarget.table).replace(/"/g, '""')}"`;
+  const qColumn = `"${String(fkTarget.column).replace(/"/g, '""')}"`;
+
+  try {
+    await pool.query(
+      `insert into ${qSchema}.${qTable} (${qColumn}) values ($1) on conflict (${qColumn}) do nothing`,
+      [userId]
+    );
+  } catch (error) {
+    // Supabase auth.users may need aud/role defaults; apply best-effort fallback.
+    if (fkTarget.schema === "auth" && fkTarget.table === "users" && fkTarget.column === "id") {
+      await pool.query(
+        `
+        insert into auth.users (id, aud, role)
+        values ($1, 'authenticated', 'authenticated')
+        on conflict (id) do nothing
+        `,
+        [userId]
+      );
+      return;
+    }
+    throw error;
+  }
+};
+
+const resolveExistingFkUserId = async (sourceTableName) => {
+  const fkTarget = await resolveUserFkTarget(sourceTableName);
+  if (!fkTarget) return null;
+
+  const qSchema = `"${String(fkTarget.schema).replace(/"/g, '""')}"`;
+  const qTable = `"${String(fkTarget.table).replace(/"/g, '""')}"`;
+  const qColumn = `"${String(fkTarget.column).replace(/"/g, '""')}"`;
+  const existing = await pool.query(
+    `select ${qColumn} as id from ${qSchema}.${qTable} limit 1`
+  );
+
+  const id = existing.rows[0]?.id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+};
+
+const resolveInsertUserId = async (sourceTableName, requestedUserId) => {
+  try {
+    await ensureUserExistsForTable(sourceTableName, requestedUserId);
+    return requestedUserId;
+  } catch (error) {
+    const fallbackId = await resolveExistingFkUserId(sourceTableName);
+    if (fallbackId) return fallbackId;
     throw error;
   }
 };
@@ -511,6 +607,7 @@ app.post("/api/orders", async (req, res) => {
     }
 
     await ensureOrdersTable();
+    const insertUserId = await resolveInsertUserId("orders", userId);
 
     const result = await pool.query(
       `
@@ -523,7 +620,7 @@ app.post("/api/orders", async (req, res) => {
       returning *
       `,
       [
-        userId,
+        insertUserId,
         chain,
         tokenAddress,
         tokenName || null,
@@ -557,6 +654,7 @@ app.post("/api/favorites", async (req, res) => {
     }
 
     await ensureFavoritesTable();
+    const insertUserId = await resolveInsertUserId("favorites", userId);
     const result = await pool.query(
       `
       insert into favorites (user_id, token_address)
@@ -564,7 +662,7 @@ app.post("/api/favorites", async (req, res) => {
       on conflict (user_id, token_address) do update set token_address = excluded.token_address
       returning *
       `,
-      [userId, tokenAddress]
+      [insertUserId, tokenAddress]
     );
 
     return res.json({ success: true, favorite: result.rows[0] });
