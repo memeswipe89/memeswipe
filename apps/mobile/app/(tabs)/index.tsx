@@ -1,10 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEmbeddedSolanaWallet } from '@privy-io/expo';
+import { Buffer } from 'buffer';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -19,6 +22,8 @@ import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, deductBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
+const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
@@ -28,6 +33,8 @@ const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const PAGE_LIMIT = 50;
 const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
+const MIN_TRADE_AMOUNT_USD = 0.0001;
+const MAX_TRADE_AMOUNT_USD = 500;
 type FavoriteToken = {
   address: string;
   name: string;
@@ -121,6 +128,19 @@ const makeSegmentMap = <T,>(factory: () => T): Record<RemoteSegment, T> => ({
 });
 
 const isRemoteSegment = (segment: FeedSegment): segment is RemoteSegment => segment !== 'favorites';
+const parseApiJson = async <T,>(response: Response): Promise<T> => {
+  const raw = await response.text();
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    const trimmed = raw.trim();
+    const preview = trimmed.slice(0, 120);
+    if (trimmed.startsWith('<')) {
+      throw new Error(`Server returned HTML (${response.status}). Check API_BASE/deploy backend routes.`);
+    }
+    throw new Error(`Invalid server response (${response.status}): ${preview || 'empty body'}`);
+  }
+};
 
 const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
   if (segment === 'stalker') return `/api/feed/${chain}/stalker`;
@@ -130,7 +150,8 @@ const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
 };
 
 export default function HomeScreen() {
-  const { twitterProfile, setTwitterProfile } = useWalletContext();
+  const { twitterProfile, setTwitterProfile, getOrCreateEmbeddedWalletAddress } = useWalletContext();
+  const embeddedSolanaWallet = useEmbeddedSolanaWallet();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
   const connectInProgressRef = useRef(false);
   const [userId, setUserId] = useState<string>('');
@@ -383,7 +404,7 @@ export default function HomeScreen() {
   }, [setTpROI, setTradeAmount]);
 
   useEffect(() => {
-    void AsyncStorage.setItem(LAST_AMOUNT_KEY, String(Math.max(1, tradeAmount)));
+    void AsyncStorage.setItem(LAST_AMOUNT_KEY, String(Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount)));
   }, [tradeAmount]);
 
   useEffect(() => {
@@ -662,13 +683,104 @@ export default function HomeScreen() {
     }
   }, [activeChain, getOrCreateLocalUserId, persistFavorites, twitterProfile?.id, twitterProfile?.username, userId]);
 
-  const createOrder = useCallback(
+  const executeJupiterSwap = useCallback(
     async (token: SwipeToken) => {
+      if (!token.address) {
+        throw new Error('Token address missing in API response');
+      }
+      if (activeChain !== 'solana') {
+        throw new Error('On-chain swaps are currently enabled only for Solana feed.');
+      }
+
+      const walletAddress = await getOrCreateEmbeddedWalletAddress();
+      if (!walletAddress) {
+        throw new Error('No wallet address found. Create wallet first from Wallet tab.');
+      }
+
+      let provider: any = null;
+      if ('wallets' in embeddedSolanaWallet && Array.isArray(embeddedSolanaWallet.wallets) && embeddedSolanaWallet.wallets.length > 0) {
+        provider = await embeddedSolanaWallet.wallets[0].getProvider();
+      } else if ('create' in embeddedSolanaWallet && typeof embeddedSolanaWallet.create === 'function') {
+        provider = await embeddedSolanaWallet.create();
+      }
+
+      if (!provider || typeof provider.request !== 'function') {
+        throw new Error('Embedded Solana wallet provider is not ready.');
+      }
+
+      const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userPublicKey: walletAddress,
+          inputMint: SOL_MINT,
+          outputMint: token.address,
+          amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
+          slippageBps: 100,
+        }),
+      });
+      const swapJson = await parseApiJson<{
+        error?: string;
+        swapTransaction?: string;
+        quote?: { inAmount?: string; outAmount?: string; inputMint?: string; outputMint?: string };
+      }>(swapRes);
+      if (!swapRes.ok || !swapJson?.swapTransaction) {
+        throw new Error(swapJson?.error || 'Failed to build Jupiter swap');
+      }
+
+      const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
+      const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
+      const signed = (await provider.request({
+        method: 'signAndSendTransaction',
+        params: {
+          transaction: tx,
+          connection,
+          options: { skipPreflight: false, maxRetries: 3 },
+        },
+      })) as { signature?: string };
+
+      const signature = typeof signed?.signature === 'string' ? signed.signature : '';
+      if (!signature) {
+        throw new Error('Signed transaction was sent but no signature returned.');
+      }
+      await connection.confirmTransaction(signature, 'confirmed');
+      console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
+        signature,
+        inputMint: swapJson.quote?.inputMint || SOL_MINT,
+        outputMint: swapJson.quote?.outputMint || token.address,
+        inAmount: swapJson.quote?.inAmount,
+        outAmount: swapJson.quote?.outAmount,
+      });
+
+      return {
+        signature,
+        inputMint: swapJson.quote?.inputMint || SOL_MINT,
+        outputMint: swapJson.quote?.outputMint || token.address,
+        inAmountRaw: String(swapJson.quote?.inAmount || ''),
+        outAmountRaw: String(swapJson.quote?.outAmount || ''),
+      };
+    },
+    [activeChain, embeddedSolanaWallet, getOrCreateEmbeddedWalletAddress, tradeAmount]
+  );
+
+  const createOrder = useCallback(
+    async (
+      token: SwipeToken,
+      swapMeta?: {
+        signature: string;
+        inputMint: string;
+        outputMint: string;
+        inAmountRaw: string;
+        outAmountRaw: string;
+      }
+    ) => {
       if (!token.address) {
         Alert.alert('Error', 'Token address missing in API response');
         return false;
       }
-      const amount = Number.isFinite(tradeAmount) ? Math.max(1, tradeAmount) : 1;
+      const amount = Number.isFinite(tradeAmount)
+        ? Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount)
+        : MIN_TRADE_AMOUNT_USD;
       const targetRoi = Number.isFinite(tpROI) ? Math.max(1, tpROI) : 1;
 
       try {
@@ -680,33 +792,42 @@ export default function HomeScreen() {
           return false;
         }
 
+        const tradePayload = {
+          userId: resolvedUserId,
+          twitterUserId: twitterProfile?.id || null,
+          twitterUsername: twitterProfile?.username || null,
+          chain: activeChain || 'solana',
+          tokenAddress: token.address,
+          tokenName: token.name,
+          tokenSymbol: token.symbol,
+          amountUsd: amount,
+          tpRoi: targetRoi,
+          amountUSDT: amount,
+          roiTarget: targetRoi,
+          stopLoss,
+          priceUsd: token.priceUsd,
+          liquidityUsd: token.liquidityUsd,
+          volume24hUsd: token.volume24hUsd,
+          marketCapUsd: token.marketCapUsd,
+          change24hPct: token.change24hPct,
+          graduationTime: token.graduationTime || null,
+          chartData: Array.isArray(token.chartData) ? token.chartData : [],
+          txSignature: swapMeta?.signature || null,
+          inputMint: swapMeta?.inputMint || null,
+          outputMint: swapMeta?.outputMint || null,
+          inAmountRaw: swapMeta?.inAmountRaw || null,
+          outAmountRaw: swapMeta?.outAmountRaw || null,
+        };
+        console.log('[TRADE][SWIPE_RIGHT] sending order payload', tradePayload);
+
         const res = await fetch(`${API_BASE}/api/orders`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: resolvedUserId,
-            twitterUserId: twitterProfile?.id || null,
-            twitterUsername: twitterProfile?.username || null,
-            chain: activeChain || 'solana',
-            tokenAddress: token.address,
-            tokenName: token.name,
-            tokenSymbol: token.symbol,
-            amountUsd: amount,
-            tpRoi: targetRoi,
-            amountUSDT: amount,
-            roiTarget: targetRoi,
-            stopLoss,
-            priceUsd: token.priceUsd,
-            liquidityUsd: token.liquidityUsd,
-            volume24hUsd: token.volume24hUsd,
-            marketCapUsd: token.marketCapUsd,
-            change24hPct: token.change24hPct,
-            graduationTime: token.graduationTime || null,
-            chartData: Array.isArray(token.chartData) ? token.chartData : [],
-          }),
+          body: JSON.stringify(tradePayload),
         });
 
-        const json = await res.json();
+        const json = await parseApiJson<{ error?: string }>(res);
+        console.log('[TRADE][SWIPE_RIGHT] order API response', { status: res.status, body: json });
 
         if (!res.ok) {
           console.log('Order error:', json);
@@ -731,17 +852,38 @@ export default function HomeScreen() {
 
   const handleBuy = useCallback(
     (token: SwipeToken) => {
+      console.log('[TRADE][SWIPE_RIGHT] token selected', {
+        symbol: token.symbol,
+        address: token.address,
+        priceUsd: token.priceUsd,
+      });
       if (balance < tradeAmount) {
         Alert.alert('Insufficient balance', 'Not enough funds in your dev wallet.');
         return;
       }
-      hideToken(token.address);
       void (async () => {
-        const ok = await createOrder(token);
+        let swapMeta:
+          | {
+              signature: string;
+              inputMint: string;
+              outputMint: string;
+              inAmountRaw: string;
+              outAmountRaw: string;
+            }
+          | undefined;
+        try {
+          swapMeta = await executeJupiterSwap(token);
+        } catch (error: any) {
+          Alert.alert('Swap Failed', error?.message || 'Unable to execute on-chain swap.');
+          return;
+        }
+
+        const ok = await createOrder(token, swapMeta);
         if (!ok) {
           Alert.alert('Order Failed', `Unable to execute ${token.symbol.toUpperCase()} order.`);
           return;
         }
+        hideToken(token.address);
         const newBalance = await deductBalance(tradeAmount);
         setBalanceState(newBalance);
 
@@ -753,7 +895,7 @@ export default function HomeScreen() {
         });
       })();
     },
-    [balance, createOrder, hideToken, persistFavorites, tradeAmount]
+    [balance, createOrder, executeJupiterSwap, hideToken, persistFavorites, tradeAmount]
   );
 
   const openDevWalletControls = useCallback(() => {
@@ -779,7 +921,8 @@ export default function HomeScreen() {
   const updateTradeAmount = useCallback(
     (delta: number) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      setTradeAmount(Math.max(1, Math.min(500, tradeAmount + delta)));
+      const next = Math.max(MIN_TRADE_AMOUNT_USD, Math.min(MAX_TRADE_AMOUNT_USD, tradeAmount + delta));
+      setTradeAmount(Number(next.toFixed(4)));
     },
     [setTradeAmount, tradeAmount]
   );
@@ -872,9 +1015,13 @@ export default function HomeScreen() {
                   label="Amount"
                   value={tradeAmount}
                   suffix="$"
-                  onMinus={() => updateTradeAmount(-5)}
-                  onPlus={() => updateTradeAmount(5)}
-                  onCommit={(v) => setTradeAmount(Math.max(1, Math.min(500, v)))}
+                  onMinus={() => updateTradeAmount(-0.1)}
+                  onPlus={() => updateTradeAmount(0.1)}
+                  onCommit={(v) =>
+                    setTradeAmount(
+                      Number(Math.max(MIN_TRADE_AMOUNT_USD, Math.min(MAX_TRADE_AMOUNT_USD, v)).toFixed(4))
+                    )
+                  }
                 />
                 <GlassControlPill
                   label="ROI"
@@ -1053,15 +1200,22 @@ const GlassControlPill = ({
   onCommit: (value: number) => void;
 }) => {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(String(Math.round(value)));
+  const isDollar = suffix === '$';
+  const formatAmount = useCallback((n: number) => {
+    if (!Number.isFinite(n)) return '0';
+    if (!isDollar) return String(Math.round(n));
+    return n.toFixed(4).replace(/\.?0+$/, '');
+  }, [isDollar]);
+  const [draft, setDraft] = useState(formatAmount(value));
 
   useEffect(() => {
-    if (!editing) setDraft(String(Math.round(value)));
-  }, [editing, value]);
+    if (!editing) setDraft(formatAmount(value));
+  }, [editing, formatAmount, value]);
 
   const commit = () => {
-    const next = Number(draft);
-    onCommit(Number.isFinite(next) ? next : 1);
+    const normalizedDraft = isDollar ? draft.replace(/[^0-9.]/g, '') : draft;
+    const next = Number(normalizedDraft);
+    onCommit(Number.isFinite(next) ? next : isDollar ? MIN_TRADE_AMOUNT_USD : 1);
     setEditing(false);
   };
 
@@ -1076,7 +1230,7 @@ const GlassControlPill = ({
           {editing ? (
             <TextInput
               autoFocus
-              keyboardType="numeric"
+              keyboardType={isDollar ? 'decimal-pad' : 'numeric'}
               value={draft}
               onChangeText={setDraft}
               onBlur={commit}
@@ -1085,7 +1239,7 @@ const GlassControlPill = ({
             />
           ) : (
             <Text style={styles.controlValue}>
-              {suffix === '$' ? `${suffix}${Math.round(value)}` : `${Math.round(value)}${suffix}`}
+              {isDollar ? `${suffix}${formatAmount(value)}` : `${Math.round(value)}${suffix}`}
             </Text>
           )}
         </Pressable>

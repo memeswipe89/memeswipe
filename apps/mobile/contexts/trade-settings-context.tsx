@@ -19,6 +19,8 @@ type TradeSettingsState = {
 };
 
 const STORAGE_KEY = '@memeswipe:trade-settings:v1';
+const MIN_TRADE_AMOUNT_USD = 0.0001;
+const MAX_TRADE_AMOUNT_USD = 500;
 
 const DEFAULT_SETTINGS = {
   profileName: 'Trader',
@@ -90,7 +92,11 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
   }, [activeChain, hydrated, profileName, stopLoss, tpROI, tradeAmount]);
 
   const setTradeAmountSafe = useCallback((value: number) => {
-    setTradeAmount(Number.isFinite(value) ? Math.max(1, value) : DEFAULT_SETTINGS.tradeAmount);
+    setTradeAmount(
+      Number.isFinite(value)
+        ? Math.max(MIN_TRADE_AMOUNT_USD, Math.min(MAX_TRADE_AMOUNT_USD, value))
+        : DEFAULT_SETTINGS.tradeAmount
+    );
   }, []);
 
   const setTpROISafe = useCallback((value: number) => {

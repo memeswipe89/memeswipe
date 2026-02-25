@@ -82,9 +82,9 @@ export const TradeSettings = memo(function TradeSettings({ onInputFocusChange }:
         label="Trade Amount"
         suffix="$"
         value={tradeAmount}
-        min={5}
+        min={0.0001}
         max={500}
-        step={5}
+        step={0.0001}
         onChange={setTradeAmount}
         onFocusChange={onInputFocusChange}
       />

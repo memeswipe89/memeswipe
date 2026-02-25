@@ -138,7 +138,16 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const ensurePrivyUser = async () => {
     if (user) return;
-    await createGuestAccount();
+    try {
+      await createGuestAccount();
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      // Privy can throw this if session exists but local hook state is briefly stale.
+      if (message.includes('already logged in') && message.includes('guest account')) {
+        return;
+      }
+      throw error;
+    }
   };
 
   const getOrCreateEmbeddedWalletAddress = async (): Promise<string> => {

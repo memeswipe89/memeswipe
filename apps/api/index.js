@@ -25,6 +25,7 @@ const FEED_CACHE_TTL_MS = 60 * 1000;
 const QUOTA_BLOCK_MS = 60 * 60 * 1000;
 const feedCache = new Map();
 let moralisBlockedUntil = 0;
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -118,6 +119,13 @@ const ensureOrdersTable = async () => {
       await pool.query(`alter table orders add column if not exists chart_data jsonb`);
       await pool.query(`alter table orders add column if not exists status text default 'open'`);
       await pool.query(`alter table orders add column if not exists created_at timestamptz not null default now()`);
+      await pool.query(`alter table orders add column if not exists closed_at timestamptz`);
+      await pool.query(`alter table orders add column if not exists tx_signature text`);
+      await pool.query(`alter table orders add column if not exists close_tx_signature text`);
+      await pool.query(`alter table orders add column if not exists input_mint text`);
+      await pool.query(`alter table orders add column if not exists output_mint text`);
+      await pool.query(`alter table orders add column if not exists in_amount_raw text`);
+      await pool.query(`alter table orders add column if not exists out_amount_raw text`);
     })();
   }
 
@@ -550,6 +558,225 @@ app.get("/api/health/db", async (req, res) => {
     }
   });  
 
+app.get("/api/solana/price-usd", async (_req, res) => {
+  try {
+    const r = await fetch("https://price.jup.ag/v4/price?ids=SOL");
+    if (!r.ok) {
+      const text = await r.text();
+      return res.status(r.status).json({ error: "Failed to fetch SOL price", details: text || null });
+    }
+    const json = await r.json();
+    const price = Number(json?.data?.SOL?.price);
+    if (!Number.isFinite(price) || price <= 0) {
+      return res.status(500).json({ error: "Invalid SOL price response" });
+    }
+    return res.json({ symbol: "SOL", priceUsd: price });
+  } catch (err) {
+    console.error("SOL price error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/jupiter/swap", async (req, res) => {
+  try {
+    const inputMint = typeof req.body?.inputMint === "string" ? req.body.inputMint.trim() : "";
+    const outputMint = typeof req.body?.outputMint === "string" ? req.body.outputMint.trim() : "";
+    const userPublicKey = typeof req.body?.userPublicKey === "string" ? req.body.userPublicKey.trim() : "";
+    const slippageBpsRaw = Number(req.body?.slippageBps ?? 100);
+    const slippageBps = Number.isFinite(slippageBpsRaw) ? Math.max(10, Math.min(5000, slippageBpsRaw)) : 100;
+    const amountRawFromClient = typeof req.body?.amountRaw === "string" ? req.body.amountRaw.trim() : "";
+    const amountUsd = Number(req.body?.amountUsd);
+
+    if (!inputMint || !outputMint || !userPublicKey) {
+      return res.status(400).json({ error: "inputMint, outputMint and userPublicKey are required" });
+    }
+
+    let amountRaw = amountRawFromClient;
+    if (!amountRaw) {
+      if (inputMint !== SOL_MINT) {
+        return res.status(400).json({ error: "amountRaw is required for non-SOL input mint" });
+      }
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+        return res.status(400).json({ error: "amountUsd must be a positive number when amountRaw is not provided" });
+      }
+
+      const priceRes = await fetch("https://price.jup.ag/v4/price?ids=SOL");
+      if (!priceRes.ok) {
+        const text = await priceRes.text();
+        return res.status(priceRes.status).json({ error: "Failed to fetch SOL price", details: text || null });
+      }
+      const priceJson = await priceRes.json();
+      const solPriceUsd = Number(priceJson?.data?.SOL?.price);
+      if (!Number.isFinite(solPriceUsd) || solPriceUsd <= 0) {
+        return res.status(500).json({ error: "Invalid SOL price response" });
+      }
+
+      const lamports = Math.floor((amountUsd / solPriceUsd) * 1_000_000_000);
+      const safeLamports = Math.max(5_000, lamports);
+      amountRaw = String(safeLamports);
+    }
+
+    if (!/^\d+$/.test(amountRaw) || Number(amountRaw) <= 0) {
+      return res.status(400).json({ error: "amountRaw must be a positive integer string" });
+    }
+
+    const quoteQs = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: amountRaw,
+      slippageBps: String(slippageBps),
+      swapMode: "ExactIn",
+      restrictIntermediateTokens: "true",
+    });
+    const quoteRes = await fetch(`https://quote-api.jup.ag/v6/quote?${quoteQs.toString()}`);
+    if (!quoteRes.ok) {
+      const text = await quoteRes.text();
+      return res.status(quoteRes.status).json({ error: "Jupiter quote failed", details: text || null });
+    }
+    const quoteJson = await quoteRes.json();
+    if (!quoteJson?.outAmount) {
+      return res.status(400).json({ error: "No route found for this swap" });
+    }
+
+    const swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        quoteResponse: quoteJson,
+        userPublicKey,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: "auto",
+      }),
+    });
+
+    if (!swapRes.ok) {
+      const text = await swapRes.text();
+      return res.status(swapRes.status).json({ error: "Jupiter swap transaction build failed", details: text || null });
+    }
+
+    const swapJson = await swapRes.json();
+    if (!swapJson?.swapTransaction) {
+      return res.status(500).json({ error: "Jupiter returned no swap transaction" });
+    }
+
+    return res.json({
+      swapTransaction: swapJson.swapTransaction,
+      quote: {
+        inAmount: String(quoteJson.inAmount || amountRaw),
+        outAmount: String(quoteJson.outAmount || "0"),
+        inputMint,
+        outputMint,
+        slippageBps,
+      },
+      lastValidBlockHeight: swapJson.lastValidBlockHeight || null,
+    });
+  } catch (err) {
+    console.error("Jupiter swap error:", err);
+    return res.status(500).json({ error: err.message || "Failed to build Jupiter swap transaction" });
+  }
+});
+
+app.get("/api/orders", async (req, res) => {
+  try {
+    await ensureOrdersTable();
+    const userId = typeof req.query.userId === "string" ? req.query.userId.trim() : "";
+    const status = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
+    const statusFilter = status === "open" || status === "closed" ? status : "";
+    const limitRaw = Number(req.query.limit || 50);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+
+    if (userId) {
+      const result = statusFilter
+        ? await pool.query(
+            `
+            select *
+            from orders
+            where user_id = $1 and status = $2
+            order by created_at desc
+            limit $3
+            `,
+            [userId, statusFilter, limit]
+          )
+        : await pool.query(
+            `
+            select *
+            from orders
+            where user_id = $1
+            order by created_at desc
+            limit $2
+            `,
+            [userId, limit]
+          );
+      return res.json({ orders: result.rows });
+    }
+
+    const result = statusFilter
+      ? await pool.query(
+          `
+          select *
+          from orders
+          where status = $1
+          order by created_at desc
+          limit $2
+          `,
+          [statusFilter, limit]
+        )
+      : await pool.query(
+          `
+          select *
+          from orders
+          order by created_at desc
+          limit $1
+          `,
+          [limit]
+        );
+    return res.json({ orders: result.rows });
+  } catch (err) {
+    console.error("Orders fetch error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/orders/:orderId/close", async (req, res) => {
+  try {
+    await ensureOrdersTable();
+    const orderId = Number(req.params.orderId);
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    if (!Number.isFinite(orderId) || orderId <= 0 || !userId) {
+      return res.status(400).json({ error: "orderId and userId are required" });
+    }
+
+    const closeTxSignature =
+      typeof req.body?.closeTxSignature === "string" && req.body.closeTxSignature.trim()
+        ? req.body.closeTxSignature.trim()
+        : null;
+
+    const result = await pool.query(
+      `
+      update orders
+      set status = 'closed',
+          closed_at = now(),
+          close_tx_signature = coalesce($3, close_tx_signature)
+      where id = $1
+        and user_id = $2
+        and status <> 'closed'
+      returning *
+      `,
+      [orderId, userId, closeTxSignature]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "Open order not found" });
+    }
+
+    return res.json({ success: true, order: result.rows[0] });
+  } catch (err) {
+    console.error("Close order error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/orders", async (req, res) => {
   try {
     const userId = typeof req.body.userId === "string" ? req.body.userId.trim() : "";
@@ -569,6 +796,18 @@ app.post("/api/orders", async (req, res) => {
     const change24hPct = req.body.change24hPct;
     const graduationTime = req.body.graduationTime;
     const chartData = req.body.chartData;
+    const txSignature =
+      typeof req.body.txSignature === "string" && req.body.txSignature.trim()
+        ? req.body.txSignature.trim()
+        : null;
+    const inputMint =
+      typeof req.body.inputMint === "string" && req.body.inputMint.trim() ? req.body.inputMint.trim() : null;
+    const outputMint =
+      typeof req.body.outputMint === "string" && req.body.outputMint.trim() ? req.body.outputMint.trim() : null;
+    const inAmountRaw =
+      typeof req.body.inAmountRaw === "string" && req.body.inAmountRaw.trim() ? req.body.inAmountRaw.trim() : null;
+    const outAmountRaw =
+      typeof req.body.outAmountRaw === "string" && req.body.outAmountRaw.trim() ? req.body.outAmountRaw.trim() : null;
 
     const normalizedAmount = Number(amountUsd ?? amountUSDT);
     const normalizedTp = Number(tpRoi ?? roiTarget);
@@ -606,6 +845,15 @@ app.post("/api/orders", async (req, res) => {
       });
     }
 
+    console.log("[API][ORDERS] incoming", {
+      userId,
+      chain,
+      tokenAddress,
+      tokenSymbol,
+      amount: normalizedAmount,
+      tp: normalizedTp,
+    });
+
     await ensureOrdersTable();
     const insertUserId = await resolveInsertUserId("orders", userId);
 
@@ -614,9 +862,10 @@ app.post("/api/orders", async (req, res) => {
       insert into orders (
         user_id, chain, token_address, token_name, token_symbol,
         amount_usd, tp_roi, stop_loss, price_usd, liquidity_usd,
-        volume_24h_usd, market_cap_usd, change_24h_pct, graduation_time, chart_data
+        volume_24h_usd, market_cap_usd, change_24h_pct, graduation_time, chart_data,
+        tx_signature, input_mint, output_mint, in_amount_raw, out_amount_raw
       )
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
       returning *
       `,
       [
@@ -635,11 +884,23 @@ app.post("/api/orders", async (req, res) => {
         Number.isFinite(normalizedChange24h) ? normalizedChange24h : null,
         graduationTime || null,
         normalizedChartData ? JSON.stringify(normalizedChartData) : null,
+        txSignature,
+        inputMint,
+        outputMint,
+        inAmountRaw,
+        outAmountRaw,
       ]
     );
 
     const createdOrder = result.rows[0];
-    res.json({ success: true, order: createdOrder });
+    console.log("[API][ORDERS] inserted", {
+      id: createdOrder?.id,
+      requestedUserId: userId,
+      insertedUserId: insertUserId,
+      tokenAddress: createdOrder?.token_address,
+      tokenSymbol: createdOrder?.token_symbol,
+    });
+    res.json({ success: true, order: createdOrder, requestedUserId: userId, insertedUserId: insertUserId });
   } catch (err) {
     console.error("Order error:", err);
     res.status(500).json({ error: err.message });
