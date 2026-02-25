@@ -18,12 +18,13 @@ import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, deductBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
 
-const API_BASE = 'https://memeswipe.onrender.com';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
 const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
 const LAST_ROI_KEY = '@memeswipe:lastROI';
+const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const PAGE_LIMIT = 50;
 const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
@@ -340,6 +341,25 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const applyOneTimeBonus = async () => {
+      try {
+        const applied = await AsyncStorage.getItem(BONUS_2000_APPLIED_KEY);
+        if (applied === 'true') return;
+        const updated = await addBalance(2000);
+        await AsyncStorage.setItem(BONUS_2000_APPLIED_KEY, 'true');
+        if (active) setBalanceState(updated);
+      } catch (err) {
+        console.log('failed to apply bonus balance', err);
+      }
+    };
+    void applyOneTimeBonus();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
     const hydrateLastInputs = async () => {
       try {
@@ -648,6 +668,8 @@ export default function HomeScreen() {
         Alert.alert('Error', 'Token address missing in API response');
         return false;
       }
+      const amount = Number.isFinite(tradeAmount) ? Math.max(1, tradeAmount) : 1;
+      const targetRoi = Number.isFinite(tpROI) ? Math.max(1, tpROI) : 1;
 
       try {
         setCreatingOrder(true);
@@ -667,9 +689,20 @@ export default function HomeScreen() {
             twitterUsername: twitterProfile?.username || null,
             chain: activeChain || 'solana',
             tokenAddress: token.address,
-            amountUSDT: tradeAmount,
-            roiTarget: tpROI,
+            tokenName: token.name,
+            tokenSymbol: token.symbol,
+            amountUsd: amount,
+            tpRoi: targetRoi,
+            amountUSDT: amount,
+            roiTarget: targetRoi,
             stopLoss,
+            priceUsd: token.priceUsd,
+            liquidityUsd: token.liquidityUsd,
+            volume24hUsd: token.volume24hUsd,
+            marketCapUsd: token.marketCapUsd,
+            change24hPct: token.change24hPct,
+            graduationTime: token.graduationTime || null,
+            chartData: Array.isArray(token.chartData) ? token.chartData : [],
           }),
         });
 
@@ -857,7 +890,7 @@ export default function HomeScreen() {
               <FeedSegmentedControl
                 value={segment}
                 onChange={setSegment}
-                segments={['trending', 'stalker', 'bigcap']}
+                segments={['trending', 'stalker', 'bigcap', 'smart', 'favorites']}
               />
             </View>
           </View>

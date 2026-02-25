@@ -18,6 +18,8 @@ app.use(cors());
 
 const oauthStateStore = new Map();
 let ensureTwitterTablePromise = null;
+let ensureFavoritesTablePromise = null;
+let ensureOrdersTablePromise = null;
 const FEED_CACHE_TTL_MS = 60 * 1000;
 const QUOTA_BLOCK_MS = 60 * 60 * 1000;
 const feedCache = new Map();
@@ -56,6 +58,76 @@ const ensureTwitterConnectionsTable = async () => {
   }
 };
 
+const ensureFavoritesTable = async () => {
+  if (!ensureFavoritesTablePromise) {
+    ensureFavoritesTablePromise = pool.query(`
+      create table if not exists favorites (
+        id bigserial primary key,
+        user_id uuid not null,
+        token_address text not null,
+        created_at timestamptz not null default now(),
+        unique (user_id, token_address)
+      )
+    `);
+  }
+
+  try {
+    await ensureFavoritesTablePromise;
+  } catch (error) {
+    ensureFavoritesTablePromise = null;
+    throw error;
+  }
+};
+
+const ensureOrdersTable = async () => {
+  if (!ensureOrdersTablePromise) {
+    ensureOrdersTablePromise = (async () => {
+      await pool.query(`
+        create table if not exists orders (
+          id bigserial primary key,
+          user_id uuid not null,
+          chain text not null,
+          token_address text not null,
+          token_name text,
+          token_symbol text,
+          amount_usd numeric not null,
+          tp_roi numeric not null,
+          stop_loss numeric,
+          price_usd numeric,
+          liquidity_usd numeric,
+          volume_24h_usd numeric,
+          market_cap_usd numeric,
+          change_24h_pct numeric,
+          graduation_time text,
+          chart_data jsonb,
+          status text not null default 'open',
+          created_at timestamptz not null default now()
+        )
+      `);
+
+      await pool.query(`alter table orders add column if not exists token_name text`);
+      await pool.query(`alter table orders add column if not exists token_symbol text`);
+      await pool.query(`alter table orders add column if not exists stop_loss numeric`);
+      await pool.query(`alter table orders add column if not exists price_usd numeric`);
+      await pool.query(`alter table orders add column if not exists liquidity_usd numeric`);
+      await pool.query(`alter table orders add column if not exists volume_24h_usd numeric`);
+      await pool.query(`alter table orders add column if not exists market_cap_usd numeric`);
+      await pool.query(`alter table orders add column if not exists change_24h_pct numeric`);
+      await pool.query(`alter table orders add column if not exists graduation_time text`);
+      await pool.query(`alter table orders add column if not exists chart_data jsonb`);
+      await pool.query(`alter table orders add column if not exists status text default 'open'`);
+      await pool.query(`alter table orders add column if not exists created_at timestamptz not null default now()`);
+    })();
+  }
+
+  try {
+    await ensureOrdersTablePromise;
+  } catch (error) {
+    ensureOrdersTablePromise = null;
+    throw error;
+  }
+};
+
 const buildCallbackUrl = (req) => {
   if (process.env.TWITTER_CALLBACK_URL) {
     return process.env.TWITTER_CALLBACK_URL;
@@ -87,7 +159,12 @@ const fetchGraduatedFeed = async (req, res) => {
 
     const now = Date.now();
     if (now < moralisBlockedUntil) {
-      return res.status(429).json({ error: "Moralis feed temporarily rate limited" });
+      return res.status(429).json({
+        error: "Moralis feed temporarily blocked due to quota/rate limits",
+        blockedUntil: moralisBlockedUntil,
+        tokens: [],
+        cursor: null,
+      });
     }
 
     const limit = req.query.limit || 50;
@@ -116,8 +193,10 @@ const fetchGraduatedFeed = async (req, res) => {
         moralisBlockedUntil = Date.now() + QUOTA_BLOCK_MS;
       }
       return res.status(r.status).json({
-        error: "Failed to fetch feed from Moralis",
+        error: "Moralis request failed",
         details: text || null,
+        tokens: [],
+        cursor: null,
       });
     }
 
@@ -133,13 +212,21 @@ const fetchGraduatedFeed = async (req, res) => {
       graduatedAt: t.graduatedAt ?? null,
     }));
 
+    if (!tokens.length) {
+      return res.json({
+        tokens: [],
+        cursor: null,
+      });
+    }
     const payload = { tokens, cursor: data.cursor || null };
     feedCache.set(cacheKey, { payload, lastFetch: now });
     return res.json(payload);
   } catch (e) {
     console.error(e);
     return res.status(500).json({
-      error: "Failed to fetch graduated tokens",
+      error: "Failed to fetch Moralis feed",
+      cursor: null,
+      tokens: [],
     });
   }
 };
@@ -367,46 +454,125 @@ app.get("/api/health/db", async (req, res) => {
     }
   });  
 
-  app.post("/api/orders", async (req, res) => {
-    try {
-      const userId = typeof req.body.userId === "string" ? req.body.userId.trim() : "";
-      const chain = typeof req.body.chain === "string" ? req.body.chain.trim() : "";
-      const tokenAddress = typeof req.body.tokenAddress === "string" ? req.body.tokenAddress.trim() : "";
-      const amountRaw = req.body.amountUsd ?? req.body.amountUSDT;
-      const tpRoiRaw = req.body.tpRoi ?? req.body.roiTarget;
-      const amountUsd = Number(amountRaw);
-      const tpRoi = Number(tpRoiRaw);
+app.post("/api/orders", async (req, res) => {
+  try {
+    const userId = typeof req.body.userId === "string" ? req.body.userId.trim() : "";
+    const chain = typeof req.body.chain === "string" ? req.body.chain.trim() : "";
+    const tokenAddress = typeof req.body.tokenAddress === "string" ? req.body.tokenAddress.trim() : "";
+    const tokenName = req.body.tokenName;
+    const tokenSymbol = req.body.tokenSymbol;
+    const amountUsd = req.body.amountUsd;
+    const tpRoi = req.body.tpRoi;
+    const amountUSDT = req.body.amountUSDT;
+    const roiTarget = req.body.roiTarget;
+    const stopLoss = req.body.stopLoss;
+    const priceUsd = req.body.priceUsd;
+    const liquidityUsd = req.body.liquidityUsd;
+    const volume24hUsd = req.body.volume24hUsd;
+    const marketCapUsd = req.body.marketCapUsd;
+    const change24hPct = req.body.change24hPct;
+    const graduationTime = req.body.graduationTime;
+    const chartData = req.body.chartData;
 
-      const missingFields = [];
-      if (!userId) missingFields.push("userId");
-      if (!chain) missingFields.push("chain");
-      if (!tokenAddress) missingFields.push("tokenAddress");
-      if (!Number.isFinite(amountUsd) || amountUsd <= 0) missingFields.push("amountUsd");
-      if (!Number.isFinite(tpRoi) || tpRoi <= 0) missingFields.push("tpRoi");
-  
-      if (missingFields.length > 0) {
-        return res.status(400).json({
-          error: "Missing required fields",
-          missingFields,
-        });
-      }
-  
-      const result = await pool.query(
-        `
-        insert into orders (user_id, chain, token_address, amount_usd, tp_roi)
-        values ($1, $2, $3, $4, $5)
-        returning *
-        `,
-        [userId, chain, tokenAddress, amountUsd, tpRoi]
-      );
-  
-      res.json({ success: true, order: result.rows[0] });
-  
-    } catch (err) {
-      console.error("Order error:", err);
-      res.status(500).json({ error: err.message });
+    const normalizedAmount = Number(amountUsd ?? amountUSDT);
+    const normalizedTp = Number(tpRoi ?? roiTarget);
+    const normalizedStopLoss = stopLoss == null ? null : Number(stopLoss);
+    const normalizedPrice = priceUsd == null ? null : Number(priceUsd);
+    const normalizedLiquidity = liquidityUsd == null ? null : Number(liquidityUsd);
+    const normalizedVolume = volume24hUsd == null ? null : Number(volume24hUsd);
+    const normalizedMarketCap = marketCapUsd == null ? null : Number(marketCapUsd);
+    const normalizedChange24h = change24hPct == null ? null : Number(change24hPct);
+    const normalizedChartData = Array.isArray(chartData)
+      ? chartData
+          .map((v) => Number(v))
+          .filter((v) => Number.isFinite(v))
+          .slice(-40)
+      : null;
+
+    if (
+      !userId ||
+      !chain ||
+      !tokenAddress ||
+      !Number.isFinite(normalizedAmount) ||
+      normalizedAmount <= 0 ||
+      !Number.isFinite(normalizedTp) ||
+      normalizedTp <= 0
+    ) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        details: {
+          hasUserId: Boolean(userId),
+          hasChain: Boolean(chain),
+          hasTokenAddress: Boolean(tokenAddress),
+          amount: normalizedAmount,
+          tp: normalizedTp,
+        },
+      });
     }
-  });
+
+    await ensureOrdersTable();
+
+    const result = await pool.query(
+      `
+      insert into orders (
+        user_id, chain, token_address, token_name, token_symbol,
+        amount_usd, tp_roi, stop_loss, price_usd, liquidity_usd,
+        volume_24h_usd, market_cap_usd, change_24h_pct, graduation_time, chart_data
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      returning *
+      `,
+      [
+        userId,
+        chain,
+        tokenAddress,
+        tokenName || null,
+        tokenSymbol || null,
+        normalizedAmount,
+        normalizedTp,
+        Number.isFinite(normalizedStopLoss) ? normalizedStopLoss : null,
+        Number.isFinite(normalizedPrice) ? normalizedPrice : null,
+        Number.isFinite(normalizedLiquidity) ? normalizedLiquidity : null,
+        Number.isFinite(normalizedVolume) ? normalizedVolume : null,
+        Number.isFinite(normalizedMarketCap) ? normalizedMarketCap : null,
+        Number.isFinite(normalizedChange24h) ? normalizedChange24h : null,
+        graduationTime || null,
+        normalizedChartData ? JSON.stringify(normalizedChartData) : null,
+      ]
+    );
+
+    const createdOrder = result.rows[0];
+    res.json({ success: true, order: createdOrder });
+  } catch (err) {
+    console.error("Order error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/favorites", async (req, res) => {
+  try {
+    const { userId, tokenAddress } = req.body || {};
+    if (!userId || !tokenAddress) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    await ensureFavoritesTable();
+    const result = await pool.query(
+      `
+      insert into favorites (user_id, token_address)
+      values ($1, $2)
+      on conflict (user_id, token_address) do update set token_address = excluded.token_address
+      returning *
+      `,
+      [userId, tokenAddress]
+    );
+
+    return res.json({ success: true, favorite: result.rows[0] });
+  } catch (err) {
+    console.error("Favorites error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
   
 
 const PORT = process.env.PORT || 3000;
