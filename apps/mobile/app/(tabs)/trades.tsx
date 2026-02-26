@@ -126,7 +126,32 @@ export default function TradesScreen() {
       if (!res.ok) {
         throw new Error(json?.error || 'Failed to load trades');
       }
-      const mapped: TradeItem[] = (json.orders || []).map((order) => {
+      let sourceOrders = json.orders || [];
+      if (!sourceOrders.length) {
+        const fallbackRes = await fetch(`${API_BASE}/api/orders?limit=200`);
+        const fallbackJson = await parseApiJson<{
+          orders?: {
+            id?: string | number;
+            token_symbol?: string;
+            chain?: string;
+            token_address?: string;
+            status?: string;
+            amount_usd?: number | string;
+            tp_roi?: number | string;
+            created_at?: string;
+            in_amount_raw?: string | null;
+            out_amount_raw?: string | null;
+            tx_signature?: string | null;
+            close_tx_signature?: string | null;
+            price_usd?: number | string | null;
+          }[];
+        }>(fallbackRes);
+        if (fallbackRes.ok && Array.isArray(fallbackJson.orders)) {
+          sourceOrders = fallbackJson.orders;
+        }
+      }
+
+      const mapped: TradeItem[] = sourceOrders.map((order) => {
         const amount = toNumber(order.amount_usd, 0);
         const roi = toNumber(order.tp_roi, 0);
         const inAmountLamports = Number(order.in_amount_raw || 0);

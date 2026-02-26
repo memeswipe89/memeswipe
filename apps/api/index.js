@@ -939,6 +939,24 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
           break;
         }
 
+        // Fallback: if local app user id changed, allow close by order id for this private app flow.
+        const fallback = await pool.query(
+          `
+          update orders
+          set status = $2,
+              closed_at = now(),
+              close_tx_signature = coalesce($3, close_tx_signature)
+          where id = $1
+            and status not in ('closed', 'cancelled', 'filled')
+          returning *
+          `,
+          [orderId, nextStatus, closeTxSignature]
+        );
+        if (fallback.rows.length) {
+          updated = fallback.rows[0];
+          break;
+        }
+
         const existing = await pool.query(
           `
           select * from orders where id = $1 and user_id = $2 limit 1
