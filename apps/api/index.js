@@ -799,7 +799,8 @@ app.post("/api/jupiter/swap", async (req, res) => {
       amount: amountRaw,
       slippageBps: String(slippageBps),
       swapMode: "ExactIn",
-      restrictIntermediateTokens: "true",
+      // Allow broader routing for volatile/illiquid meme pairs.
+      restrictIntermediateTokens: "false",
     });
     if (!quoteJson?.outAmount) {
       return res.status(400).json({ error: "No route found for this swap" });
