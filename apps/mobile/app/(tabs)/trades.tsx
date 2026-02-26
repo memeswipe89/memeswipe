@@ -6,6 +6,7 @@ import { Buffer } from 'buffer';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import * as Linking from 'expo-linking';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useWalletContext } from '@/contexts/wallet-context';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
@@ -47,6 +48,13 @@ type Filter = 'all' | 'open' | 'closed' | 'profit' | 'loss';
 const toNumber = (value: unknown, fallback = 0) => {
   const num = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(num) ? num : fallback;
+};
+
+const normalizeTradeStatus = (status: unknown): TradeStatus => {
+  const s = String(status || '').trim().toLowerCase();
+  if (s === 'closed') return 'closed';
+  if (s === 'open' || s === 'queued' || s === 'pending' || s === 'processing') return 'open';
+  return 'open';
 };
 
 export default function TradesScreen() {
@@ -106,7 +114,7 @@ export default function TradesScreen() {
         return {
           id: String(order.id || Math.random()),
           symbol: order.token_symbol || 'TOKEN',
-          status: order.status === 'closed' ? 'closed' : 'open',
+          status: normalizeTradeStatus(order.status),
           pnl: (amount * roi) / 100,
           amountUsd: amount,
           createdAt: order.created_at || null,
@@ -129,6 +137,12 @@ export default function TradesScreen() {
   useEffect(() => {
     void loadTrades();
   }, [loadTrades]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadTrades();
+    }, [loadTrades])
+  );
 
   const closeTrade = useCallback(
     async (trade: TradeItem) => {
@@ -288,7 +302,7 @@ export default function TradesScreen() {
                 <Text style={styles.symbol}>{item.symbol}</Text>
                 <Text style={styles.status}>{item.status}</Text>
               </View>
-              <Text style={styles.meta}>Amount: ${item.amountUsd.toFixed(2)}</Text>
+              <Text style={styles.meta}>Amount: ${item.amountUsd.toFixed(6)}</Text>
               {item.createdAt ? <Text style={styles.meta}>Created: {new Date(item.createdAt).toLocaleString()}</Text> : null}
               <Text style={[styles.pnl, item.pnl >= 0 ? styles.green : styles.red]}>
                 {item.pnl >= 0 ? '+' : ''}
