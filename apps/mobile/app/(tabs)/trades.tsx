@@ -32,7 +32,7 @@ type TradeItem = {
   id: string;
   symbol: string;
   status: TradeStatus;
-  pnl: number;
+  fallbackPnlUsd: number;
   amountUsd: number;
   displayAmountUsd: number;
   createdAt: string | null;
@@ -127,7 +127,7 @@ export default function TradesScreen() {
           id: String(order.id || Math.random()),
           symbol: order.token_symbol || 'TOKEN',
           status: normalizeTradeStatus(order.status),
-          pnl: (amount * roi) / 100,
+          fallbackPnlUsd: (amount * roi) / 100,
           amountUsd: amount,
           displayAmountUsd,
           createdAt: order.created_at || null,
@@ -303,11 +303,17 @@ export default function TradesScreen() {
 
   const filtered = useMemo(() => {
     return trades.filter((trade) => {
+      const livePnlPct =
+        trade.entryPriceUsd && trade.livePriceUsd
+          ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
+          : null;
+      const livePnlUsd =
+        livePnlPct !== null ? (trade.displayAmountUsd * livePnlPct) / 100 : trade.fallbackPnlUsd;
       if (query && !trade.symbol.toLowerCase().includes(query.toLowerCase())) return false;
       if (filter === 'open' && trade.status !== 'open') return false;
       if (filter === 'closed' && trade.status !== 'closed') return false;
-      if (filter === 'profit' && trade.pnl <= 0) return false;
-      if (filter === 'loss' && trade.pnl >= 0) return false;
+      if (filter === 'profit' && livePnlUsd <= 0) return false;
+      if (filter === 'loss' && livePnlUsd >= 0) return false;
       return true;
     });
   }, [filter, query, trades]);
@@ -371,6 +377,15 @@ export default function TradesScreen() {
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <View style={styles.card}>
+              {(() => {
+                const livePnlPct =
+                  item.entryPriceUsd && item.livePriceUsd
+                    ? ((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100
+                    : null;
+                const livePnlUsd =
+                  livePnlPct !== null ? (item.displayAmountUsd * livePnlPct) / 100 : item.fallbackPnlUsd;
+                return (
+                  <>
               <View style={styles.cardTop}>
                 <Text style={styles.symbol}>{item.symbol}</Text>
                 <Text style={styles.status}>{item.status}</Text>
@@ -388,9 +403,12 @@ export default function TradesScreen() {
                   Change: {(((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100).toFixed(2)}%
                 </Text>
               ) : null}
-              <Text style={[styles.pnl, item.pnl >= 0 ? styles.green : styles.red]}>
-                {item.pnl >= 0 ? '+' : ''}
-                {item.pnl.toFixed(2)} USDT
+              <Text style={[styles.pnl, livePnlUsd >= 0 ? styles.green : styles.red]}>
+                {livePnlUsd >= 0 ? '+' : ''}
+                {livePnlUsd.toFixed(6)} USDT
+              </Text>
+              <Text style={[styles.meta, livePnlPct !== null ? (livePnlPct >= 0 ? styles.green : styles.red) : null]}>
+                PnL %: {livePnlPct === null ? '--' : `${livePnlPct >= 0 ? '+' : ''}${livePnlPct.toFixed(2)}%`}
               </Text>
               {item.txSignature ? (
                 <Pressable onPress={() => void openSolscanTx(item.txSignature as string)} style={styles.linkBtn}>
@@ -411,6 +429,9 @@ export default function TradesScreen() {
                   <Text style={styles.closeBtnText}>{closingId === item.id ? 'Closing...' : 'Close Trade'}</Text>
                 </Pressable>
               ) : null}
+                  </>
+                );
+              })()}
             </View>
           )}
           contentContainerStyle={styles.listContent}
