@@ -14,6 +14,8 @@ const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const CLOSE_OUTPUT_MINTS = [SOL_MINT, USDC_MINT];
 const FORCE_CLOSE_ON_SWAP_FAILURE = false;
 const CLOSE_SLIPPAGE_RETRY_BPS = [1200, 2500, 4000, 5000];
 const CLOSE_AMOUNT_BPS_RETRY = [9800, 9000, 7500, 5000, 2500, 1000];
@@ -314,46 +316,51 @@ export default function TradesScreen() {
             }
 
             let lastCloseError: any = null;
-            for (const amountBps of CLOSE_AMOUNT_BPS_RETRY) {
-              const closeAmountRaw = String((tokenRawTotal * BigInt(amountBps)) / 10000n);
-              if (BigInt(closeAmountRaw) <= 0n) continue;
+            for (const outputMint of CLOSE_OUTPUT_MINTS) {
+              for (const amountBps of CLOSE_AMOUNT_BPS_RETRY) {
+                const closeAmountRaw = String((tokenRawTotal * BigInt(amountBps)) / 10000n);
+                if (BigInt(closeAmountRaw) <= 0n) continue;
 
-              for (const slippageBps of CLOSE_SLIPPAGE_RETRY_BPS) {
-                try {
-                  const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      userPublicKey: walletAddress,
-                      inputMint: trade.tokenAddress,
-                      outputMint: SOL_MINT,
-                      amountRaw: closeAmountRaw,
-                      slippageBps,
-                    }),
-                  });
-                  const swapJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(swapRes);
-                  if (!swapRes.ok || !swapJson?.swapTransaction) {
-                    throw new Error(swapJson?.error || 'Failed to build close swap');
-                  }
+                for (const slippageBps of CLOSE_SLIPPAGE_RETRY_BPS) {
+                  try {
+                    const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        userPublicKey: walletAddress,
+                        inputMint: trade.tokenAddress,
+                        outputMint,
+                        amountRaw: closeAmountRaw,
+                        slippageBps,
+                      }),
+                    });
+                    const swapJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(swapRes);
+                    if (!swapRes.ok || !swapJson?.swapTransaction) {
+                      throw new Error(swapJson?.error || 'Failed to build close swap');
+                    }
 
-                  const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
-                  const signed = (await provider.request({
-                    method: 'signAndSendTransaction',
-                    params: {
-                      transaction: tx,
-                      connection,
-                      options: { skipPreflight: false, maxRetries: 3 },
-                    },
-                  })) as { signature?: string };
-                  if (!signed?.signature) {
-                    throw new Error('No close transaction signature returned');
+                    const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
+                    const signed = (await provider.request({
+                      method: 'signAndSendTransaction',
+                      params: {
+                        transaction: tx,
+                        connection,
+                        options: { skipPreflight: false, maxRetries: 3 },
+                      },
+                    })) as { signature?: string };
+                    if (!signed?.signature) {
+                      throw new Error('No close transaction signature returned');
+                    }
+                    closeTxSignature = signed.signature;
+                    await connection.confirmTransaction(closeTxSignature, 'confirmed');
+                    break;
+                  } catch (e: any) {
+                    lastCloseError = e;
+                    continue;
                   }
-                  closeTxSignature = signed.signature;
-                  await connection.confirmTransaction(closeTxSignature, 'confirmed');
+                }
+                if (closeTxSignature) {
                   break;
-                } catch (e: any) {
-                  lastCloseError = e;
-                  continue;
                 }
               }
               if (closeTxSignature) {
