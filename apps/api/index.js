@@ -810,6 +810,7 @@ app.post("/api/jupiter/swap", async (req, res) => {
       userPublicKey,
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
+      dynamicSlippage: true,
       prioritizationFeeLamports: "auto",
     });
     if (!swapJson?.swapTransaction) {

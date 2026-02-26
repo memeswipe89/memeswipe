@@ -25,6 +25,7 @@ const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MIN_SOL_RESERVE_FOR_FEES = 0.01;
+const SWAP_SLIPPAGE_RETRY_BPS = [100, 300, 800, 1500];
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
@@ -804,57 +805,79 @@ export default function HomeScreen() {
         throw new Error('Embedded Solana wallet provider is not ready.');
       }
 
-      const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userPublicKey: resolvedWalletAddress,
-          inputMint: SOL_MINT,
-          outputMint: token.address,
-          amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
-          slippageBps: 100,
-        }),
-      });
-      const swapJson = await parseApiJson<{
-        error?: string;
-        swapTransaction?: string;
-        quote?: { inAmount?: string; outAmount?: string; inputMint?: string; outputMint?: string };
-      }>(swapRes);
-      if (!swapRes.ok || !swapJson?.swapTransaction) {
-        throw new Error(swapJson?.error || 'Failed to build Jupiter swap');
-      }
-
-      const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
       const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
-      const signed = (await provider.request({
-        method: 'signAndSendTransaction',
-        params: {
-          transaction: tx,
-          connection,
-          options: { skipPreflight: false, maxRetries: 3 },
-        },
-      })) as { signature?: string };
+      let lastError: any = null;
 
-      const signature = typeof signed?.signature === 'string' ? signed.signature : '';
-      if (!signature) {
-        throw new Error('Signed transaction was sent but no signature returned.');
+      for (const slippageBps of SWAP_SLIPPAGE_RETRY_BPS) {
+        try {
+          const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userPublicKey: resolvedWalletAddress,
+              inputMint: SOL_MINT,
+              outputMint: token.address,
+              amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
+              slippageBps,
+            }),
+          });
+          const swapJson = await parseApiJson<{
+            error?: string;
+            swapTransaction?: string;
+            quote?: { inAmount?: string; outAmount?: string; inputMint?: string; outputMint?: string };
+          }>(swapRes);
+          if (!swapRes.ok || !swapJson?.swapTransaction) {
+            throw new Error(swapJson?.error || 'Failed to build Jupiter swap');
+          }
+
+          const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
+          const signed = (await provider.request({
+            method: 'signAndSendTransaction',
+            params: {
+              transaction: tx,
+              connection,
+              options: { skipPreflight: false, maxRetries: 3 },
+            },
+          })) as { signature?: string };
+
+          const signature = typeof signed?.signature === 'string' ? signed.signature : '';
+          if (!signature) {
+            throw new Error('Signed transaction was sent but no signature returned.');
+          }
+          await connection.confirmTransaction(signature, 'confirmed');
+          console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
+            signature,
+            slippageBps,
+            inputMint: swapJson.quote?.inputMint || SOL_MINT,
+            outputMint: swapJson.quote?.outputMint || token.address,
+            inAmount: swapJson.quote?.inAmount,
+            outAmount: swapJson.quote?.outAmount,
+          });
+
+          return {
+            signature,
+            inputMint: swapJson.quote?.inputMint || SOL_MINT,
+            outputMint: swapJson.quote?.outputMint || token.address,
+            inAmountRaw: String(swapJson.quote?.inAmount || ''),
+            outAmountRaw: String(swapJson.quote?.outAmount || ''),
+          };
+        } catch (error: any) {
+          lastError = error;
+          const msg = String(error?.message || '');
+          const retryable =
+            msg.includes('0x1788') ||
+            msg.toLowerCase().includes('simulation failed') ||
+            msg.toLowerCase().includes('slippage');
+          console.log('[TRADE][SWIPE_RIGHT] swap attempt failed', {
+            slippageBps,
+            retryable,
+            message: msg,
+          });
+          if (!retryable) break;
+        }
       }
-      await connection.confirmTransaction(signature, 'confirmed');
-      console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
-        signature,
-        inputMint: swapJson.quote?.inputMint || SOL_MINT,
-        outputMint: swapJson.quote?.outputMint || token.address,
-        inAmount: swapJson.quote?.inAmount,
-        outAmount: swapJson.quote?.outAmount,
-      });
 
-      return {
-        signature,
-        inputMint: swapJson.quote?.inputMint || SOL_MINT,
-        outputMint: swapJson.quote?.outputMint || token.address,
-        inAmountRaw: String(swapJson.quote?.inAmount || ''),
-        outAmountRaw: String(swapJson.quote?.outAmount || ''),
-      };
+      throw lastError || new Error('Swap failed after retries');
     },
     [activeChain, embeddedSolanaWallet, getOrCreateEmbeddedWalletAddress, tradeAmount, walletAddress]
   );
