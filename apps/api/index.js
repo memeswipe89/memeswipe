@@ -35,6 +35,8 @@ const JUPITER_SWAP_URLS = [
   "https://quote-api.jup.ag/v6/swap",
   "https://lite-api.jup.ag/swap/v1/swap",
 ];
+const TOKEN_PRICE_CACHE_TTL_MS = 20 * 1000;
+const tokenPriceCache = new Map();
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -651,6 +653,95 @@ app.get("/api/health/db", async (req, res) => {
       res.status(500).json({ ok: false, error: err.message });
     }
   });  
+
+app.get("/api/token-prices", async (req, res) => {
+  try {
+    const rawAddresses = typeof req.query.addresses === "string" ? req.query.addresses : "";
+    const addresses = Array.from(
+      new Set(
+        rawAddresses
+          .split(",")
+          .map((a) => a.trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 40);
+
+    if (!addresses.length) {
+      return res.status(400).json({ error: "addresses query param is required" });
+    }
+
+    const now = Date.now();
+    const prices = {};
+
+    for (const address of addresses) {
+      const cacheKey = `solana:${address}`;
+      const cached = tokenPriceCache.get(cacheKey);
+      if (cached && now - cached.ts < TOKEN_PRICE_CACHE_TTL_MS) {
+        prices[address] = cached.price;
+        continue;
+      }
+
+      let resolvedPrice = null;
+
+      // 1) Moralis token price (preferred if key available)
+      if (process.env.MORALIS_API_KEY) {
+        try {
+          const moralisRes = await fetch(
+            `https://solana-gateway.moralis.io/token/mainnet/${encodeURIComponent(address)}/price`,
+            {
+              headers: {
+                accept: "application/json",
+                "X-API-Key": process.env.MORALIS_API_KEY,
+              },
+            }
+          );
+          if (moralisRes.ok) {
+            const moralisJson = await moralisRes.json();
+            const p = Number(moralisJson?.usdPrice);
+            if (Number.isFinite(p) && p > 0) {
+              resolvedPrice = p;
+            }
+          }
+        } catch (error) {
+          console.warn("[TOKEN_PRICE] moralis failed", address, error?.message || error);
+        }
+      }
+
+      // 2) DexScreener fallback
+      if (resolvedPrice == null) {
+        try {
+          const dexRes = await fetch(
+            `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`
+          );
+          if (dexRes.ok) {
+            const dexJson = await dexRes.json();
+            const pairs = Array.isArray(dexJson?.pairs) ? dexJson.pairs : [];
+            const solanaPairs = pairs.filter((p) => p?.chainId === "solana");
+            const bestPair = (solanaPairs.length ? solanaPairs : pairs)[0];
+            const p = Number(bestPair?.priceUsd);
+            if (Number.isFinite(p) && p > 0) {
+              resolvedPrice = p;
+            }
+          }
+        } catch (error) {
+          console.warn("[TOKEN_PRICE] dexscreener failed", address, error?.message || error);
+        }
+      }
+
+      if (resolvedPrice != null) {
+        prices[address] = resolvedPrice;
+        tokenPriceCache.set(cacheKey, { price: resolvedPrice, ts: now });
+      } else {
+        prices[address] = null;
+      }
+    }
+
+    return res.json({ prices });
+  } catch (err) {
+    console.error("Token prices error:", err);
+    return res.status(500).json({ error: err.message || "Failed to fetch token prices" });
+  }
+});
 
 app.get("/api/solana/price-usd", async (_req, res) => {
   try {

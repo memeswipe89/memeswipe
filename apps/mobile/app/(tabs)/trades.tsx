@@ -186,23 +186,23 @@ export default function TradesScreen() {
     let active = true;
     const refreshLivePrices = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/feed/solana/graduated?limit=200`);
-        const json = await parseApiJson<{
-          tokens?: { address?: string; tokenAddress?: string; mint?: string; priceUsd?: number | string }[];
-        }>(res);
-        if (!active || !Array.isArray(json.tokens)) return;
-        const priceByAddress = new Map<string, number>();
-        for (const token of json.tokens) {
-          const address = String(token.address || token.tokenAddress || token.mint || '').trim();
-          const price = Number(token.priceUsd);
-          if (address && Number.isFinite(price) && price > 0) {
-            priceByAddress.set(address, price);
-          }
-        }
+        const addresses = Array.from(
+          new Set(
+            trades
+              .filter((t) => t.chain === 'solana' && Boolean(t.tokenAddress))
+              .map((t) => t.tokenAddress)
+          )
+        );
+        if (!addresses.length) return;
+        const res = await fetch(
+          `${API_BASE}/api/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`
+        );
+        const json = await parseApiJson<{ prices?: Record<string, number | null> }>(res);
+        if (!active || !json?.prices) return;
         setTrades((prev) =>
           prev.map((t) => {
-            const live = priceByAddress.get(t.tokenAddress);
-            return live ? { ...t, livePriceUsd: live } : t;
+            const live = Number(json.prices?.[t.tokenAddress]);
+            return Number.isFinite(live) && live > 0 ? { ...t, livePriceUsd: live } : t;
           })
         );
       } catch {
@@ -215,7 +215,7 @@ export default function TradesScreen() {
       active = false;
       clearInterval(id);
     };
-  }, []);
+  }, [trades]);
 
   const closeTrade = useCallback(
     async (trade: TradeItem) => {
