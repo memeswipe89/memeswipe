@@ -27,6 +27,14 @@ const feedCache = new Map();
 let moralisBlockedUntil = 0;
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const DEFAULT_SOL_USD_FALLBACK = Number(process.env.SOL_USD_FALLBACK || 200);
+const JUPITER_QUOTE_URLS = [
+  "https://quote-api.jup.ag/v6/quote",
+  "https://lite-api.jup.ag/swap/v1/quote",
+];
+const JUPITER_SWAP_URLS = [
+  "https://quote-api.jup.ag/v6/swap",
+  "https://lite-api.jup.ag/swap/v1/swap",
+];
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -293,6 +301,52 @@ const getSolUsdPrice = async () => {
   }
 
   throw new Error("Unable to resolve SOL/USD price from all sources");
+};
+
+const fetchJupiterQuote = async (params) => {
+  let lastError = null;
+  for (const baseUrl of JUPITER_QUOTE_URLS) {
+    try {
+      const qs = new URLSearchParams(params);
+      const url = `${baseUrl}?${qs.toString()}`;
+      const res = await fetch(url);
+      const bodyText = await res.text();
+      if (!res.ok) {
+        lastError = new Error(`Quote failed at ${baseUrl}: ${res.status} ${bodyText.slice(0, 200)}`);
+        continue;
+      }
+      const json = JSON.parse(bodyText);
+      return { json, source: baseUrl };
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+  }
+  throw lastError || new Error("Failed to fetch Jupiter quote from all endpoints");
+};
+
+const fetchJupiterSwapTx = async (payload) => {
+  let lastError = null;
+  for (const baseUrl of JUPITER_SWAP_URLS) {
+    try {
+      const res = await fetch(baseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const bodyText = await res.text();
+      if (!res.ok) {
+        lastError = new Error(`Swap build failed at ${baseUrl}: ${res.status} ${bodyText.slice(0, 200)}`);
+        continue;
+      }
+      const json = JSON.parse(bodyText);
+      return { json, source: baseUrl };
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+  }
+  throw lastError || new Error("Failed to build Jupiter swap transaction from all endpoints");
 };
 
 const fetchGraduatedFeed = async (req, res) => {
@@ -648,7 +702,7 @@ app.post("/api/jupiter/swap", async (req, res) => {
       return res.status(400).json({ error: "amountRaw must be a positive integer string" });
     }
 
-    const quoteQs = new URLSearchParams({
+    const { json: quoteJson, source: quoteSource } = await fetchJupiterQuote({
       inputMint,
       outputMint,
       amount: amountRaw,
@@ -656,34 +710,17 @@ app.post("/api/jupiter/swap", async (req, res) => {
       swapMode: "ExactIn",
       restrictIntermediateTokens: "true",
     });
-    const quoteRes = await fetch(`https://quote-api.jup.ag/v6/quote?${quoteQs.toString()}`);
-    if (!quoteRes.ok) {
-      const text = await quoteRes.text();
-      return res.status(quoteRes.status).json({ error: "Jupiter quote failed", details: text || null });
-    }
-    const quoteJson = await quoteRes.json();
     if (!quoteJson?.outAmount) {
       return res.status(400).json({ error: "No route found for this swap" });
     }
 
-    const swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        quoteResponse: quoteJson,
-        userPublicKey,
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: "auto",
-      }),
+    const { json: swapJson, source: swapSource } = await fetchJupiterSwapTx({
+      quoteResponse: quoteJson,
+      userPublicKey,
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: "auto",
     });
-
-    if (!swapRes.ok) {
-      const text = await swapRes.text();
-      return res.status(swapRes.status).json({ error: "Jupiter swap transaction build failed", details: text || null });
-    }
-
-    const swapJson = await swapRes.json();
     if (!swapJson?.swapTransaction) {
       return res.status(500).json({ error: "Jupiter returned no swap transaction" });
     }
@@ -696,6 +733,10 @@ app.post("/api/jupiter/swap", async (req, res) => {
         inputMint,
         outputMint,
         slippageBps,
+      },
+      routeSource: {
+        quote: quoteSource,
+        swap: swapSource,
       },
       lastValidBlockHeight: swapJson.lastValidBlockHeight || null,
     });
