@@ -34,6 +34,7 @@ type TradeItem = {
   status: TradeStatus;
   pnl: number;
   amountUsd: number;
+  displayAmountUsd: number;
   createdAt: string | null;
   chain: string;
   tokenAddress: string;
@@ -41,6 +42,8 @@ type TradeItem = {
   outAmountRaw: string | null;
   txSignature: string | null;
   closeTxSignature: string | null;
+  entryPriceUsd: number | null;
+  livePriceUsd: number | null;
 };
 
 type Filter = 'all' | 'open' | 'closed' | 'profit' | 'loss';
@@ -68,6 +71,7 @@ export default function TradesScreen() {
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [userId, setUserId] = useState<string>('');
   const [closingId, setClosingId] = useState<string | null>(null);
+  const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const pageSize = 20;
 
   useEffect(() => {
@@ -102,6 +106,7 @@ export default function TradesScreen() {
           out_amount_raw?: string | null;
           tx_signature?: string | null;
           close_tx_signature?: string | null;
+          price_usd?: number | string | null;
         }[];
         error?: string;
       }>(res);
@@ -111,12 +116,20 @@ export default function TradesScreen() {
       const mapped: TradeItem[] = (json.orders || []).map((order) => {
         const amount = toNumber(order.amount_usd, 0);
         const roi = toNumber(order.tp_roi, 0);
+        const inAmountLamports = Number(order.in_amount_raw || 0);
+        const derivedAmountUsd =
+          Number.isFinite(inAmountLamports) && inAmountLamports > 0 && Number.isFinite(solPriceUsd || 0)
+            ? (inAmountLamports / 1_000_000_000) * Number(solPriceUsd || 0)
+            : 0;
+        const displayAmountUsd = amount > 0 ? amount : derivedAmountUsd;
+        const entryPrice = toNumber(order.price_usd, 0);
         return {
           id: String(order.id || Math.random()),
           symbol: order.token_symbol || 'TOKEN',
           status: normalizeTradeStatus(order.status),
           pnl: (amount * roi) / 100,
           amountUsd: amount,
+          displayAmountUsd,
           createdAt: order.created_at || null,
           chain: order.chain || 'solana',
           tokenAddress: order.token_address || '',
@@ -124,6 +137,8 @@ export default function TradesScreen() {
           outAmountRaw: typeof order.out_amount_raw === 'string' ? order.out_amount_raw : null,
           txSignature: typeof order.tx_signature === 'string' ? order.tx_signature : null,
           closeTxSignature: typeof order.close_tx_signature === 'string' ? order.close_tx_signature : null,
+          entryPriceUsd: entryPrice > 0 ? entryPrice : null,
+          livePriceUsd: null,
         };
       });
       setTrades(mapped);
@@ -132,7 +147,7 @@ export default function TradesScreen() {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [solPriceUsd, userId]);
 
   useEffect(() => {
     void loadTrades();
@@ -143,6 +158,64 @@ export default function TradesScreen() {
       void loadTrades();
     }, [loadTrades])
   );
+
+  useEffect(() => {
+    let active = true;
+    const refreshSolPrice = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/solana/price-usd`);
+        const json = await parseApiJson<{ priceUsd?: number }>(res);
+        if (!active) return;
+        const price = Number(json?.priceUsd || 0);
+        if (Number.isFinite(price) && price > 0) {
+          setSolPriceUsd(price);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void refreshSolPrice();
+    const id = setInterval(refreshSolPrice, 30000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refreshLivePrices = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/feed/solana/graduated?limit=200`);
+        const json = await parseApiJson<{
+          tokens?: { address?: string; tokenAddress?: string; mint?: string; priceUsd?: number | string }[];
+        }>(res);
+        if (!active || !Array.isArray(json.tokens)) return;
+        const priceByAddress = new Map<string, number>();
+        for (const token of json.tokens) {
+          const address = String(token.address || token.tokenAddress || token.mint || '').trim();
+          const price = Number(token.priceUsd);
+          if (address && Number.isFinite(price) && price > 0) {
+            priceByAddress.set(address, price);
+          }
+        }
+        setTrades((prev) =>
+          prev.map((t) => {
+            const live = priceByAddress.get(t.tokenAddress);
+            return live ? { ...t, livePriceUsd: live } : t;
+          })
+        );
+      } catch {
+        // ignore
+      }
+    };
+    void refreshLivePrices();
+    const id = setInterval(refreshLivePrices, 15000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, []);
 
   const closeTrade = useCallback(
     async (trade: TradeItem) => {
@@ -302,8 +375,19 @@ export default function TradesScreen() {
                 <Text style={styles.symbol}>{item.symbol}</Text>
                 <Text style={styles.status}>{item.status}</Text>
               </View>
-              <Text style={styles.meta}>Amount: ${item.amountUsd.toFixed(6)}</Text>
+              <Text style={styles.meta}>Amount: ${item.displayAmountUsd.toFixed(6)}</Text>
               {item.createdAt ? <Text style={styles.meta}>Created: {new Date(item.createdAt).toLocaleString()}</Text> : null}
+              <Text style={styles.meta}>
+                Entry Price: {item.entryPriceUsd ? `$${item.entryPriceUsd.toFixed(9)}` : '--'}
+              </Text>
+              <Text style={styles.meta}>
+                Live Price: {item.livePriceUsd ? `$${item.livePriceUsd.toFixed(9)}` : '--'}
+              </Text>
+              {item.entryPriceUsd && item.livePriceUsd ? (
+                <Text style={[styles.meta, item.livePriceUsd >= item.entryPriceUsd ? styles.green : styles.red]}>
+                  Change: {(((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100).toFixed(2)}%
+                </Text>
+              ) : null}
               <Text style={[styles.pnl, item.pnl >= 0 ? styles.green : styles.red]}>
                 {item.pnl >= 0 ? '+' : ''}
                 {item.pnl.toFixed(2)} USDT
