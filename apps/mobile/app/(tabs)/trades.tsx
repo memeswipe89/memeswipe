@@ -8,6 +8,7 @@ import * as Linking from 'expo-linking';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useWalletContext } from '@/contexts/wallet-context';
+import { addBalance } from '@/lib/devWallet';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
@@ -60,6 +61,16 @@ const normalizeTradeStatus = (status: unknown): TradeStatus => {
   if (s === 'closed' || s === 'cancelled' || s === 'filled' || s === 'completed') return 'closed';
   if (s === 'open' || s === 'queued' || s === 'pending' || s === 'processing') return 'open';
   return 'open';
+};
+
+const getLivePnl = (trade: TradeItem) => {
+  const livePnlPct =
+    trade.entryPriceUsd && trade.livePriceUsd
+      ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
+      : null;
+  const livePnlUsd =
+    livePnlPct !== null ? (trade.displayAmountUsd * livePnlPct) / 100 : trade.fallbackPnlUsd;
+  return { livePnlPct, livePnlUsd };
 };
 
 export default function TradesScreen() {
@@ -230,7 +241,7 @@ export default function TradesScreen() {
 
         // Attempt real close swap first for Solana trades when we have the raw token amount.
         let closeTxSignature: string | null = null;
-        if (trade.chain === 'solana' && trade.status === 'open' && trade.tokenAddress && trade.outAmountRaw) {
+        if (trade.chain === 'solana' && trade.status === 'open' && trade.tokenAddress) {
           try {
             const walletAddress = await getOrCreateEmbeddedWalletAddress();
             let provider: any = null;
@@ -329,6 +340,8 @@ export default function TradesScreen() {
             }
             // Emergency mode: allow closing the DB trade even if swap fails.
           }
+        } else if (trade.status === 'open') {
+          throw new Error('Trade cannot be closed on-chain: missing token chain/address.');
         }
 
         const res = await fetch(`${API_BASE}/api/orders/${encodeURIComponent(orderId)}/close`, {
@@ -350,6 +363,10 @@ export default function TradesScreen() {
               : t
           )
         );
+
+        // Credit/debit realized PnL into app balance after confirmed on-chain close.
+        const { livePnlUsd } = getLivePnl(trade);
+        await addBalance(livePnlUsd);
       } catch (err: any) {
         setError(err?.message || 'Failed to close trade');
       } finally {
@@ -361,12 +378,7 @@ export default function TradesScreen() {
 
   const filtered = useMemo(() => {
     return trades.filter((trade) => {
-      const livePnlPct =
-        trade.entryPriceUsd && trade.livePriceUsd
-          ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
-          : null;
-      const livePnlUsd =
-        livePnlPct !== null ? (trade.displayAmountUsd * livePnlPct) / 100 : trade.fallbackPnlUsd;
+      const { livePnlUsd } = getLivePnl(trade);
       if (query && !trade.symbol.toLowerCase().includes(query.toLowerCase())) return false;
       if (filter === 'open' && trade.status !== 'open') return false;
       if (filter === 'closed' && trade.status !== 'closed') return false;
@@ -436,12 +448,7 @@ export default function TradesScreen() {
           renderItem={({ item }) => (
             <View style={styles.card}>
               {(() => {
-                const livePnlPct =
-                  item.entryPriceUsd && item.livePriceUsd
-                    ? ((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100
-                    : null;
-                const livePnlUsd =
-                  livePnlPct !== null ? (item.displayAmountUsd * livePnlPct) / 100 : item.fallbackPnlUsd;
+                const { livePnlPct, livePnlUsd } = getLivePnl(item);
                 return (
                   <>
               <View style={styles.cardTop}>
