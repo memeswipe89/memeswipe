@@ -13,7 +13,8 @@ const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const FORCE_CLOSE_ON_SWAP_FAILURE = true;
+const FORCE_CLOSE_ON_SWAP_FAILURE = false;
+const CLOSE_SLIPPAGE_RETRY_BPS = [1200, 2500, 4000, 5000];
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
   try {
@@ -242,37 +243,81 @@ export default function TradesScreen() {
               throw new Error('Embedded wallet provider unavailable for closing trade');
             }
 
-            const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
+            const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
+
+            // Use the actual wallet token balance for this mint.
+            const balRes = await fetch(SOLANA_MAINNET_RPC, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                userPublicKey: walletAddress,
-                inputMint: trade.tokenAddress,
-                outputMint: SOL_MINT,
-                amountRaw: trade.outAmountRaw,
-                slippageBps: 3000,
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'getTokenAccountsByOwner',
+                params: [
+                  walletAddress,
+                  { mint: trade.tokenAddress },
+                  { encoding: 'jsonParsed' },
+                ],
               }),
             });
-            const swapJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(swapRes);
-            if (!swapRes.ok || !swapJson?.swapTransaction) {
-              throw new Error(swapJson?.error || 'Failed to build close swap');
+            const balJson = await parseApiJson<{
+              result?: { value?: { account?: { data?: { parsed?: { info?: { tokenAmount?: { amount?: string } } } } } }[] };
+            }>(balRes);
+            const tokenLamports = (balJson?.result?.value || []).reduce((sum, item) => {
+              const raw = Number(item?.account?.data?.parsed?.info?.tokenAmount?.amount || 0);
+              return sum + (Number.isFinite(raw) ? raw : 0);
+            }, 0);
+            if (!Number.isFinite(tokenLamports) || tokenLamports <= 0) {
+              throw new Error('No token balance available to close on-chain.');
+            }
+            const closeAmountRaw = String(Math.floor(tokenLamports * 0.995));
+            if (Number(closeAmountRaw) <= 0) {
+              throw new Error('Token balance too small to close on-chain.');
             }
 
-            const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
-            const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
-            const signed = (await provider.request({
-              method: 'signAndSendTransaction',
-              params: {
-                transaction: tx,
-                connection,
-                options: { skipPreflight: false, maxRetries: 3 },
-              },
-            })) as { signature?: string };
-            if (!signed?.signature) {
-              throw new Error('No close transaction signature returned');
+            let lastCloseError: any = null;
+            for (const slippageBps of CLOSE_SLIPPAGE_RETRY_BPS) {
+              try {
+                const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    userPublicKey: walletAddress,
+                    inputMint: trade.tokenAddress,
+                    outputMint: SOL_MINT,
+                    amountRaw: closeAmountRaw,
+                    slippageBps,
+                  }),
+                });
+                const swapJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(swapRes);
+                if (!swapRes.ok || !swapJson?.swapTransaction) {
+                  throw new Error(swapJson?.error || 'Failed to build close swap');
+                }
+
+                const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
+                const signed = (await provider.request({
+                  method: 'signAndSendTransaction',
+                  params: {
+                    transaction: tx,
+                    connection,
+                    options: { skipPreflight: false, maxRetries: 3 },
+                  },
+                })) as { signature?: string };
+                if (!signed?.signature) {
+                  throw new Error('No close transaction signature returned');
+                }
+                closeTxSignature = signed.signature;
+                await connection.confirmTransaction(closeTxSignature, 'confirmed');
+                break;
+              } catch (e: any) {
+                lastCloseError = e;
+                continue;
+              }
             }
-            closeTxSignature = signed.signature;
-            await connection.confirmTransaction(closeTxSignature, 'confirmed');
+
+            if (!closeTxSignature) {
+              throw lastCloseError || new Error('Close swap failed for all retry attempts');
+            }
           } catch (swapError: any) {
             console.log('[TRADES][CLOSE] on-chain close swap failed', {
               orderId,
