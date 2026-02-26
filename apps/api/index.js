@@ -914,6 +914,38 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
         ? req.body.closeTxSignature.trim()
         : null;
 
+    // If an on-chain close signature is supplied, allow backfilling it even when the
+    // order is already in a terminal status from earlier fallback logic.
+    if (closeTxSignature) {
+      const scoped = await pool.query(
+        `
+        update orders
+        set close_tx_signature = coalesce(close_tx_signature, $3),
+            closed_at = coalesce(closed_at, now())
+        where id = $1 and user_id = $2
+        returning *
+        `,
+        [orderId, userId, closeTxSignature]
+      );
+      if (scoped.rows.length) {
+        return res.json({ success: true, order: scoped.rows[0] });
+      }
+
+      const byId = await pool.query(
+        `
+        update orders
+        set close_tx_signature = coalesce(close_tx_signature, $2),
+            closed_at = coalesce(closed_at, now())
+        where id = $1
+        returning *
+        `,
+        [orderId, closeTxSignature]
+      );
+      if (byId.rows.length) {
+        return res.json({ success: true, order: byId.rows[0] });
+      }
+    }
+
     const closeStatuses = ["closed", "cancelled", "filled"];
     let updated = null;
     let lastError = null;

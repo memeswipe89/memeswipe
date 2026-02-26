@@ -264,9 +264,10 @@ export default function TradesScreen() {
         const resolvedUserId = userId || (await AsyncStorage.getItem(LOCAL_USER_ID_KEY)) || '';
         if (!resolvedUserId) throw new Error('User id not found');
 
-        // Attempt real close swap first for Solana trades when we have the raw token amount.
+        // Attempt real close swap first for Solana trades when we have the token mint.
         let closeTxSignature: string | null = null;
-        if (trade.chain === 'solana' && trade.status === 'open' && trade.tokenAddress) {
+        const needsOnchainClose = !trade.closeTxSignature;
+        if (needsOnchainClose && trade.chain === 'solana' && trade.tokenAddress) {
           try {
             const walletAddress = await getOrCreateEmbeddedWalletAddress();
             let provider: any = null;
@@ -365,7 +366,7 @@ export default function TradesScreen() {
             }
             // Emergency mode: allow closing the DB trade even if swap fails.
           }
-        } else if (trade.status === 'open') {
+        } else if (needsOnchainClose) {
           throw new Error('Trade cannot be closed on-chain: missing token chain/address.');
         }
 
@@ -510,13 +511,19 @@ export default function TradesScreen() {
                   <Text style={styles.linkBtnText}>View Close Tx</Text>
                 </Pressable>
               ) : null}
-              {item.status === 'open' ? (
+              {item.status === 'open' || (item.status === 'closed' && !item.closeTxSignature) ? (
                 <Pressable
                   onPress={() => void closeTrade(item)}
                   disabled={closingId === item.id}
                   style={[styles.closeBtn, closingId === item.id && { opacity: 0.6 }]}
                 >
-                  <Text style={styles.closeBtnText}>{closingId === item.id ? 'Closing...' : 'Close Trade'}</Text>
+                  <Text style={styles.closeBtnText}>
+                    {closingId === item.id
+                      ? 'Closing...'
+                      : item.status === 'open'
+                        ? 'Close Trade'
+                        : 'Settle Close On-Chain'}
+                  </Text>
                 </Pressable>
               ) : null}
                   </>
