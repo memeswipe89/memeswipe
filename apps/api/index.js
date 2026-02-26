@@ -26,6 +26,7 @@ const QUOTA_BLOCK_MS = 60 * 60 * 1000;
 const feedCache = new Map();
 let moralisBlockedUntil = 0;
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const DEFAULT_SOL_USD_FALLBACK = Number(process.env.SOL_USD_FALLBACK || 200);
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -253,6 +254,45 @@ const buildRedirectUrl = (returnUrl, params) => {
 const isAllowedReturnUrl = (value) => {
   if (!value || typeof value !== "string") return false;
   return value.startsWith("mobile://") || value.startsWith("exp://");
+};
+
+const getSolUsdPrice = async () => {
+  // 1) Jupiter price service (fast when reachable)
+  try {
+    const r = await fetch("https://price.jup.ag/v4/price?ids=SOL");
+    if (r.ok) {
+      const json = await r.json();
+      const price = Number(json?.data?.SOL?.price);
+      if (Number.isFinite(price) && price > 0) {
+        return { price, source: "jupiter" };
+      }
+    }
+  } catch (error) {
+    console.warn("[PRICE] Jupiter SOL price failed:", error?.message || error);
+  }
+
+  // 2) CoinGecko fallback
+  try {
+    const r = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
+    );
+    if (r.ok) {
+      const json = await r.json();
+      const price = Number(json?.solana?.usd);
+      if (Number.isFinite(price) && price > 0) {
+        return { price, source: "coingecko" };
+      }
+    }
+  } catch (error) {
+    console.warn("[PRICE] CoinGecko SOL price failed:", error?.message || error);
+  }
+
+  // 3) Safe configured default
+  if (Number.isFinite(DEFAULT_SOL_USD_FALLBACK) && DEFAULT_SOL_USD_FALLBACK > 0) {
+    return { price: DEFAULT_SOL_USD_FALLBACK, source: "fallback_env" };
+  }
+
+  throw new Error("Unable to resolve SOL/USD price from all sources");
 };
 
 const fetchGraduatedFeed = async (req, res) => {
@@ -560,17 +600,8 @@ app.get("/api/health/db", async (req, res) => {
 
 app.get("/api/solana/price-usd", async (_req, res) => {
   try {
-    const r = await fetch("https://price.jup.ag/v4/price?ids=SOL");
-    if (!r.ok) {
-      const text = await r.text();
-      return res.status(r.status).json({ error: "Failed to fetch SOL price", details: text || null });
-    }
-    const json = await r.json();
-    const price = Number(json?.data?.SOL?.price);
-    if (!Number.isFinite(price) || price <= 0) {
-      return res.status(500).json({ error: "Invalid SOL price response" });
-    }
-    return res.json({ symbol: "SOL", priceUsd: price });
+    const { price, source } = await getSolUsdPrice();
+    return res.json({ symbol: "SOL", priceUsd: price, source });
   } catch (err) {
     console.error("SOL price error:", err);
     return res.status(500).json({ error: err.message });
@@ -600,20 +631,17 @@ app.post("/api/jupiter/swap", async (req, res) => {
         return res.status(400).json({ error: "amountUsd must be a positive number when amountRaw is not provided" });
       }
 
-      const priceRes = await fetch("https://price.jup.ag/v4/price?ids=SOL");
-      if (!priceRes.ok) {
-        const text = await priceRes.text();
-        return res.status(priceRes.status).json({ error: "Failed to fetch SOL price", details: text || null });
-      }
-      const priceJson = await priceRes.json();
-      const solPriceUsd = Number(priceJson?.data?.SOL?.price);
-      if (!Number.isFinite(solPriceUsd) || solPriceUsd <= 0) {
-        return res.status(500).json({ error: "Invalid SOL price response" });
-      }
+      const { price: solPriceUsd, source: solPriceSource } = await getSolUsdPrice();
 
       const lamports = Math.floor((amountUsd / solPriceUsd) * 1_000_000_000);
       const safeLamports = Math.max(5_000, lamports);
       amountRaw = String(safeLamports);
+      console.log("[JUPITER] Derived SOL input amount", {
+        amountUsd,
+        solPriceUsd,
+        solPriceSource,
+        lamports: amountRaw,
+      });
     }
 
     if (!/^\d+$/.test(amountRaw) || Number(amountRaw) <= 0) {

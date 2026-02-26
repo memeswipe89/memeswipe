@@ -874,6 +874,11 @@ export default function HomeScreen() {
         try {
           swapMeta = await executeJupiterSwap(token);
         } catch (error: any) {
+          console.log('[TRADE][SWIPE_RIGHT] swap failed', {
+            symbol: token.symbol,
+            address: token.address,
+            message: error?.message || String(error),
+          });
           Alert.alert('Swap Failed', error?.message || 'Unable to execute on-chain swap.');
           return;
         }
