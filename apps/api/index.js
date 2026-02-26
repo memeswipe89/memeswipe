@@ -912,25 +912,56 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
         ? req.body.closeTxSignature.trim()
         : null;
 
-    const result = await pool.query(
-      `
-      update orders
-      set status = 'closed',
-          closed_at = now(),
-          close_tx_signature = coalesce($3, close_tx_signature)
-      where id = $1
-        and user_id = $2
-        and status <> 'closed'
-      returning *
-      `,
-      [orderId, userId, closeTxSignature]
-    );
+    const closeStatuses = ["closed", "cancelled", "filled"];
+    let updated = null;
+    let lastError = null;
 
-    if (!result.rows.length) {
-      return res.status(404).json({ error: "Open order not found" });
+    for (const nextStatus of closeStatuses) {
+      try {
+        const result = await pool.query(
+          `
+          update orders
+          set status = $3,
+              closed_at = now(),
+              close_tx_signature = coalesce($4, close_tx_signature)
+          where id = $1
+            and user_id = $2
+            and status not in ('closed', 'cancelled', 'filled')
+          returning *
+          `,
+          [orderId, userId, nextStatus, closeTxSignature]
+        );
+
+        if (result.rows.length) {
+          updated = result.rows[0];
+          break;
+        }
+
+        const existing = await pool.query(
+          `
+          select * from orders where id = $1 and user_id = $2 limit 1
+          `,
+          [orderId, userId]
+        );
+        if (!existing.rows.length) {
+          return res.status(404).json({ error: "Order not found" });
+        }
+        updated = existing.rows[0];
+        break;
+      } catch (error) {
+        lastError = error;
+        // 23514 = check constraint violation (status not allowed by schema)
+        if (error?.code === "23514") continue;
+        throw error;
+      }
     }
 
-    return res.json({ success: true, order: result.rows[0] });
+    if (!updated) {
+      if (lastError) throw lastError;
+      return res.status(500).json({ error: "Unable to close order status with current schema constraints" });
+    }
+
+    return res.json({ success: true, order: updated });
   } catch (err) {
     console.error("Close order error:", err);
     return res.status(500).json({ error: err.message });
