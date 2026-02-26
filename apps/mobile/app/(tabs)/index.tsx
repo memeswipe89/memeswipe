@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEmbeddedSolanaWallet } from '@privy-io/expo';
 import { Buffer } from 'buffer';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
@@ -19,11 +19,12 @@ import { SwipeHint } from '@/components/swipe-hint-overlay';
 import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
-import { addBalance, deductBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
+import { addBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const MIN_SOL_RESERVE_FOR_FEES = 0.01;
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
@@ -141,6 +142,8 @@ const parseApiJson = async <T,>(response: Response): Promise<T> => {
     throw new Error(`Invalid server response (${response.status}): ${preview || 'empty body'}`);
   }
 };
+const solToLamports = (sol: number) => Math.floor(sol * 1_000_000_000);
+const lamportsToSol = (lamports: number) => lamports / 1_000_000_000;
 
 const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
   if (segment === 'stalker') return `/api/feed/${chain}/stalker`;
@@ -150,7 +153,7 @@ const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
 };
 
 export default function HomeScreen() {
-  const { twitterProfile, setTwitterProfile, getOrCreateEmbeddedWalletAddress } = useWalletContext();
+  const { twitterProfile, setTwitterProfile, walletAddress, getOrCreateEmbeddedWalletAddress } = useWalletContext();
   const embeddedSolanaWallet = useEmbeddedSolanaWallet();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
   const connectInProgressRef = useRef(false);
@@ -184,6 +187,9 @@ export default function HomeScreen() {
   );
   const [isSwiping, setIsSwiping] = useState(false);
   const [balance, setBalanceState] = useState(0);
+  const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
+  const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
+  const [swapBudgetLoading, setSwapBudgetLoading] = useState(false);
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI } = useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
   const lastFeedFetchRef = useRef(0);
@@ -296,6 +302,64 @@ export default function HomeScreen() {
     }
     retryDelayRef.current = Math.min(retryDelayRef.current * 2, 60000);
   }, []);
+
+  const refreshSwapBudget = useCallback(
+    async (addressOverride?: string) => {
+      const targetAddress = addressOverride || walletAddress;
+      if (!targetAddress || activeChain !== 'solana') {
+        setWalletSolBalance(null);
+        setSolPriceUsd(null);
+        return;
+      }
+      try {
+        setSwapBudgetLoading(true);
+        const [balanceRes, priceRes] = await Promise.all([
+          fetch(SOLANA_MAINNET_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getBalance',
+              params: [targetAddress],
+            }),
+          }),
+          fetch(`${API_BASE}/api/solana/price-usd`),
+        ]);
+        const balanceJson = await parseApiJson<{ result?: { value?: number } }>(balanceRes);
+        const priceJson = await parseApiJson<{ priceUsd?: number }>(priceRes);
+        const balanceLamports = Number(balanceJson?.result?.value || 0);
+        const priceUsd = Number(priceJson?.priceUsd || 0);
+        setWalletSolBalance(Number.isFinite(balanceLamports) ? lamportsToSol(balanceLamports) : 0);
+        setSolPriceUsd(Number.isFinite(priceUsd) && priceUsd > 0 ? priceUsd : null);
+      } catch (error) {
+        console.log('[SWAP_BUDGET] refresh failed', error);
+      } finally {
+        setSwapBudgetLoading(false);
+      }
+    },
+    [activeChain, walletAddress]
+  );
+
+  useEffect(() => {
+    void refreshSwapBudget();
+  }, [refreshSwapBudget, tradeAmount]);
+
+  const estimatedSwapInputSol = useMemo(() => {
+    if (!solPriceUsd || solPriceUsd <= 0) return null;
+    return Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount) / solPriceUsd;
+  }, [solPriceUsd, tradeAmount]);
+
+  const estimatedRequiredSol = useMemo(() => {
+    if (estimatedSwapInputSol === null) return null;
+    // Includes tx/priority and first-time token-account rent overhead.
+    return estimatedSwapInputSol + MIN_SOL_RESERVE_FOR_FEES;
+  }, [estimatedSwapInputSol]);
+
+  const swapShortfallSol = useMemo(() => {
+    if (walletSolBalance === null || estimatedRequiredSol === null) return null;
+    return Math.max(0, estimatedRequiredSol - walletSolBalance);
+  }, [estimatedRequiredSol, walletSolBalance]);
 
   useEffect(() => {
     const timer = setTimeout(() => setAppLoading(false), 1600);
@@ -692,9 +756,41 @@ export default function HomeScreen() {
         throw new Error('On-chain swaps are currently enabled only for Solana feed.');
       }
 
-      const walletAddress = await getOrCreateEmbeddedWalletAddress();
-      if (!walletAddress) {
+      const resolvedWalletAddress = walletAddress || (await getOrCreateEmbeddedWalletAddress());
+      if (!resolvedWalletAddress) {
         throw new Error('No wallet address found. Create wallet first from Wallet tab.');
+      }
+
+      // Pre-check spendable SOL so tiny swaps fail with a clear message before simulation.
+      const [balanceRes, solPriceRes] = await Promise.all([
+        fetch(SOLANA_MAINNET_RPC, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'getBalance',
+            params: [resolvedWalletAddress],
+          }),
+        }),
+        fetch(`${API_BASE}/api/solana/price-usd`),
+      ]);
+      const balanceJson = await parseApiJson<{ result?: { value?: number } }>(balanceRes);
+      const balanceLamports = Number(balanceJson?.result?.value || 0);
+      const priceJson = await parseApiJson<{ priceUsd?: number }>(solPriceRes);
+      const liveSolPriceUsd = Number(priceJson?.priceUsd || 0);
+      if (!Number.isFinite(liveSolPriceUsd) || liveSolPriceUsd <= 0) {
+        throw new Error('Could not fetch SOL price for swap precheck.');
+      }
+      const usdAmount = Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD);
+      const requiredLamports = Math.ceil((usdAmount / liveSolPriceUsd) * 1_000_000_000);
+      const reserveLamports = solToLamports(MIN_SOL_RESERVE_FOR_FEES);
+      if (balanceLamports < requiredLamports + reserveLamports) {
+        throw new Error(
+          `Insufficient SOL for swap + fees. Balance ${lamportsToSol(balanceLamports).toFixed(6)} SOL, required ~${lamportsToSol(
+            requiredLamports + reserveLamports
+          ).toFixed(6)} SOL.`
+        );
       }
 
       let provider: any = null;
@@ -712,7 +808,7 @@ export default function HomeScreen() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userPublicKey: walletAddress,
+          userPublicKey: resolvedWalletAddress,
           inputMint: SOL_MINT,
           outputMint: token.address,
           amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
@@ -760,7 +856,7 @@ export default function HomeScreen() {
         outAmountRaw: String(swapJson.quote?.outAmount || ''),
       };
     },
-    [activeChain, embeddedSolanaWallet, getOrCreateEmbeddedWalletAddress, tradeAmount]
+    [activeChain, embeddedSolanaWallet, getOrCreateEmbeddedWalletAddress, tradeAmount, walletAddress]
   );
 
   const createOrder = useCallback(
@@ -857,10 +953,6 @@ export default function HomeScreen() {
         address: token.address,
         priceUsd: token.priceUsd,
       });
-      if (balance < tradeAmount) {
-        Alert.alert('Insufficient balance', 'Not enough funds in your dev wallet.');
-        return;
-      }
       void (async () => {
         let swapMeta:
           | {
@@ -889,8 +981,6 @@ export default function HomeScreen() {
           return;
         }
         hideToken(token.address);
-        const newBalance = await deductBalance(tradeAmount);
-        setBalanceState(newBalance);
 
         setFavoriteTokens((prev) => {
           const next = prev.filter((item) => item.address !== token.address);
@@ -900,7 +990,7 @@ export default function HomeScreen() {
         });
       })();
     },
-    [balance, createOrder, executeJupiterSwap, hideToken, persistFavorites, tradeAmount]
+    [createOrder, executeJupiterSwap, hideToken, persistFavorites]
   );
 
   const openDevWalletControls = useCallback(() => {
@@ -1038,13 +1128,33 @@ export default function HomeScreen() {
                 />
               </View>
             </View>
-            <View style={styles.filterRow}>
-              <FeedSegmentedControl
-                value={segment}
-                onChange={setSegment}
-                segments={['trending', 'stalker', 'bigcap', 'smart', 'favorites']}
-              />
+          <View style={styles.filterRow}>
+            <FeedSegmentedControl
+              value={segment}
+              onChange={setSegment}
+              segments={['trending', 'stalker', 'bigcap', 'smart', 'favorites']}
+            />
+          </View>
+          {activeChain === 'solana' ? (
+            <View style={styles.swapBudgetRow}>
+              <Text style={styles.swapBudgetText}>
+                Wallet: {walletSolBalance === null ? '--' : `${walletSolBalance.toFixed(6)} SOL`} | Est need:{' '}
+                {estimatedRequiredSol === null ? '--' : `${estimatedRequiredSol.toFixed(6)} SOL`}
+              </Text>
+              <Text
+                style={[
+                  styles.swapBudgetStatus,
+                  swapShortfallSol && swapShortfallSol > 0 ? styles.swapBudgetBad : styles.swapBudgetGood,
+                ]}
+              >
+                {swapBudgetLoading
+                  ? 'Checking...'
+                  : swapShortfallSol && swapShortfallSol > 0
+                    ? `Short ${swapShortfallSol.toFixed(6)} SOL`
+                    : 'Sufficient'}
+              </Text>
             </View>
+          ) : null}
           </View>
 
           <View style={styles.deckArea}>
@@ -1122,6 +1232,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 8,
+  },
+  swapBudgetRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  swapBudgetText: {
+    color: '#99a9cd',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  swapBudgetStatus: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  swapBudgetGood: {
+    color: '#4ade80',
+  },
+  swapBudgetBad: {
+    color: '#ff8a8a',
   },
   deckArea: {
     flex: 1,
