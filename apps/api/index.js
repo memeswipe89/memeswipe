@@ -1238,6 +1238,104 @@ app.post("/api/jupiter/swap", async (req, res) => {
   }
 });
 
+app.post("/api/trades/open", async (req, res) => {
+  try {
+    await ensureOrdersTable();
+    await ensureTradingWalletsTable();
+
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    const tokenAddress = typeof req.body?.tokenAddress === "string" ? req.body.tokenAddress.trim() : "";
+    const amountUsd = Number(req.body?.amountUsd);
+    const slippageBpsRaw = Number(req.body?.slippageBps ?? 300);
+    const slippageBps = Number.isFinite(slippageBpsRaw) ? Math.max(10, Math.min(5000, slippageBpsRaw)) : 300;
+    if (!userId || !tokenAddress || !Number.isFinite(amountUsd) || amountUsd <= 0) {
+      return res.status(400).json({ error: "userId, tokenAddress and positive amountUsd are required" });
+    }
+
+    const wallet = await getTradingWalletKeypair(userId);
+    if (!wallet) {
+      return res.status(400).json({ error: "Trading wallet not found. Create wallet first." });
+    }
+
+    const { price: solPriceUsd } = await getSolUsdPrice();
+    const inputLamports = Math.max(5_000, Math.floor((amountUsd / solPriceUsd) * 1_000_000_000));
+    const reserveLamports = 2_000_000; // 0.002 SOL reserve buffer for fees/rent
+
+    const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+    const balanceLamports = await connection.getBalance(wallet.keypair.publicKey, "confirmed");
+    if (balanceLamports < inputLamports + reserveLamports) {
+      return res.status(400).json({
+        error: `Insufficient SOL for swap + fees. Balance ${(balanceLamports / 1e9).toFixed(6)} SOL, required ~${(
+          (inputLamports + reserveLamports) /
+          1e9
+        ).toFixed(6)} SOL.`,
+        details: {
+          walletAddress: wallet.keypair.publicKey.toBase58(),
+          balanceLamports,
+          requiredLamports: inputLamports + reserveLamports,
+        },
+      });
+    }
+
+    let lastError = null;
+    const retrySlippage = [slippageBps, 800, 1200, 2000, 3000, 5000]
+      .map((v) => Math.max(10, Math.min(5000, Number(v))))
+      .filter((v, i, arr) => arr.indexOf(v) === i);
+
+    for (const slippage of retrySlippage) {
+      try {
+        const { json: quoteJson, source: quoteSource } = await fetchJupiterQuote({
+          inputMint: SOL_MINT,
+          outputMint: tokenAddress,
+          amount: String(inputLamports),
+          slippageBps: String(slippage),
+          swapMode: "ExactIn",
+        });
+        if (!quoteJson?.outAmount) throw new Error("No route found for open swap");
+
+        const { json: swapJson, source: swapSource } = await fetchJupiterSwapTx({
+          quoteResponse: quoteJson,
+          userPublicKey: wallet.keypair.publicKey.toBase58(),
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+          dynamicSlippage: true,
+          prioritizationFeeLamports: "auto",
+        });
+        if (!swapJson?.swapTransaction) throw new Error("No swap transaction returned");
+
+        const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, "base64"));
+        tx.sign([wallet.keypair]);
+        const signature = await connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
+        await connection.confirmTransaction(signature, "confirmed");
+
+        return res.json({
+          success: true,
+          signature,
+          walletAddress: wallet.keypair.publicKey.toBase58(),
+          quote: {
+            inAmount: String(quoteJson.inAmount || inputLamports),
+            outAmount: String(quoteJson.outAmount || "0"),
+            inputMint: SOL_MINT,
+            outputMint: tokenAddress,
+            slippageBps: slippage,
+          },
+          routeSource: { quote: quoteSource, swap: swapSource },
+        });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError || new Error("Unable to execute open swap");
+  } catch (err) {
+    console.error("Open trade swap error:", err);
+    return res.status(500).json({ error: err.message || "Failed to open on-chain trade" });
+  }
+});
+
 app.post("/api/trading-wallet/create", async (req, res) => {
   try {
     await ensureTradingWalletsTable();

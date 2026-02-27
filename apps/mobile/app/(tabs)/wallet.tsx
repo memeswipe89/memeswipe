@@ -4,12 +4,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import QRCode from "react-native-qrcode-svg";
-import { useEmbeddedSolanaWallet } from "@privy-io/expo";
-import { Connection, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { useWalletContext } from "@/contexts/wallet-context";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
-const MIGRATE_FEE_RESERVE_LAMPORTS = 30000;
 
 const getSolBalance = async (address: string): Promise<number> => {
   const response = await fetch(MAINNET_RPC_URL, {
@@ -43,24 +40,20 @@ export default function WalletScreen() {
 
   const {
     twitterProfile,
-    walletAddress,
     tradingWalletAddress,
     withdrawAddress,
     walletLoading,
     walletError,
-    getOrCreateEmbeddedWalletAddress,
     getOrCreateTradingWalletAddress,
     setTradingWithdrawAddress,
     withdrawFromTradingWallet,
   } = useWalletContext();
-  const embeddedSolanaWallet = useEmbeddedSolanaWallet();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [withdrawToAddress, setWithdrawToAddress] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("0.01");
   const [withdrawing, setWithdrawing] = useState(false);
-  const [migrating, setMigrating] = useState(false);
 
   const copyAddress = async () => {
     if (!tradingWalletAddress) return;
@@ -190,103 +183,6 @@ export default function WalletScreen() {
     }
   };
 
-  const handleMigrateFromPrivyWallet = async () => {
-    try {
-      if (!tradingWalletAddress) {
-        Alert.alert("Migrate", "Create trading wallet first.");
-        return;
-      }
-      setMigrating(true);
-      const fromAddress = walletAddress || (await getOrCreateEmbeddedWalletAddress());
-      if (!fromAddress) {
-        throw new Error("Old Privy wallet not found.");
-      }
-      if (fromAddress === tradingWalletAddress) {
-        Alert.alert("Migrate", "Old wallet and trading wallet are same address.");
-        return;
-      }
-
-      let provider: any = null;
-      if ("wallets" in embeddedSolanaWallet && Array.isArray(embeddedSolanaWallet.wallets) && embeddedSolanaWallet.wallets.length > 0) {
-        provider = await embeddedSolanaWallet.wallets[0].getProvider();
-      } else if ("create" in embeddedSolanaWallet && typeof embeddedSolanaWallet.create === "function") {
-        provider = await embeddedSolanaWallet.create();
-      }
-      if (!provider || typeof provider.request !== "function") {
-        throw new Error("Embedded wallet provider unavailable.");
-      }
-
-      const connection = new Connection(MAINNET_RPC_URL, "confirmed");
-      const fromPubkey = new PublicKey(fromAddress);
-      const toPubkey = new PublicKey(tradingWalletAddress);
-
-      const currentLamports = await connection.getBalance(fromPubkey, "confirmed");
-      if (currentLamports <= MIGRATE_FEE_RESERVE_LAMPORTS) {
-        throw new Error("Not enough SOL in old wallet to migrate after fees.");
-      }
-
-      const transferFractions = [0.9, 0.7, 0.5, 0.3];
-      let settledSignature: string | null = null;
-      let lastError: any = null;
-
-      for (const fraction of transferFractions) {
-        try {
-          const spendable = Math.max(0, currentLamports - MIGRATE_FEE_RESERVE_LAMPORTS);
-          const sendLamports = Math.floor(spendable * fraction);
-          if (sendLamports <= 0) continue;
-
-          const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-          const message = new TransactionMessage({
-            payerKey: fromPubkey,
-            recentBlockhash: blockhash,
-            instructions: [
-              SystemProgram.transfer({
-                fromPubkey,
-                toPubkey,
-                lamports: sendLamports,
-              }),
-            ],
-          }).compileToV0Message();
-          const tx = new VersionedTransaction(message);
-
-          const signed = (await provider.request({
-            method: "signAndSendTransaction",
-            params: {
-              transaction: tx,
-              connection,
-              options: { skipPreflight: false, maxRetries: 3 },
-            },
-          })) as { signature?: string };
-
-          if (!signed?.signature) {
-            throw new Error("Migration transaction signature missing.");
-          }
-
-          await connection.confirmTransaction(
-            { signature: signed.signature, blockhash, lastValidBlockHeight },
-            "confirmed"
-          );
-          settledSignature = signed.signature;
-          break;
-        } catch (error) {
-          lastError = error;
-          continue;
-        }
-      }
-
-      if (!settledSignature) {
-        throw lastError || new Error("Migration failed for all retry amounts.");
-      }
-
-      await loadBalance(tradingWalletAddress);
-      Alert.alert("Migration Success", `Tx: ${settledSignature}`);
-    } catch (error: any) {
-      Alert.alert("Migration Failed", error?.message || "Failed to migrate SOL.");
-    } finally {
-      setMigrating(false);
-    }
-  };
-
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
       <ScrollView
@@ -409,39 +305,6 @@ export default function WalletScreen() {
             >
               <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Refresh Balance</Text>
             </Pressable>
-
-            <View
-              style={{
-                marginTop: 10,
-                borderRadius: 10,
-                padding: 10,
-                borderWidth: 1,
-                borderColor: "#3a2d12",
-                backgroundColor: "#20180a",
-              }}
-            >
-              <Text style={{ color: "#f2cb7d", fontWeight: "700" }}>Temporary: migrate old Privy wallet SOL</Text>
-              <Text style={{ color: "#d6c7a7", marginTop: 6, fontSize: 11 }}>
-                Moves SOL from your previous embedded Privy wallet to this new trading wallet.
-              </Text>
-              <Pressable
-                onPress={() => void handleMigrateFromPrivyWallet()}
-                disabled={migrating}
-                style={{
-                  marginTop: 8,
-                  backgroundColor: "#3a2d12",
-                  borderRadius: 8,
-                  paddingVertical: 10,
-                  borderWidth: 1,
-                  borderColor: "#8a6b37",
-                  opacity: migrating ? 0.7 : 1,
-                }}
-              >
-                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
-                  {migrating ? "Migrating..." : "Migrate SOL To Trading Wallet"}
-                </Text>
-              </Pressable>
-            </View>
 
             <View
               style={{

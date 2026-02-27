@@ -1,13 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEmbeddedSolanaWallet } from '@privy-io/expo';
-import { Buffer } from 'buffer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -154,8 +151,8 @@ const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
 };
 
 export default function HomeScreen() {
-  const { twitterProfile, setTwitterProfile, walletAddress, getOrCreateEmbeddedWalletAddress } = useWalletContext();
-  const embeddedSolanaWallet = useEmbeddedSolanaWallet();
+  const { twitterProfile, setTwitterProfile, tradingWalletAddress, getOrCreateTradingWalletAddress } =
+    useWalletContext();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
   const connectInProgressRef = useRef(false);
   const [userId, setUserId] = useState<string>('');
@@ -306,7 +303,7 @@ export default function HomeScreen() {
 
   const refreshSwapBudget = useCallback(
     async (addressOverride?: string) => {
-      const targetAddress = addressOverride || walletAddress;
+      const targetAddress = addressOverride || tradingWalletAddress;
       if (!targetAddress || activeChain !== 'solana') {
         setWalletSolBalance(null);
         setSolPriceUsd(null);
@@ -339,7 +336,7 @@ export default function HomeScreen() {
         setSwapBudgetLoading(false);
       }
     },
-    [activeChain, walletAddress]
+    [activeChain, tradingWalletAddress]
   );
 
   useEffect(() => {
@@ -757,7 +754,7 @@ export default function HomeScreen() {
         throw new Error('On-chain swaps are currently enabled only for Solana feed.');
       }
 
-      const resolvedWalletAddress = walletAddress || (await getOrCreateEmbeddedWalletAddress());
+      const resolvedWalletAddress = tradingWalletAddress || (await getOrCreateTradingWalletAddress());
       if (!resolvedWalletAddress) {
         throw new Error('No wallet address found. Create wallet first from Wallet tab.');
       }
@@ -794,57 +791,33 @@ export default function HomeScreen() {
         );
       }
 
-      let provider: any = null;
-      if ('wallets' in embeddedSolanaWallet && Array.isArray(embeddedSolanaWallet.wallets) && embeddedSolanaWallet.wallets.length > 0) {
-        provider = await embeddedSolanaWallet.wallets[0].getProvider();
-      } else if ('create' in embeddedSolanaWallet && typeof embeddedSolanaWallet.create === 'function') {
-        provider = await embeddedSolanaWallet.create();
-      }
-
-      if (!provider || typeof provider.request !== 'function') {
-        throw new Error('Embedded Solana wallet provider is not ready.');
-      }
-
-      const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
       let lastError: any = null;
 
       for (const slippageBps of SWAP_SLIPPAGE_RETRY_BPS) {
         try {
-          const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
+          const resolvedUserId = (userId || '').trim() || (await getOrCreateLocalUserId());
+          const swapRes = await fetch(`${API_BASE}/api/trades/open`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              userPublicKey: resolvedWalletAddress,
-              inputMint: SOL_MINT,
-              outputMint: token.address,
+              userId: resolvedUserId,
+              tokenAddress: token.address,
               amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
               slippageBps,
             }),
           });
           const swapJson = await parseApiJson<{
             error?: string;
-            swapTransaction?: string;
+            signature?: string;
             quote?: { inAmount?: string; outAmount?: string; inputMint?: string; outputMint?: string };
           }>(swapRes);
-          if (!swapRes.ok || !swapJson?.swapTransaction) {
+          if (!swapRes.ok || !swapJson?.signature) {
             throw new Error(swapJson?.error || 'Failed to build Jupiter swap');
           }
-
-          const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
-          const signed = (await provider.request({
-            method: 'signAndSendTransaction',
-            params: {
-              transaction: tx,
-              connection,
-              options: { skipPreflight: false, maxRetries: 3 },
-            },
-          })) as { signature?: string };
-
-          const signature = typeof signed?.signature === 'string' ? signed.signature : '';
+          const signature = String(swapJson.signature || '');
           if (!signature) {
             throw new Error('Signed transaction was sent but no signature returned.');
           }
-          await connection.confirmTransaction(signature, 'confirmed');
           console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
             signature,
             slippageBps,
@@ -879,7 +852,7 @@ export default function HomeScreen() {
 
       throw lastError || new Error('Swap failed after retries');
     },
-    [activeChain, embeddedSolanaWallet, getOrCreateEmbeddedWalletAddress, tradeAmount, walletAddress]
+    [activeChain, getOrCreateLocalUserId, getOrCreateTradingWalletAddress, tradeAmount, tradingWalletAddress, userId]
   );
 
   const createOrder = useCallback(
