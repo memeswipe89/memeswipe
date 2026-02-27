@@ -714,24 +714,51 @@ const processAutoClose = async () => {
   }
 };
 
+const fetchDexFallbackFeed = async (limitRaw) => {
+  const limit = Number(limitRaw) || 50;
+  const safeLimit = Math.max(1, Math.min(100, limit));
+  const q = encodeURIComponent("pump fun solana");
+  const url = `https://api.dexscreener.com/latest/dex/search?q=${q}`;
+  const r = await fetch(url);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`Dex fallback failed: ${r.status} ${String(text).slice(0, 160)}`);
+  }
+  const json = await r.json();
+  const pairs = Array.isArray(json?.pairs) ? json.pairs : [];
+  const tokens = pairs
+    .filter((p) => String(p?.chainId || "").toLowerCase() === "solana")
+    .map((p) => ({
+      name: p?.baseToken?.name || p?.baseToken?.symbol || "Unknown",
+      symbol: p?.baseToken?.symbol || "",
+      address: p?.baseToken?.address || "",
+      priceUsd: Number(p?.priceUsd || 0) || 0,
+      liquidityUsd: Number(p?.liquidity?.usd || 0) || 0,
+      volume24hUsd: Number(p?.volume?.h24 || 0) || 0,
+      marketCapUsd: Number(p?.marketCap || 0) || 0,
+      change24hPct: Number(p?.priceChange?.h24 || 0) || 0,
+      graduatedAt: null,
+    }))
+    .filter((t) => t.address)
+    .sort((a, b) => b.liquidityUsd - a.liquidityUsd)
+    .slice(0, safeLimit);
+  return { tokens, cursor: null };
+};
+
 const fetchGraduatedFeed = async (req, res) => {
   try {
-    if (!process.env.MORALIS_API_KEY) {
-      return res.status(500).json({ error: "MORALIS_API_KEY is not configured" });
-    }
-
+    const limit = req.query.limit || 50;
+    const cursor = req.query.cursor ? String(req.query.cursor) : "";
     const now = Date.now();
-    if (now < moralisBlockedUntil) {
-      return res.status(429).json({
-        error: "Moralis feed temporarily blocked due to quota/rate limits",
-        blockedUntil: moralisBlockedUntil,
-        tokens: [],
-        cursor: null,
+    if (!process.env.MORALIS_API_KEY || now < moralisBlockedUntil) {
+      const fallback = await fetchDexFallbackFeed(limit);
+      return res.json({
+        ...fallback,
+        source: "dexscreener_fallback",
+        blockedUntil: moralisBlockedUntil || null,
       });
     }
 
-    const limit = req.query.limit || 50;
-    const cursor = req.query.cursor ? String(req.query.cursor) : "";
     const cacheKey = `graduated:${limit}:${cursor}`;
     const cached = feedCache.get(cacheKey);
     if (cached && now - cached.lastFetch < FEED_CACHE_TTL_MS) {
@@ -755,11 +782,11 @@ const fetchGraduatedFeed = async (req, res) => {
       if (r.status === 401 || r.status === 429 || lowerText.includes("quota")) {
         moralisBlockedUntil = Date.now() + QUOTA_BLOCK_MS;
       }
-      return res.status(r.status).json({
-        error: "Moralis request failed",
-        details: text || null,
-        tokens: [],
-        cursor: null,
+      const fallback = await fetchDexFallbackFeed(limit);
+      return res.status(200).json({
+        ...fallback,
+        source: "dexscreener_fallback",
+        moralisError: text || null,
       });
     }
 
@@ -776,21 +803,32 @@ const fetchGraduatedFeed = async (req, res) => {
     }));
 
     if (!tokens.length) {
+      const fallback = await fetchDexFallbackFeed(limit);
       return res.json({
-        tokens: [],
-        cursor: null,
+        ...fallback,
+        source: "dexscreener_fallback",
       });
     }
-    const payload = { tokens, cursor: data.cursor || null };
+    const payload = { tokens, cursor: data.cursor || null, source: "moralis" };
     feedCache.set(cacheKey, { payload, lastFetch: now });
     return res.json(payload);
   } catch (e) {
     console.error(e);
-    return res.status(500).json({
-      error: "Failed to fetch Moralis feed",
-      cursor: null,
-      tokens: [],
-    });
+    try {
+      const fallback = await fetchDexFallbackFeed(req.query.limit || 50);
+      return res.status(200).json({
+        ...fallback,
+        source: "dexscreener_fallback",
+        error: "Moralis failed, fallback in use",
+      });
+    } catch (fallbackError) {
+      return res.status(500).json({
+        error: "Failed to fetch feeds",
+        details: fallbackError?.message || String(fallbackError),
+        cursor: null,
+        tokens: [],
+      });
+    }
   }
 };
 
