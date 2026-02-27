@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 const crypto = require("crypto");
+const { Connection, Keypair, VersionedTransaction } = require("@solana/web3.js");
 require("dotenv").config();
 
 const { Pool } = require("pg");
@@ -37,6 +38,16 @@ const JUPITER_SWAP_URLS = [
 ];
 const TOKEN_PRICE_CACHE_TTL_MS = 20 * 1000;
 const tokenPriceCache = new Map();
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const AUTO_CLOSE_ENABLED = String(process.env.AUTO_CLOSE_ENABLED || "false").toLowerCase() === "true";
+const AUTO_CLOSE_INTERVAL_MS = Math.max(10_000, Number(process.env.AUTO_CLOSE_INTERVAL_MS || 30_000));
+const AUTO_CLOSE_SLIPPAGE_RETRY_BPS = [800, 1200, 2000, 3000, 5000];
+const AUTO_CLOSE_AMOUNT_BPS = [10000, 9800, 9000, 7500, 5000, 2500];
+const AUTO_CLOSE_OUTPUT_MINTS = [
+  SOL_MINT,
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+];
+let autoCloseRunning = false;
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -137,6 +148,9 @@ const ensureOrdersTable = async () => {
       await pool.query(`alter table orders add column if not exists output_mint text`);
       await pool.query(`alter table orders add column if not exists in_amount_raw text`);
       await pool.query(`alter table orders add column if not exists out_amount_raw text`);
+      await pool.query(`alter table orders add column if not exists close_price_usd numeric`);
+      await pool.query(`alter table orders add column if not exists close_pnl_usd numeric`);
+      await pool.query(`alter table orders add column if not exists close_pnl_pct numeric`);
     })();
   }
 
@@ -349,6 +363,224 @@ const fetchJupiterSwapTx = async (payload) => {
     }
   }
   throw lastError || new Error("Failed to build Jupiter swap transaction from all endpoints");
+};
+
+const parseBotSecretKey = () => {
+  const raw = process.env.BOT_WALLET_SECRET_KEY || "";
+  if (!raw) return null;
+  try {
+    if (raw.trim().startsWith("[")) {
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || !arr.length) return null;
+      return Uint8Array.from(arr.map((n) => Number(n)));
+    }
+    const parts = raw.split(",").map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+    if (!parts.length) return null;
+    return Uint8Array.from(parts);
+  } catch {
+    return null;
+  }
+};
+
+const getBotKeypair = () => {
+  const secret = parseBotSecretKey();
+  if (!secret || !secret.length) {
+    throw new Error("BOT_WALLET_SECRET_KEY is missing/invalid");
+  }
+  return Keypair.fromSecretKey(secret);
+};
+
+const getTokenPriceUsd = async (address) => {
+  const now = Date.now();
+  const cacheKey = String(address).toLowerCase();
+  const cached = tokenPriceCache.get(cacheKey);
+  if (cached && now - cached.ts < TOKEN_PRICE_CACHE_TTL_MS) {
+    return cached.price;
+  }
+
+  let price = null;
+  try {
+    const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`);
+    if (r.ok) {
+      const json = await r.json();
+      const pairs = Array.isArray(json?.pairs) ? json.pairs : [];
+      const solanaPairs = pairs.filter((p) => String(p?.chainId || "").toLowerCase() === "solana");
+      const best = (solanaPairs.length ? solanaPairs : pairs)[0];
+      const p = Number(best?.priceUsd);
+      if (Number.isFinite(p) && p > 0) price = p;
+    }
+  } catch {}
+
+  tokenPriceCache.set(cacheKey, { price, ts: now });
+  return price;
+};
+
+const getRawTokenBalance = async (connection, ownerPubkey, mint) => {
+  const resp = await connection.getParsedTokenAccountsByOwner(ownerPubkey, { mint });
+  return resp.value.reduce((sum, item) => {
+    const raw = item?.account?.data?.parsed?.info?.tokenAmount?.amount;
+    try {
+      return sum + BigInt(String(raw || "0"));
+    } catch {
+      return sum;
+    }
+  }, 0n);
+};
+
+const closeOrderRow = async (orderId, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct) => {
+  const statusOptions = ["closed", "filled", "cancelled"];
+  let lastError = null;
+  for (const status of statusOptions) {
+    try {
+      const r = await pool.query(
+        `
+        update orders
+        set status = $2,
+            closed_at = now(),
+            close_tx_signature = $3,
+            close_price_usd = $4,
+            close_pnl_usd = $5,
+            close_pnl_pct = $6
+        where id = $1
+          and status not in ('closed', 'cancelled')
+        returning *
+        `,
+        [orderId, status, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct]
+      );
+      if (r.rows.length) return r.rows[0];
+    } catch (error) {
+      lastError = error;
+      if (error?.code === "23514") continue;
+      throw error;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+};
+
+const processAutoClose = async () => {
+  if (!AUTO_CLOSE_ENABLED || autoCloseRunning) return;
+  autoCloseRunning = true;
+  try {
+    await ensureOrdersTable();
+    const bot = getBotKeypair();
+    const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+
+    const rows = await pool.query(
+      `
+      select *
+      from orders
+      where chain = 'solana'
+        and coalesce(close_tx_signature, '') = ''
+        and status not in ('closed', 'cancelled')
+      order by created_at asc
+      limit 25
+      `
+    );
+
+    for (const order of rows.rows) {
+      try {
+        const tokenAddress = String(order.token_address || "").trim();
+        const entryPriceUsd = Number(order.price_usd);
+        const tpRoi = Number(order.tp_roi);
+        const amountUsd = Number(order.amount_usd);
+        if (!tokenAddress || !Number.isFinite(entryPriceUsd) || entryPriceUsd <= 0) continue;
+        if (!Number.isFinite(tpRoi) || tpRoi <= 0) continue;
+
+        const livePriceUsd = await getTokenPriceUsd(tokenAddress);
+        if (!Number.isFinite(livePriceUsd) || livePriceUsd <= 0) continue;
+
+        const pnlPct = ((livePriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
+        if (!Number.isFinite(pnlPct) || pnlPct < tpRoi) continue;
+
+        const mintBalanceRaw = await getRawTokenBalance(connection, bot.publicKey, tokenAddress);
+        if (mintBalanceRaw <= 0n) continue;
+
+        let closeSig = null;
+        let lastError = null;
+
+        for (const outputMint of AUTO_CLOSE_OUTPUT_MINTS) {
+          for (const amountBps of AUTO_CLOSE_AMOUNT_BPS) {
+            const amountRaw = (mintBalanceRaw * BigInt(amountBps)) / 10000n;
+            if (amountRaw <= 0n) continue;
+            for (const slippageBps of AUTO_CLOSE_SLIPPAGE_RETRY_BPS) {
+              try {
+                const { json: quoteJson } = await fetchJupiterQuote({
+                  inputMint: tokenAddress,
+                  outputMint,
+                  amount: amountRaw.toString(),
+                  slippageBps: String(slippageBps),
+                  swapMode: "ExactIn",
+                });
+                if (!quoteJson?.outAmount) throw new Error("No route found");
+
+                const { json: swapJson } = await fetchJupiterSwapTx({
+                  quoteResponse: quoteJson,
+                  userPublicKey: bot.publicKey.toBase58(),
+                  wrapAndUnwrapSol: true,
+                  dynamicComputeUnitLimit: true,
+                  dynamicSlippage: true,
+                  prioritizationFeeLamports: "auto",
+                });
+                if (!swapJson?.swapTransaction) throw new Error("No swap transaction");
+
+                const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, "base64"));
+                tx.sign([bot]);
+                const signature = await connection.sendRawTransaction(tx.serialize(), {
+                  skipPreflight: false,
+                  maxRetries: 3,
+                });
+                await connection.confirmTransaction(signature, "confirmed");
+                closeSig = signature;
+                break;
+              } catch (error) {
+                lastError = error;
+                continue;
+              }
+            }
+            if (closeSig) break;
+          }
+          if (closeSig) break;
+        }
+
+        if (!closeSig) {
+          if (lastError) {
+            console.warn("[AUTO_CLOSE] close failed", {
+              orderId: order.id,
+              tokenAddress,
+              message: lastError?.message || String(lastError),
+            });
+          }
+          continue;
+        }
+
+        const realizedPnlUsd =
+          Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
+        await closeOrderRow(
+          order.id,
+          closeSig,
+          livePriceUsd,
+          Number.isFinite(realizedPnlUsd) ? realizedPnlUsd : null,
+          pnlPct
+        );
+        console.log("[AUTO_CLOSE] order closed", {
+          orderId: order.id,
+          tokenAddress,
+          closeSig,
+          pnlPct,
+        });
+      } catch (error) {
+        console.warn("[AUTO_CLOSE] order processing error", {
+          orderId: order?.id,
+          message: error?.message || String(error),
+        });
+      }
+    }
+  } catch (error) {
+    console.warn("[AUTO_CLOSE] loop error", error?.message || error);
+  } finally {
+    autoCloseRunning = false;
+  }
 };
 
 const fetchGraduatedFeed = async (req, res) => {
@@ -1173,9 +1405,32 @@ app.post("/api/favorites", async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-  
+
+app.get("/api/autoclose/status", (_req, res) => {
+  let botPubkey = null;
+  try {
+    botPubkey = getBotKeypair().publicKey.toBase58();
+  } catch {}
+  return res.json({
+    enabled: AUTO_CLOSE_ENABLED,
+    intervalMs: AUTO_CLOSE_INTERVAL_MS,
+    running: autoCloseRunning,
+    botPubkey,
+  });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on port ${PORT}`);
+  if (AUTO_CLOSE_ENABLED) {
+    console.log("[AUTO_CLOSE] enabled", { intervalMs: AUTO_CLOSE_INTERVAL_MS });
+    setTimeout(() => {
+      void processAutoClose();
+    }, 2500);
+    setInterval(() => {
+      void processAutoClose();
+    }, AUTO_CLOSE_INTERVAL_MS);
+  } else {
+    console.log("[AUTO_CLOSE] disabled");
+  }
 });
