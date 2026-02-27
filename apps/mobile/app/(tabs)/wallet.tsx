@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
@@ -268,7 +268,11 @@ export default function WalletScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
-      <View style={{ flex: 1 }}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 18 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
       {twitterProfile ? (
         <View
           style={{
@@ -510,7 +514,7 @@ export default function WalletScreen() {
           </Pressable>
         </View>
       )}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
