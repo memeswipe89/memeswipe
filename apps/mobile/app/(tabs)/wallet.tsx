@@ -391,6 +391,39 @@ export default function WalletScreen() {
                 borderRadius: 10,
                 padding: 10,
                 borderWidth: 1,
+                borderColor: "#3a2d12",
+                backgroundColor: "#20180a",
+              }}
+            >
+              <Text style={{ color: "#f2cb7d", fontWeight: "700" }}>Temporary: migrate old Privy wallet SOL</Text>
+              <Text style={{ color: "#d6c7a7", marginTop: 6, fontSize: 11 }}>
+                Moves SOL from your previous embedded Privy wallet to this new trading wallet.
+              </Text>
+              <Pressable
+                onPress={() => void handleMigrateFromPrivyWallet()}
+                disabled={migrating}
+                style={{
+                  marginTop: 8,
+                  backgroundColor: "#3a2d12",
+                  borderRadius: 8,
+                  paddingVertical: 10,
+                  borderWidth: 1,
+                  borderColor: "#8a6b37",
+                  opacity: migrating ? 0.7 : 1,
+                }}
+              >
+                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
+                  {migrating ? "Migrating..." : "Migrate SOL To Trading Wallet"}
+                </Text>
+              </Pressable>
+            </View>
+
+            <View
+              style={{
+                marginTop: 10,
+                borderRadius: 10,
+                padding: 10,
+                borderWidth: 1,
                 borderColor: "#2a2a2a",
                 backgroundColor: "#0f131a",
               }}
@@ -464,38 +497,6 @@ export default function WalletScreen() {
               </Pressable>
             </View>
 
-            <View
-              style={{
-                marginTop: 10,
-                borderRadius: 10,
-                padding: 10,
-                borderWidth: 1,
-                borderColor: "#3a2d12",
-                backgroundColor: "#20180a",
-              }}
-            >
-              <Text style={{ color: "#f2cb7d", fontWeight: "700" }}>Temporary: migrate old Privy wallet SOL</Text>
-              <Text style={{ color: "#d6c7a7", marginTop: 6, fontSize: 11 }}>
-                Moves SOL from your previous embedded Privy wallet to this new trading wallet.
-              </Text>
-              <Pressable
-                onPress={() => void handleMigrateFromPrivyWallet()}
-                disabled={migrating}
-                style={{
-                  marginTop: 8,
-                  backgroundColor: "#3a2d12",
-                  borderRadius: 8,
-                  paddingVertical: 10,
-                  borderWidth: 1,
-                  borderColor: "#8a6b37",
-                  opacity: migrating ? 0.7 : 1,
-                }}
-              >
-                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
-                  {migrating ? "Migrating..." : "Migrate SOL To Trading Wallet"}
-                </Text>
-              </Pressable>
-            </View>
           </View>
         </View>
       ) : (
