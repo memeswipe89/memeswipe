@@ -36,6 +36,7 @@ const QUOTA_BLOCK_MS = 60 * 60 * 1000;
 const feedCache = new Map();
 let moralisBlockedUntil = 0;
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const DEFAULT_SOL_USD_FALLBACK = Number(process.env.SOL_USD_FALLBACK || 200);
 const JUPITER_QUOTE_URLS = [
   "https://quote-api.jup.ag/v6/quote",
@@ -54,7 +55,7 @@ const AUTO_CLOSE_SLIPPAGE_RETRY_BPS = [800, 1200, 2000, 3000, 5000];
 const AUTO_CLOSE_AMOUNT_BPS = [10000, 9800, 9000, 7500, 5000, 2500];
 const AUTO_CLOSE_OUTPUT_MINTS = [
   SOL_MINT,
-  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  USDC_MINT,
 ];
 let autoCloseRunning = false;
 const TRADING_WALLET_TABLE = "trading_wallets";
@@ -320,18 +321,25 @@ const isAllowedReturnUrl = (value) => {
 };
 
 const getSolUsdPrice = async () => {
-  // 1) Jupiter price service (fast when reachable)
+  // 1) Jupiter quote endpoint: derive SOL/USD via SOL->USDC quote for 1 SOL.
   try {
-    const r = await fetch("https://price.jup.ag/v4/price?ids=SOL");
-    if (r.ok) {
-      const json = await r.json();
-      const price = Number(json?.data?.SOL?.price);
+    const amountOneSolLamports = "1000000000";
+    const { json } = await fetchJupiterQuote({
+      inputMint: SOL_MINT,
+      outputMint: USDC_MINT,
+      amount: amountOneSolLamports,
+      swapMode: "ExactIn",
+      slippageBps: "50",
+    });
+    if (json?.outAmount) {
+      const outUsdcMicro = Number(json.outAmount);
+      const price = outUsdcMicro / 1_000_000;
       if (Number.isFinite(price) && price > 0) {
-        return { price, source: "jupiter" };
+        return { price, source: "jupiter_quote" };
       }
     }
   } catch (error) {
-    console.warn("[PRICE] Jupiter SOL price failed:", error?.message || error);
+    console.warn("[PRICE] Jupiter SOL quote failed:", error?.message || error);
   }
 
   // 2) CoinGecko fallback
