@@ -544,7 +544,8 @@ const getTokenPriceUsd = async (address) => {
 };
 
 const getRawTokenBalance = async (connection, ownerPubkey, mint) => {
-  const resp = await connection.getParsedTokenAccountsByOwner(ownerPubkey, { mint });
+  const mintPubkey = mint instanceof PublicKey ? mint : new PublicKey(String(mint));
+  const resp = await connection.getParsedTokenAccountsByOwner(ownerPubkey, { mint: mintPubkey });
   return resp.value.reduce((sum, item) => {
     const raw = item?.account?.data?.parsed?.info?.tokenAmount?.amount;
     try {
