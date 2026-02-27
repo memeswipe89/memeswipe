@@ -586,6 +586,97 @@ const closeOrderRow = async (orderId, closeTxSignature, closePriceUsd, closePnlU
   return null;
 };
 
+const executeCloseSwapForOrder = async (connection, order, options = {}) => {
+  const force = Boolean(options.force);
+  const tokenAddress = String(order?.token_address || "").trim();
+  const entryPriceUsd = Number(order?.price_usd);
+  const tpRoi = Number(order?.tp_roi);
+  const stopLossPct = Number(order?.stop_loss);
+  const amountUsd = Number(order?.amount_usd);
+
+  if (!tokenAddress) return { skipped: true, reason: "missing_token" };
+  if (!Number.isFinite(entryPriceUsd) || entryPriceUsd <= 0) return { skipped: true, reason: "missing_entry_price" };
+
+  const livePriceUsd = await getTokenPriceUsd(tokenAddress);
+  if (!Number.isFinite(livePriceUsd) || livePriceUsd <= 0) {
+    return { skipped: true, reason: "missing_live_price" };
+  }
+
+  const pnlPct = ((livePriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
+  const tpHit = Number.isFinite(tpRoi) && tpRoi > 0 ? pnlPct >= tpRoi : false;
+  const slHit = Number.isFinite(stopLossPct) && stopLossPct > 0 ? pnlPct <= -Math.abs(stopLossPct) : false;
+  if (!force && !tpHit && !slHit) {
+    return { skipped: true, reason: "threshold_not_hit", pnlPct, livePriceUsd };
+  }
+
+  const ownerWallet = await getTradingWalletKeypair(order.user_id);
+  if (!ownerWallet) return { skipped: true, reason: "wallet_not_found", pnlPct, livePriceUsd };
+  const signer = ownerWallet.keypair;
+  const mintBalanceRaw = await getRawTokenBalance(connection, signer.publicKey, tokenAddress);
+  if (mintBalanceRaw <= 0n) return { skipped: true, reason: "zero_balance", pnlPct, livePriceUsd };
+
+  let closeSig = null;
+  let lastError = null;
+
+  for (const outputMint of AUTO_CLOSE_OUTPUT_MINTS) {
+    for (const amountBps of AUTO_CLOSE_AMOUNT_BPS) {
+      const amountRaw = (mintBalanceRaw * BigInt(amountBps)) / 10000n;
+      if (amountRaw <= 0n) continue;
+      for (const slippageBps of AUTO_CLOSE_SLIPPAGE_RETRY_BPS) {
+        try {
+          const { json: quoteJson } = await fetchJupiterQuote({
+            inputMint: tokenAddress,
+            outputMint,
+            amount: amountRaw.toString(),
+            slippageBps: String(slippageBps),
+            swapMode: "ExactIn",
+          });
+          if (!quoteJson?.outAmount) throw new Error("No route found");
+
+          const { json: swapJson } = await fetchJupiterSwapTx({
+            quoteResponse: quoteJson,
+            userPublicKey: signer.publicKey.toBase58(),
+            wrapAndUnwrapSol: true,
+            dynamicComputeUnitLimit: true,
+            dynamicSlippage: true,
+            prioritizationFeeLamports: "auto",
+          });
+          if (!swapJson?.swapTransaction) throw new Error("No swap transaction");
+
+          const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, "base64"));
+          tx.sign([signer]);
+          const signature = await connection.sendRawTransaction(tx.serialize(), {
+            skipPreflight: false,
+            maxRetries: 3,
+          });
+          await connection.confirmTransaction(signature, "confirmed");
+          closeSig = signature;
+          break;
+        } catch (error) {
+          lastError = error;
+          continue;
+        }
+      }
+      if (closeSig) break;
+    }
+    if (closeSig) break;
+  }
+
+  if (!closeSig) {
+    throw lastError || new Error("Unable to close route");
+  }
+
+  const realizedPnlUsd = Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
+  const updated = await closeOrderRow(
+    order.id,
+    closeSig,
+    livePriceUsd,
+    Number.isFinite(realizedPnlUsd) ? realizedPnlUsd : null,
+    pnlPct
+  );
+  return { skipped: false, closeSig, pnlPct, livePriceUsd, updated };
+};
+
 const processAutoClose = async () => {
   if (!AUTO_CLOSE_ENABLED || autoCloseRunning) return;
   autoCloseRunning = true;
@@ -608,97 +699,13 @@ const processAutoClose = async () => {
 
     for (const order of rows.rows) {
       try {
-        const tokenAddress = String(order.token_address || "").trim();
-        const entryPriceUsd = Number(order.price_usd);
-        const tpRoi = Number(order.tp_roi);
-        const amountUsd = Number(order.amount_usd);
-        if (!tokenAddress || !Number.isFinite(entryPriceUsd) || entryPriceUsd <= 0) continue;
-        if (!Number.isFinite(tpRoi) || tpRoi <= 0) continue;
-
-        const livePriceUsd = await getTokenPriceUsd(tokenAddress);
-        if (!Number.isFinite(livePriceUsd) || livePriceUsd <= 0) continue;
-
-        const pnlPct = ((livePriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
-        if (!Number.isFinite(pnlPct) || pnlPct < tpRoi) continue;
-
-        const ownerWallet = await getTradingWalletKeypair(order.user_id);
-        if (!ownerWallet) continue;
-        const signer = ownerWallet.keypair;
-        const mintBalanceRaw = await getRawTokenBalance(connection, signer.publicKey, tokenAddress);
-        if (mintBalanceRaw <= 0n) continue;
-
-        let closeSig = null;
-        let lastError = null;
-
-        for (const outputMint of AUTO_CLOSE_OUTPUT_MINTS) {
-          for (const amountBps of AUTO_CLOSE_AMOUNT_BPS) {
-            const amountRaw = (mintBalanceRaw * BigInt(amountBps)) / 10000n;
-            if (amountRaw <= 0n) continue;
-            for (const slippageBps of AUTO_CLOSE_SLIPPAGE_RETRY_BPS) {
-              try {
-                const { json: quoteJson } = await fetchJupiterQuote({
-                  inputMint: tokenAddress,
-                  outputMint,
-                  amount: amountRaw.toString(),
-                  slippageBps: String(slippageBps),
-                  swapMode: "ExactIn",
-                });
-                if (!quoteJson?.outAmount) throw new Error("No route found");
-
-                const { json: swapJson } = await fetchJupiterSwapTx({
-                  quoteResponse: quoteJson,
-                  userPublicKey: signer.publicKey.toBase58(),
-                  wrapAndUnwrapSol: true,
-                  dynamicComputeUnitLimit: true,
-                  dynamicSlippage: true,
-                  prioritizationFeeLamports: "auto",
-                });
-                if (!swapJson?.swapTransaction) throw new Error("No swap transaction");
-
-                const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, "base64"));
-                tx.sign([signer]);
-                const signature = await connection.sendRawTransaction(tx.serialize(), {
-                  skipPreflight: false,
-                  maxRetries: 3,
-                });
-                await connection.confirmTransaction(signature, "confirmed");
-                closeSig = signature;
-                break;
-              } catch (error) {
-                lastError = error;
-                continue;
-              }
-            }
-            if (closeSig) break;
-          }
-          if (closeSig) break;
-        }
-
-        if (!closeSig) {
-          if (lastError) {
-            console.warn("[AUTO_CLOSE] close failed", {
-              orderId: order.id,
-              tokenAddress,
-              message: lastError?.message || String(lastError),
-            });
-          }
-          continue;
-        }
-
-        const realizedPnlUsd =
-          Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
-        await closeOrderRow(
-          order.id,
-          closeSig,
-          livePriceUsd,
-          Number.isFinite(realizedPnlUsd) ? realizedPnlUsd : null,
-          pnlPct
-        );
+        const result = await executeCloseSwapForOrder(connection, order, { force: false });
+        if (result?.skipped) continue;
         console.log("[AUTO_CLOSE] order closed", {
           orderId: order.id,
-          tokenAddress,
-          closeSig,
-          pnlPct,
+          tokenAddress: order.token_address,
+          closeSig: result.closeSig,
+          pnlPct: result.pnlPct,
         });
       } catch (error) {
         console.warn("[AUTO_CLOSE] order processing error", {
@@ -713,6 +720,50 @@ const processAutoClose = async () => {
     autoCloseRunning = false;
   }
 };
+
+app.post("/api/trades/close", async (req, res) => {
+  try {
+    await ensureOrdersTable();
+    await ensureTradingWalletsTable();
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    const orderId = Number(req.body?.orderId);
+    if (!userId || !Number.isFinite(orderId) || orderId <= 0) {
+      return res.status(400).json({ error: "userId and orderId are required" });
+    }
+
+    const row = await pool.query(
+      `
+      select * from orders
+      where id = $1 and user_id = $2
+      limit 1
+      `,
+      [orderId, userId]
+    );
+    if (!row.rows.length) return res.status(404).json({ error: "Order not found" });
+    const order = row.rows[0];
+    if (String(order.status || "").toLowerCase() === "closed" && order.close_tx_signature) {
+      return res.json({ success: true, order, alreadyClosed: true });
+    }
+
+    const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+    const result = await executeCloseSwapForOrder(connection, order, { force: true });
+    if (result?.skipped) {
+      return res.status(400).json({ error: `Unable to close trade: ${result.reason || "unknown"}` });
+    }
+
+    const refreshed = await pool.query(`select * from orders where id = $1 limit 1`, [orderId]);
+    return res.json({
+      success: true,
+      order: refreshed.rows[0] || null,
+      closeTxSignature: result.closeSig,
+      pnlPct: result.pnlPct,
+      closePriceUsd: result.livePriceUsd,
+    });
+  } catch (err) {
+    console.error("Manual trade close error:", err);
+    return res.status(500).json({ error: err.message || "Failed to close trade" });
+  }
+});
 
 const fetchDexFallbackFeed = async (limitRaw) => {
   const limit = Number(limitRaw) || 50;

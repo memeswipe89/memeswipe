@@ -1,24 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEmbeddedSolanaWallet } from '@privy-io/expo';
-import { Buffer } from 'buffer';
-import { Connection, VersionedTransaction } from '@solana/web3.js';
 import * as Linking from 'expo-linking';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { useWalletContext } from '@/contexts/wallet-context';
 import { addBalance } from '@/lib/devWallet';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
-const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const CLOSE_OUTPUT_MINTS = [SOL_MINT, USDC_MINT];
-const FORCE_CLOSE_ON_SWAP_FAILURE = false;
-const CLOSE_SLIPPAGE_RETRY_BPS = [1200, 2500, 4000, 5000];
-const CLOSE_AMOUNT_BPS_RETRY = [9800, 9000, 7500, 5000, 2500, 1000];
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
   try {
@@ -77,8 +66,6 @@ const getLivePnl = (trade: TradeItem) => {
 };
 
 export default function TradesScreen() {
-  const { getOrCreateEmbeddedWalletAddress } = useWalletContext();
-  const embeddedSolanaWallet = useEmbeddedSolanaWallet();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
@@ -266,133 +253,14 @@ export default function TradesScreen() {
         setClosingId(orderId);
         const resolvedUserId = userId || (await AsyncStorage.getItem(LOCAL_USER_ID_KEY)) || '';
         if (!resolvedUserId) throw new Error('User id not found');
-
-        // Attempt real close swap first for Solana trades when we have the token mint.
-        let closeTxSignature: string | null = null;
-        const needsOnchainClose = !trade.closeTxSignature;
-        if (needsOnchainClose && trade.chain === 'solana' && trade.tokenAddress) {
-          try {
-            const walletAddress = await getOrCreateEmbeddedWalletAddress();
-            let provider: any = null;
-            if ('wallets' in embeddedSolanaWallet && Array.isArray(embeddedSolanaWallet.wallets) && embeddedSolanaWallet.wallets.length > 0) {
-              provider = await embeddedSolanaWallet.wallets[0].getProvider();
-            } else if ('create' in embeddedSolanaWallet && typeof embeddedSolanaWallet.create === 'function') {
-              provider = await embeddedSolanaWallet.create();
-            }
-            if (!provider || typeof provider.request !== 'function') {
-              throw new Error('Embedded wallet provider unavailable for closing trade');
-            }
-
-            const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
-
-            // Use the actual wallet token balance for this mint.
-            const balRes = await fetch(SOLANA_MAINNET_RPC, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                jsonrpc: '2.0',
-                id: 1,
-                method: 'getTokenAccountsByOwner',
-                params: [
-                  walletAddress,
-                  { mint: trade.tokenAddress },
-                  { encoding: 'jsonParsed' },
-                ],
-              }),
-            });
-            const balJson = await parseApiJson<{
-              result?: { value?: { account?: { data?: { parsed?: { info?: { tokenAmount?: { amount?: string } } } } } }[] };
-            }>(balRes);
-            const tokenRawTotal = (balJson?.result?.value || []).reduce((sum, item) => {
-              const raw = String(item?.account?.data?.parsed?.info?.tokenAmount?.amount || '0');
-              try {
-                return sum + BigInt(raw);
-              } catch {
-                return sum;
-              }
-            }, 0n);
-            if (tokenRawTotal <= 0n) {
-              throw new Error('No token balance available to close on-chain.');
-            }
-
-            let lastCloseError: any = null;
-            for (const outputMint of CLOSE_OUTPUT_MINTS) {
-              for (const amountBps of CLOSE_AMOUNT_BPS_RETRY) {
-                const closeAmountRaw = String((tokenRawTotal * BigInt(amountBps)) / 10000n);
-                if (BigInt(closeAmountRaw) <= 0n) continue;
-
-                for (const slippageBps of CLOSE_SLIPPAGE_RETRY_BPS) {
-                  try {
-                    const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        userPublicKey: walletAddress,
-                        inputMint: trade.tokenAddress,
-                        outputMint,
-                        amountRaw: closeAmountRaw,
-                        slippageBps,
-                      }),
-                    });
-                    const swapJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(swapRes);
-                    if (!swapRes.ok || !swapJson?.swapTransaction) {
-                      throw new Error(swapJson?.error || 'Failed to build close swap');
-                    }
-
-                    const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, 'base64'));
-                    const signed = (await provider.request({
-                      method: 'signAndSendTransaction',
-                      params: {
-                        transaction: tx,
-                        connection,
-                        options: { skipPreflight: false, maxRetries: 3 },
-                      },
-                    })) as { signature?: string };
-                    if (!signed?.signature) {
-                      throw new Error('No close transaction signature returned');
-                    }
-                    closeTxSignature = signed.signature;
-                    await connection.confirmTransaction(closeTxSignature, 'confirmed');
-                    break;
-                  } catch (e: any) {
-                    lastCloseError = e;
-                    continue;
-                  }
-                }
-                if (closeTxSignature) {
-                  break;
-                }
-              }
-              if (closeTxSignature) {
-                break;
-              }
-            }
-
-            if (!closeTxSignature) {
-              throw lastCloseError || new Error('Close swap failed for all retry attempts');
-            }
-          } catch (swapError: any) {
-            console.log('[TRADES][CLOSE] on-chain close swap failed', {
-              orderId,
-              tokenAddress: trade.tokenAddress,
-              message: swapError?.message || String(swapError),
-            });
-            if (!FORCE_CLOSE_ON_SWAP_FAILURE) {
-              throw swapError;
-            }
-            // Emergency mode: allow closing the DB trade even if swap fails.
-          }
-        } else if (needsOnchainClose) {
-          throw new Error('Trade cannot be closed on-chain: missing token chain/address.');
-        }
-
-        const res = await fetch(`${API_BASE}/api/orders/${encodeURIComponent(orderId)}/close`, {
-          method: 'PATCH',
+        const res = await fetch(`${API_BASE}/api/trades/close`, {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: resolvedUserId, closeTxSignature }),
+          body: JSON.stringify({ userId: resolvedUserId, orderId }),
         });
-        const json = await parseApiJson<{ error?: string }>(res);
+        const json = await parseApiJson<{ error?: string; closeTxSignature?: string }>(res);
         if (!res.ok) throw new Error(json?.error || 'Failed to close trade');
+        const closeTxSignature = typeof json?.closeTxSignature === 'string' ? json.closeTxSignature : null;
 
         setTrades((prev) =>
           prev.map((t) =>
@@ -415,7 +283,7 @@ export default function TradesScreen() {
         setClosingId(null);
       }
     },
-    [embeddedSolanaWallet, getOrCreateEmbeddedWalletAddress, userId]
+    [userId]
   );
 
   const filtered = useMemo(() => {
