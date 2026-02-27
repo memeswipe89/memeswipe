@@ -50,7 +50,7 @@ const TOKEN_PRICE_CACHE_TTL_MS = 20 * 1000;
 const tokenPriceCache = new Map();
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const AUTO_CLOSE_ENABLED = String(process.env.AUTO_CLOSE_ENABLED || "false").toLowerCase() === "true";
-const AUTO_CLOSE_INTERVAL_MS = Math.max(10_000, Number(process.env.AUTO_CLOSE_INTERVAL_MS || 30_000));
+const AUTO_CLOSE_INTERVAL_MS = Math.max(5_000, Number(process.env.AUTO_CLOSE_INTERVAL_MS || 10_000));
 const AUTO_CLOSE_SLIPPAGE_RETRY_BPS = [800, 1200, 2000, 3000, 5000];
 const AUTO_CLOSE_AMOUNT_BPS = [10000, 9800, 9000, 7500, 5000, 2500];
 const AUTO_CLOSE_OUTPUT_MINTS = [
@@ -162,6 +162,8 @@ const ensureOrdersTable = async () => {
       await pool.query(`alter table orders add column if not exists close_price_usd numeric`);
       await pool.query(`alter table orders add column if not exists close_pnl_usd numeric`);
       await pool.query(`alter table orders add column if not exists close_pnl_pct numeric`);
+      await pool.query(`alter table orders add column if not exists close_reason text`);
+      await pool.query(`alter table orders add column if not exists close_trigger_pct numeric`);
     })();
   }
 
@@ -556,7 +558,15 @@ const getRawTokenBalance = async (connection, ownerPubkey, mint) => {
   }, 0n);
 };
 
-const closeOrderRow = async (orderId, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct) => {
+const closeOrderRow = async (
+  orderId,
+  closeTxSignature,
+  closePriceUsd,
+  closePnlUsd,
+  closePnlPct,
+  closeReason,
+  closeTriggerPct
+) => {
   const statusOptions = ["closed", "filled", "cancelled"];
   let lastError = null;
   for (const status of statusOptions) {
@@ -569,12 +579,14 @@ const closeOrderRow = async (orderId, closeTxSignature, closePriceUsd, closePnlU
             close_tx_signature = $3,
             close_price_usd = $4,
             close_pnl_usd = $5,
-            close_pnl_pct = $6
+            close_pnl_pct = $6,
+            close_reason = $7,
+            close_trigger_pct = $8
         where id = $1
           and status not in ('closed', 'cancelled')
         returning *
         `,
-        [orderId, status, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct]
+        [orderId, status, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct, closeReason, closeTriggerPct]
       );
       if (r.rows.length) return r.rows[0];
     } catch (error) {
@@ -668,14 +680,18 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
   }
 
   const realizedPnlUsd = Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
+  const closeReason = force ? "manual" : tpHit ? "tp" : slHit ? "sl" : "unknown";
+  const closeTriggerPct = force ? null : tpHit ? tpRoi : slHit ? -Math.abs(stopLossPct) : null;
   const updated = await closeOrderRow(
     order.id,
     closeSig,
     livePriceUsd,
     Number.isFinite(realizedPnlUsd) ? realizedPnlUsd : null,
-    pnlPct
+    pnlPct,
+    closeReason,
+    closeTriggerPct
   );
-  return { skipped: false, closeSig, pnlPct, livePriceUsd, updated };
+  return { skipped: false, closeSig, pnlPct, livePriceUsd, closeReason, closeTriggerPct, updated };
 };
 
 const processAutoClose = async () => {

@@ -37,6 +37,8 @@ type TradeItem = {
   outAmountRaw: string | null;
   txSignature: string | null;
   closeTxSignature: string | null;
+  closeReason: 'tp' | 'sl' | 'manual' | 'unknown' | null;
+  closeTriggerPct: number | null;
   entryPriceUsd: number | null;
   livePriceUsd: number | null;
 };
@@ -109,6 +111,8 @@ export default function TradesScreen() {
           out_amount_raw?: string | null;
           tx_signature?: string | null;
           close_tx_signature?: string | null;
+          close_reason?: string | null;
+          close_trigger_pct?: number | string | null;
           price_usd?: number | string | null;
         }[];
         error?: string;
@@ -132,9 +136,11 @@ export default function TradesScreen() {
             in_amount_raw?: string | null;
             out_amount_raw?: string | null;
             tx_signature?: string | null;
-            close_tx_signature?: string | null;
-            price_usd?: number | string | null;
-          }[];
+          close_tx_signature?: string | null;
+          close_reason?: string | null;
+          close_trigger_pct?: number | string | null;
+          price_usd?: number | string | null;
+        }[];
         }>(fallbackRes);
         if (fallbackRes.ok && Array.isArray(fallbackJson.orders)) {
           sourceOrders = fallbackJson.orders;
@@ -165,6 +171,19 @@ export default function TradesScreen() {
           outAmountRaw: typeof order.out_amount_raw === 'string' ? order.out_amount_raw : null,
           txSignature: typeof order.tx_signature === 'string' ? order.tx_signature : null,
           closeTxSignature: typeof order.close_tx_signature === 'string' ? order.close_tx_signature : null,
+          closeReason:
+            order.close_reason === 'tp' || order.close_reason === 'sl' || order.close_reason === 'manual'
+              ? order.close_reason
+              : order.close_reason
+                ? 'unknown'
+                : null,
+          closeTriggerPct:
+            order.close_trigger_pct == null
+              ? null
+              : (() => {
+                  const v = toNumber(order.close_trigger_pct, Number.NaN);
+                  return Number.isFinite(v) ? v : null;
+                })(),
           entryPriceUsd: entryPrice > 0 ? entryPrice : null,
           livePriceUsd: null,
         };
@@ -385,6 +404,14 @@ export default function TradesScreen() {
               <Text style={[styles.meta, livePnlPct !== null ? (livePnlPct >= 0 ? styles.green : styles.red) : null]}>
                 PnL %: {livePnlPct === null ? '--' : `${livePnlPct >= 0 ? '+' : ''}${livePnlPct.toFixed(2)}%`}
               </Text>
+              {item.status === 'closed' && item.closeReason ? (
+                <Text style={styles.meta}>
+                  Closed by {item.closeReason.toUpperCase()}
+                  {Number.isFinite(item.closeTriggerPct || Number.NaN)
+                    ? ` (${(item.closeTriggerPct as number) > 0 ? '+' : ''}${(item.closeTriggerPct as number).toFixed(2)}%)`
+                    : ''}
+                </Text>
+              ) : null}
               {item.txSignature ? (
                 <Pressable onPress={() => void openSolscanTx(item.txSignature as string)} style={styles.linkBtn}>
                   <Text style={styles.linkBtnText}>View Open Tx</Text>
