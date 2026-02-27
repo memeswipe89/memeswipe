@@ -9,7 +9,7 @@ import { Connection, PublicKey, SystemProgram, TransactionMessage, VersionedTran
 import { useWalletContext } from "@/contexts/wallet-context";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
-const MIGRATE_FEE_RESERVE_LAMPORTS = 15000;
+const MIGRATE_FEE_RESERVE_LAMPORTS = 30000;
 
 const getSolBalance = async (address: string): Promise<number> => {
   const response = await fetch(MAINNET_RPC_URL, {
@@ -221,44 +221,65 @@ export default function WalletScreen() {
       const toPubkey = new PublicKey(tradingWalletAddress);
 
       const currentLamports = await connection.getBalance(fromPubkey, "confirmed");
-      const sendLamports = currentLamports - MIGRATE_FEE_RESERVE_LAMPORTS;
-      if (sendLamports <= 0) {
+      if (currentLamports <= MIGRATE_FEE_RESERVE_LAMPORTS) {
         throw new Error("Not enough SOL in old wallet to migrate after fees.");
       }
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const message = new TransactionMessage({
-        payerKey: fromPubkey,
-        recentBlockhash: blockhash,
-        instructions: [
-          SystemProgram.transfer({
-            fromPubkey,
-            toPubkey,
-            lamports: sendLamports,
-          }),
-        ],
-      }).compileToV0Message();
-      const tx = new VersionedTransaction(message);
+      const transferFractions = [0.9, 0.7, 0.5, 0.3];
+      let settledSignature: string | null = null;
+      let lastError: any = null;
 
-      const signed = (await provider.request({
-        method: "signAndSendTransaction",
-        params: {
-          transaction: tx,
-          connection,
-          options: { skipPreflight: false, maxRetries: 3 },
-        },
-      })) as { signature?: string };
+      for (const fraction of transferFractions) {
+        try {
+          const spendable = Math.max(0, currentLamports - MIGRATE_FEE_RESERVE_LAMPORTS);
+          const sendLamports = Math.floor(spendable * fraction);
+          if (sendLamports <= 0) continue;
 
-      if (!signed?.signature) {
-        throw new Error("Migration transaction signature missing.");
+          const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+          const message = new TransactionMessage({
+            payerKey: fromPubkey,
+            recentBlockhash: blockhash,
+            instructions: [
+              SystemProgram.transfer({
+                fromPubkey,
+                toPubkey,
+                lamports: sendLamports,
+              }),
+            ],
+          }).compileToV0Message();
+          const tx = new VersionedTransaction(message);
+
+          const signed = (await provider.request({
+            method: "signAndSendTransaction",
+            params: {
+              transaction: tx,
+              connection,
+              options: { skipPreflight: false, maxRetries: 3 },
+            },
+          })) as { signature?: string };
+
+          if (!signed?.signature) {
+            throw new Error("Migration transaction signature missing.");
+          }
+
+          await connection.confirmTransaction(
+            { signature: signed.signature, blockhash, lastValidBlockHeight },
+            "confirmed"
+          );
+          settledSignature = signed.signature;
+          break;
+        } catch (error) {
+          lastError = error;
+          continue;
+        }
       }
 
-      await connection.confirmTransaction(
-        { signature: signed.signature, blockhash, lastValidBlockHeight },
-        "confirmed"
-      );
+      if (!settledSignature) {
+        throw lastError || new Error("Migration failed for all retry amounts.");
+      }
+
       await loadBalance(tradingWalletAddress);
-      Alert.alert("Migration Success", `Tx: ${signed.signature}`);
+      Alert.alert("Migration Success", `Tx: ${settledSignature}`);
     } catch (error: any) {
       Alert.alert("Migration Failed", error?.message || "Failed to migrate SOL.");
     } finally {
