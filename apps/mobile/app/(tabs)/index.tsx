@@ -34,11 +34,20 @@ const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
 const MIN_TRADE_AMOUNT_USD = 0.0001;
 const MAX_TRADE_AMOUNT_USD = 500;
+const MIN_PERCENT = 0.1;
 type FavoriteToken = {
   address: string;
   name: string;
   symbol: string;
   chain: string;
+};
+type TradeOpenPopupState = {
+  visible: boolean;
+  tokenName: string;
+  tokenSymbol: string;
+  amountUsd: number;
+  tpRoi: number;
+  txSignature: string;
 };
 type RemoteSegment = Exclude<FeedSegment, 'favorites'>;
 
@@ -188,6 +197,14 @@ export default function HomeScreen() {
   const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const [swapBudgetLoading, setSwapBudgetLoading] = useState(false);
+  const [tradeOpenPopup, setTradeOpenPopup] = useState<TradeOpenPopupState>({
+    visible: false,
+    tokenName: '',
+    tokenSymbol: '',
+    amountUsd: 0,
+    tpRoi: 0,
+    txSignature: '',
+  });
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI } = useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
   const lastFeedFetchRef = useRef(0);
@@ -470,7 +487,7 @@ export default function HomeScreen() {
   }, [tradeAmount]);
 
   useEffect(() => {
-    void AsyncStorage.setItem(LAST_ROI_KEY, String(Math.max(1, tpROI)));
+    void AsyncStorage.setItem(LAST_ROI_KEY, String(Math.max(MIN_PERCENT, tpROI)));
   }, [tpROI]);
 
   useEffect(() => {
@@ -873,7 +890,7 @@ export default function HomeScreen() {
       const amount = Number.isFinite(tradeAmount)
         ? Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount)
         : MIN_TRADE_AMOUNT_USD;
-      const targetRoi = Number.isFinite(tpROI) ? Math.max(1, tpROI) : 1;
+      const targetRoi = Number.isFinite(tpROI) ? Math.max(MIN_PERCENT, tpROI) : MIN_PERCENT;
 
       try {
         setCreatingOrder(true);
@@ -976,6 +993,14 @@ export default function HomeScreen() {
           Alert.alert('Order Failed', `Unable to execute ${token.symbol.toUpperCase()} order.`);
           return;
         }
+        setTradeOpenPopup({
+          visible: true,
+          tokenName: token.name,
+          tokenSymbol: token.symbol.toUpperCase(),
+          amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
+          tpRoi: Number.isFinite(tpROI) ? tpROI : 0,
+          txSignature: swapMeta?.signature || '',
+        });
         hideToken(token.address);
 
         setFavoriteTokens((prev) => {
@@ -986,7 +1011,7 @@ export default function HomeScreen() {
         });
       })();
     },
-    [createOrder, executeJupiterSwap, hideToken, persistFavorites]
+    [createOrder, executeJupiterSwap, hideToken, persistFavorites, tpROI, tradeAmount]
   );
 
   const openDevWalletControls = useCallback(() => {
@@ -1021,7 +1046,8 @@ export default function HomeScreen() {
   const updateTpRoi = useCallback(
     (delta: number) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      setTpROI(Math.max(1, Math.min(200, tpROI + delta)));
+      const next = Math.max(MIN_PERCENT, Math.min(200, tpROI + delta));
+      setTpROI(Number(next.toFixed(2)));
     },
     [setTpROI, tpROI]
   );
@@ -1049,6 +1075,14 @@ export default function HomeScreen() {
     const visible = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address)));
     setTokens(visible);
   }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache]);
+
+  useEffect(() => {
+    if (!tradeOpenPopup.visible) return;
+    const timer = setTimeout(() => {
+      setTradeOpenPopup((prev) => ({ ...prev, visible: false }));
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [tradeOpenPopup.visible]);
 
   if (checkingTwitter) {
     return (
@@ -1118,9 +1152,9 @@ export default function HomeScreen() {
                   label="ROI"
                   value={tpROI}
                   suffix="%"
-                  onMinus={() => updateTpRoi(-1)}
-                  onPlus={() => updateTpRoi(1)}
-                  onCommit={(v) => setTpROI(Math.max(1, Math.min(200, v)))}
+                  onMinus={() => updateTpRoi(-0.1)}
+                  onPlus={() => updateTpRoi(0.1)}
+                  onCommit={(v) => setTpROI(Math.max(MIN_PERCENT, Math.min(200, v)))}
                 />
               </View>
             </View>
@@ -1188,6 +1222,34 @@ export default function HomeScreen() {
         <ProfileSheet ref={profileSheetRef} />
         <SwipeHint visible={showSwipeHint} />
         <AppLoader visible={appLoading} />
+        {tradeOpenPopup.visible ? (
+          <View style={styles.tradePopupOverlay} pointerEvents="box-none">
+            <View style={styles.tradePopupCard}>
+              <LinearGradient
+                colors={['rgba(74,222,128,0.24)', 'rgba(56,189,248,0.16)']}
+                style={styles.tradePopupGlow}
+              />
+              <Text style={styles.tradePopupTitle}>Trade Opened</Text>
+              <Text style={styles.tradePopupText}>
+                {tradeOpenPopup.tokenName} ({tradeOpenPopup.tokenSymbol})
+              </Text>
+              <Text style={styles.tradePopupMeta}>
+                Amount ${tradeOpenPopup.amountUsd.toFixed(4)} | TP {tradeOpenPopup.tpRoi.toFixed(2)}%
+              </Text>
+              {tradeOpenPopup.txSignature ? (
+                <Text style={styles.tradePopupSig}>
+                  Tx: {tradeOpenPopup.txSignature.slice(0, 8)}...{tradeOpenPopup.txSignature.slice(-8)}
+                </Text>
+              ) : null}
+              <Pressable
+                style={styles.tradePopupButton}
+                onPress={() => setTradeOpenPopup((prev) => ({ ...prev, visible: false }))}
+              >
+                <Text style={styles.tradePopupButtonText}>Awesome</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
       </SafeAreaView>
     </GestureHandlerRootView>
   );
@@ -1316,6 +1378,61 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     paddingHorizontal: 8,
   },
+  tradePopupOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(3,7,12,0.58)',
+    paddingHorizontal: 20,
+    zIndex: 90,
+  },
+  tradePopupCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(8,14,28,0.98)',
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    gap: 8,
+    overflow: 'hidden',
+  },
+  tradePopupGlow: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  tradePopupTitle: {
+    color: '#7ff2a9',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  tradePopupText: {
+    color: '#e8f2ff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  tradePopupMeta: {
+    color: '#a9c2ea',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  tradePopupSig: {
+    color: '#7ca3d8',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  tradePopupButton: {
+    marginTop: 8,
+    borderRadius: 12,
+    backgroundColor: '#dff0ff',
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  tradePopupButtonText: {
+    color: '#112644',
+    fontSize: 15,
+    fontWeight: '800',
+  },
 });
 
 const GlassControlPill = ({
@@ -1337,8 +1454,8 @@ const GlassControlPill = ({
   const isDollar = suffix === '$';
   const formatAmount = useCallback((n: number) => {
     if (!Number.isFinite(n)) return '0';
-    if (!isDollar) return String(Math.round(n));
-    return n.toFixed(4).replace(/\.?0+$/, '');
+    if (isDollar) return n.toFixed(4).replace(/\.?0+$/, '');
+    return n.toFixed(2).replace(/\.?0+$/, '');
   }, [isDollar]);
   const [draft, setDraft] = useState(formatAmount(value));
 
@@ -1349,7 +1466,7 @@ const GlassControlPill = ({
   const commit = () => {
     const normalizedDraft = isDollar ? draft.replace(/[^0-9.]/g, '') : draft;
     const next = Number(normalizedDraft);
-    onCommit(Number.isFinite(next) ? next : isDollar ? MIN_TRADE_AMOUNT_USD : 1);
+    onCommit(Number.isFinite(next) ? next : isDollar ? MIN_TRADE_AMOUNT_USD : MIN_PERCENT);
     setEditing(false);
   };
 
@@ -1373,7 +1490,7 @@ const GlassControlPill = ({
             />
           ) : (
             <Text style={styles.controlValue}>
-              {isDollar ? `${suffix}${formatAmount(value)}` : `${Math.round(value)}${suffix}`}
+              {isDollar ? `${suffix}${formatAmount(value)}` : `${formatAmount(value)}${suffix}`}
             </Text>
           )}
         </Pressable>

@@ -717,7 +717,17 @@ const processAutoClose = async () => {
     for (const order of rows.rows) {
       try {
         const result = await executeCloseSwapForOrder(connection, order, { force: false });
-        if (result?.skipped) continue;
+        if (result?.skipped) {
+          if (result.reason !== "threshold_not_hit") {
+            console.log("[AUTO_CLOSE] skipped", {
+              orderId: order.id,
+              tokenAddress: order.token_address,
+              reason: result.reason,
+              pnlPct: result.pnlPct ?? null,
+            });
+          }
+          continue;
+        }
         console.log("[AUTO_CLOSE] order closed", {
           orderId: order.id,
           tokenAddress: order.token_address,
@@ -816,70 +826,11 @@ const fetchDexFallbackFeed = async (limitRaw) => {
 const fetchGraduatedFeed = async (req, res) => {
   try {
     const limit = req.query.limit || 50;
-    const cursor = req.query.cursor ? String(req.query.cursor) : "";
-    const now = Date.now();
-    if (!process.env.MORALIS_API_KEY || now < moralisBlockedUntil) {
-      const fallback = await fetchDexFallbackFeed(limit);
-      return res.json({
-        ...fallback,
-        source: "dexscreener_fallback",
-        blockedUntil: moralisBlockedUntil || null,
-      });
-    }
-
-    const cacheKey = `graduated:${limit}:${cursor}`;
-    const cached = feedCache.get(cacheKey);
-    if (cached && now - cached.lastFetch < FEED_CACHE_TTL_MS) {
-      return res.json(cached.payload);
-    }
-
-    const qs = new URLSearchParams({ limit: String(limit) });
-    if (cursor) qs.set("cursor", cursor);
-    const url = `https://solana-gateway.moralis.io/token/mainnet/exchange/pumpfun/graduated?${qs.toString()}`;
-
-    const r = await fetch(url, {
-      headers: {
-        accept: "application/json",
-        "X-API-Key": process.env.MORALIS_API_KEY,
-      },
+    const fallback = await fetchDexFallbackFeed(limit);
+    return res.json({
+      ...fallback,
+      source: "dexscreener_only",
     });
-
-    if (!r.ok) {
-      const text = await r.text();
-      const lowerText = String(text || "").toLowerCase();
-      if (r.status === 401 || r.status === 429 || lowerText.includes("quota")) {
-        moralisBlockedUntil = Date.now() + QUOTA_BLOCK_MS;
-      }
-      const fallback = await fetchDexFallbackFeed(limit);
-      return res.status(200).json({
-        ...fallback,
-        source: "dexscreener_fallback",
-        moralisError: text || null,
-      });
-    }
-
-    const data = await r.json();
-
-    // Normalize output for your app
-    const tokens = (data.result || []).map((t) => ({
-      name: t.name || t.symbol || "Unknown",
-      symbol: t.symbol || "",
-      address: t.address || t.mint || t.tokenAddress,
-      priceUsd: t.priceUsd ?? null,
-      liquidityUsd: t.liquidityUsd ?? null,
-      graduatedAt: t.graduatedAt ?? null,
-    }));
-
-    if (!tokens.length) {
-      const fallback = await fetchDexFallbackFeed(limit);
-      return res.json({
-        ...fallback,
-        source: "dexscreener_fallback",
-      });
-    }
-    const payload = { tokens, cursor: data.cursor || null, source: "moralis" };
-    feedCache.set(cacheKey, { payload, lastFetch: now });
-    return res.json(payload);
   } catch (e) {
     console.error(e);
     try {
@@ -1151,50 +1102,22 @@ app.get("/api/token-prices", async (req, res) => {
       }
 
       let resolvedPrice = null;
-
-      // 1) Moralis token price (preferred if key available)
-      if (process.env.MORALIS_API_KEY) {
-        try {
-          const moralisRes = await fetch(
-            `https://solana-gateway.moralis.io/token/mainnet/${encodeURIComponent(address)}/price`,
-            {
-              headers: {
-                accept: "application/json",
-                "X-API-Key": process.env.MORALIS_API_KEY,
-              },
-            }
-          );
-          if (moralisRes.ok) {
-            const moralisJson = await moralisRes.json();
-            const p = Number(moralisJson?.usdPrice);
-            if (Number.isFinite(p) && p > 0) {
-              resolvedPrice = p;
-            }
+      try {
+        const dexRes = await fetch(
+          `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`
+        );
+        if (dexRes.ok) {
+          const dexJson = await dexRes.json();
+          const pairs = Array.isArray(dexJson?.pairs) ? dexJson.pairs : [];
+          const solanaPairs = pairs.filter((p) => p?.chainId === "solana");
+          const bestPair = (solanaPairs.length ? solanaPairs : pairs)[0];
+          const p = Number(bestPair?.priceUsd);
+          if (Number.isFinite(p) && p > 0) {
+            resolvedPrice = p;
           }
-        } catch (error) {
-          console.warn("[TOKEN_PRICE] moralis failed", address, error?.message || error);
         }
-      }
-
-      // 2) DexScreener fallback
-      if (resolvedPrice == null) {
-        try {
-          const dexRes = await fetch(
-            `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`
-          );
-          if (dexRes.ok) {
-            const dexJson = await dexRes.json();
-            const pairs = Array.isArray(dexJson?.pairs) ? dexJson.pairs : [];
-            const solanaPairs = pairs.filter((p) => p?.chainId === "solana");
-            const bestPair = (solanaPairs.length ? solanaPairs : pairs)[0];
-            const p = Number(bestPair?.priceUsd);
-            if (Number.isFinite(p) && p > 0) {
-              resolvedPrice = p;
-            }
-          }
-        } catch (error) {
-          console.warn("[TOKEN_PRICE] dexscreener failed", address, error?.message || error);
-        }
+      } catch (error) {
+        console.warn("[TOKEN_PRICE] dexscreener failed", address, error?.message || error);
       }
 
       if (resolvedPrice != null) {
@@ -1576,6 +1499,9 @@ app.post("/api/trading-wallet/withdraw", async (req, res) => {
 app.get("/api/orders", async (req, res) => {
   try {
     await ensureOrdersTable();
+    if (AUTO_CLOSE_ENABLED) {
+      void processAutoClose();
+    }
     const userId = typeof req.query.userId === "string" ? req.query.userId.trim() : "";
     const status = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
     const statusFilter = status === "open" || status === "closed" ? status : "";

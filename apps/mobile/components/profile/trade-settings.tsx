@@ -92,9 +92,9 @@ export const TradeSettings = memo(function TradeSettings({ onInputFocusChange }:
         label="Take Profit ROI"
         suffix="%"
         value={tpROI}
-        min={5}
+        min={0.1}
         max={200}
-        step={1}
+        step={0.1}
         onChange={setTpROI}
         onFocusChange={onInputFocusChange}
       />
@@ -102,9 +102,9 @@ export const TradeSettings = memo(function TradeSettings({ onInputFocusChange }:
         label="Stop Loss"
         suffix="%"
         value={stopLoss}
-        min={1}
+        min={0.1}
         max={50}
-        step={1}
+        step={0.1}
         onChange={setStopLoss}
         onFocusChange={onInputFocusChange}
       />
