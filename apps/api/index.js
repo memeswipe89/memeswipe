@@ -607,6 +607,7 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
   const entryPriceUsd = Number(order?.price_usd);
   const tpRoi = Number(order?.tp_roi);
   const stopLossPct = Number(order?.stop_loss);
+  const HARD_FAILSAFE_SL_PCT = 0.5;
   const amountUsd = Number(order?.amount_usd);
 
   if (!tokenAddress) return { skipped: true, reason: "missing_token" };
@@ -621,7 +622,10 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
 
   const pnlPct = ((livePriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
   const tpHit = Number.isFinite(tpRoi) && tpRoi > 0 ? pnlPct >= tpRoi : false;
-  const slHit = Number.isFinite(stopLossPct) && stopLossPct > 0 ? pnlPct <= -Math.abs(stopLossPct) : false;
+  const configuredSlPct =
+    Number.isFinite(stopLossPct) && stopLossPct > 0 ? Math.abs(stopLossPct) : Number.POSITIVE_INFINITY;
+  const effectiveSlPct = Math.min(configuredSlPct, HARD_FAILSAFE_SL_PCT);
+  const slHit = Number.isFinite(effectiveSlPct) ? pnlPct <= -effectiveSlPct : false;
   if (!force && !tpHit && !slHit) {
     return { skipped: true, reason: "threshold_not_hit", pnlPct, livePriceUsd };
   }
@@ -685,7 +689,7 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
 
   const realizedPnlUsd = Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
   const closeReason = force ? "manual" : tpHit ? "tp" : slHit ? "sl" : "unknown";
-  const closeTriggerPct = force ? null : tpHit ? tpRoi : slHit ? -Math.abs(stopLossPct) : null;
+  const closeTriggerPct = force ? null : tpHit ? tpRoi : slHit ? -effectiveSlPct : null;
   const updated = await closeOrderRow(
     order.id,
     closeSig,
