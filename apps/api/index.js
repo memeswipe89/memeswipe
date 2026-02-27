@@ -609,6 +609,12 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
   const stopLossPct = Number(order?.stop_loss);
   const HARD_FAILSAFE_SL_PCT = 0.5;
   const amountUsd = Number(order?.amount_usd);
+  let orderOutAmountRaw = 0n;
+  try {
+    orderOutAmountRaw = BigInt(String(order?.out_amount_raw || "0"));
+  } catch {
+    orderOutAmountRaw = 0n;
+  }
 
   if (!tokenAddress) return { skipped: true, reason: "missing_token" };
   if (!sellMint) return { skipped: true, reason: "invalid_sell_mint" };
@@ -635,13 +641,27 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
   const signer = ownerWallet.keypair;
   const mintBalanceRaw = await getRawTokenBalance(connection, signer.publicKey, sellMint);
   if (mintBalanceRaw <= 0n) return { skipped: true, reason: "zero_balance", pnlPct, livePriceUsd };
+  const baseCloseAmountRaw =
+    orderOutAmountRaw > 0n
+      ? (orderOutAmountRaw < mintBalanceRaw ? orderOutAmountRaw : mintBalanceRaw)
+      : mintBalanceRaw;
+  if (baseCloseAmountRaw <= 0n) return { skipped: true, reason: "zero_close_amount", pnlPct, livePriceUsd };
+  if (baseCloseAmountRaw < mintBalanceRaw) {
+    console.log("[AUTO_CLOSE] using order out_amount_raw for close sizing", {
+      orderId: order.id,
+      tokenAddress,
+      sellMint,
+      orderOutAmountRaw: orderOutAmountRaw.toString(),
+      walletBalanceRaw: mintBalanceRaw.toString(),
+    });
+  }
 
   let closeSig = null;
   let lastError = null;
 
   for (const outputMint of AUTO_CLOSE_OUTPUT_MINTS) {
     for (const amountBps of AUTO_CLOSE_AMOUNT_BPS) {
-      const amountRaw = (mintBalanceRaw * BigInt(amountBps)) / 10000n;
+      const amountRaw = (baseCloseAmountRaw * BigInt(amountBps)) / 10000n;
       if (amountRaw <= 0n) continue;
       for (const slippageBps of AUTO_CLOSE_SLIPPAGE_RETRY_BPS) {
         try {
