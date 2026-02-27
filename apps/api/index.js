@@ -2,7 +2,15 @@ const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 const crypto = require("crypto");
-const { Connection, Keypair, VersionedTransaction } = require("@solana/web3.js");
+const {
+  Connection,
+  Keypair,
+  VersionedTransaction,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  LAMPORTS_PER_SOL,
+} = require("@solana/web3.js");
 require("dotenv").config();
 
 const { Pool } = require("pg");
@@ -21,6 +29,7 @@ const oauthStateStore = new Map();
 let ensureTwitterTablePromise = null;
 let ensureFavoritesTablePromise = null;
 let ensureOrdersTablePromise = null;
+let ensureTradingWalletsTablePromise = null;
 const userFkTargetCache = new Map();
 const FEED_CACHE_TTL_MS = 60 * 1000;
 const QUOTA_BLOCK_MS = 60 * 60 * 1000;
@@ -48,6 +57,7 @@ const AUTO_CLOSE_OUTPUT_MINTS = [
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
 ];
 let autoCloseRunning = false;
+const TRADING_WALLET_TABLE = "trading_wallets";
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -158,6 +168,35 @@ const ensureOrdersTable = async () => {
     await ensureOrdersTablePromise;
   } catch (error) {
     ensureOrdersTablePromise = null;
+    throw error;
+  }
+};
+
+const ensureTradingWalletsTable = async () => {
+  if (!ensureTradingWalletsTablePromise) {
+    ensureTradingWalletsTablePromise = (async () => {
+      await pool.query(`
+        create table if not exists trading_wallets (
+          user_id uuid primary key,
+          wallet_public_key text not null unique,
+          wallet_secret_encrypted text not null,
+          withdraw_address text,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        )
+      `);
+      await pool.query(`alter table trading_wallets add column if not exists wallet_public_key text`);
+      await pool.query(`alter table trading_wallets add column if not exists wallet_secret_encrypted text`);
+      await pool.query(`alter table trading_wallets add column if not exists withdraw_address text`);
+      await pool.query(`alter table trading_wallets add column if not exists created_at timestamptz not null default now()`);
+      await pool.query(`alter table trading_wallets add column if not exists updated_at timestamptz not null default now()`);
+    })();
+  }
+
+  try {
+    await ensureTradingWalletsTablePromise;
+  } catch (error) {
+    ensureTradingWalletsTablePromise = null;
     throw error;
   }
 };
@@ -365,6 +404,87 @@ const fetchJupiterSwapTx = async (payload) => {
   throw lastError || new Error("Failed to build Jupiter swap transaction from all endpoints");
 };
 
+const getWalletEncryptionKey = () => {
+  const raw = String(process.env.TRADING_WALLET_ENCRYPTION_KEY || "");
+  if (!raw) {
+    throw new Error("TRADING_WALLET_ENCRYPTION_KEY is not configured");
+  }
+  const asBase64 = (() => {
+    try {
+      const b = Buffer.from(raw, "base64");
+      if (b.length === 32) return b;
+      return null;
+    } catch {
+      return null;
+    }
+  })();
+  if (asBase64) return asBase64;
+
+  if (raw.length >= 32) {
+    return crypto.createHash("sha256").update(raw).digest();
+  }
+  throw new Error("TRADING_WALLET_ENCRYPTION_KEY must be base64(32 bytes) or >=32 chars");
+};
+
+const encryptWalletSecret = (secretKey) => {
+  const key = getWalletEncryptionKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const plaintext = JSON.stringify(Array.from(secretKey));
+  const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return JSON.stringify({
+    v: 1,
+    alg: "aes-256-gcm",
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    data: encrypted.toString("base64"),
+  });
+};
+
+const decryptWalletSecret = (payload) => {
+  const key = getWalletEncryptionKey();
+  const parsed = JSON.parse(String(payload || ""));
+  const iv = Buffer.from(parsed.iv, "base64");
+  const tag = Buffer.from(parsed.tag, "base64");
+  const data = Buffer.from(parsed.data, "base64");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+  const arr = JSON.parse(plain);
+  if (!Array.isArray(arr) || !arr.length) throw new Error("Invalid wallet secret payload");
+  return Uint8Array.from(arr.map((n) => Number(n)));
+};
+
+const normalizePublicKey = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  try {
+    return new PublicKey(text).toBase58();
+  } catch {
+    return null;
+  }
+};
+
+const getTradingWalletRow = async (userId) => {
+  const r = await pool.query(
+    `select user_id, wallet_public_key, wallet_secret_encrypted, withdraw_address from trading_wallets where user_id = $1 limit 1`,
+    [userId]
+  );
+  return r.rows[0] || null;
+};
+
+const getTradingWalletKeypair = async (userId) => {
+  const row = await getTradingWalletRow(userId);
+  if (!row?.wallet_secret_encrypted) return null;
+  const secret = decryptWalletSecret(row.wallet_secret_encrypted);
+  return {
+    keypair: Keypair.fromSecretKey(secret),
+    walletPublicKey: row.wallet_public_key,
+    withdrawAddress: row.withdraw_address || null,
+  };
+};
+
 const parseBotSecretKey = () => {
   const raw = process.env.BOT_WALLET_SECRET_KEY || "";
   if (!raw) return null;
@@ -463,7 +583,7 @@ const processAutoClose = async () => {
   autoCloseRunning = true;
   try {
     await ensureOrdersTable();
-    const bot = getBotKeypair();
+    await ensureTradingWalletsTable();
     const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
     const rows = await pool.query(
@@ -493,7 +613,10 @@ const processAutoClose = async () => {
         const pnlPct = ((livePriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
         if (!Number.isFinite(pnlPct) || pnlPct < tpRoi) continue;
 
-        const mintBalanceRaw = await getRawTokenBalance(connection, bot.publicKey, tokenAddress);
+        const ownerWallet = await getTradingWalletKeypair(order.user_id);
+        if (!ownerWallet) continue;
+        const signer = ownerWallet.keypair;
+        const mintBalanceRaw = await getRawTokenBalance(connection, signer.publicKey, tokenAddress);
         if (mintBalanceRaw <= 0n) continue;
 
         let closeSig = null;
@@ -516,7 +639,7 @@ const processAutoClose = async () => {
 
                 const { json: swapJson } = await fetchJupiterSwapTx({
                   quoteResponse: quoteJson,
-                  userPublicKey: bot.publicKey.toBase58(),
+                  userPublicKey: signer.publicKey.toBase58(),
                   wrapAndUnwrapSol: true,
                   dynamicComputeUnitLimit: true,
                   dynamicSlippage: true,
@@ -525,7 +648,7 @@ const processAutoClose = async () => {
                 if (!swapJson?.swapTransaction) throw new Error("No swap transaction");
 
                 const tx = VersionedTransaction.deserialize(Buffer.from(swapJson.swapTransaction, "base64"));
-                tx.sign([bot]);
+                tx.sign([signer]);
                 const signature = await connection.sendRawTransaction(tx.serialize(), {
                   skipPreflight: false,
                   maxRetries: 3,
@@ -1069,6 +1192,175 @@ app.post("/api/jupiter/swap", async (req, res) => {
   }
 });
 
+app.post("/api/trading-wallet/create", async (req, res) => {
+  try {
+    await ensureTradingWalletsTable();
+    const requestedUserId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    if (!requestedUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    const userId = await resolveInsertUserId(TRADING_WALLET_TABLE, requestedUserId);
+
+    const existing = await getTradingWalletRow(userId);
+    if (existing?.wallet_public_key) {
+      return res.json({
+        success: true,
+        userId,
+        walletAddress: existing.wallet_public_key,
+        withdrawAddress: existing.withdraw_address || null,
+        created: false,
+      });
+    }
+
+    const kp = Keypair.generate();
+    const encrypted = encryptWalletSecret(kp.secretKey);
+    const result = await pool.query(
+      `
+      insert into trading_wallets (user_id, wallet_public_key, wallet_secret_encrypted, created_at, updated_at)
+      values ($1, $2, $3, now(), now())
+      on conflict (user_id) do update
+      set wallet_public_key = excluded.wallet_public_key,
+          wallet_secret_encrypted = excluded.wallet_secret_encrypted,
+          updated_at = now()
+      returning user_id, wallet_public_key, withdraw_address
+      `,
+      [userId, kp.publicKey.toBase58(), encrypted]
+    );
+
+    return res.json({
+      success: true,
+      userId: result.rows[0].user_id,
+      walletAddress: result.rows[0].wallet_public_key,
+      withdrawAddress: result.rows[0].withdraw_address || null,
+      created: true,
+    });
+  } catch (err) {
+    console.error("Trading wallet create error:", err);
+    return res.status(500).json({ error: err.message || "Failed to create trading wallet" });
+  }
+});
+
+app.get("/api/trading-wallet/:userId", async (req, res) => {
+  try {
+    await ensureTradingWalletsTable();
+    const userId = typeof req.params?.userId === "string" ? req.params.userId.trim() : "";
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+    const row = await getTradingWalletRow(userId);
+    if (!row?.wallet_public_key) return res.status(404).json({ error: "Trading wallet not found" });
+    return res.json({
+      success: true,
+      userId: row.user_id,
+      walletAddress: row.wallet_public_key,
+      withdrawAddress: row.withdraw_address || null,
+    });
+  } catch (err) {
+    console.error("Trading wallet fetch error:", err);
+    return res.status(500).json({ error: err.message || "Failed to fetch trading wallet" });
+  }
+});
+
+app.patch("/api/trading-wallet/withdraw-address", async (req, res) => {
+  try {
+    await ensureTradingWalletsTable();
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    const normalized = normalizePublicKey(req.body?.withdrawAddress);
+    if (!userId || !normalized) {
+      return res.status(400).json({ error: "userId and valid withdrawAddress are required" });
+    }
+    const r = await pool.query(
+      `
+      update trading_wallets
+      set withdraw_address = $2, updated_at = now()
+      where user_id = $1
+      returning user_id, wallet_public_key, withdraw_address
+      `,
+      [userId, normalized]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Trading wallet not found" });
+    return res.json({
+      success: true,
+      userId: r.rows[0].user_id,
+      walletAddress: r.rows[0].wallet_public_key,
+      withdrawAddress: r.rows[0].withdraw_address || null,
+    });
+  } catch (err) {
+    console.error("Withdraw address update error:", err);
+    return res.status(500).json({ error: err.message || "Failed to update withdraw address" });
+  }
+});
+
+app.post("/api/trading-wallet/withdraw", async (req, res) => {
+  try {
+    await ensureTradingWalletsTable();
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    const amountSol = Number(req.body?.amountSol);
+    const amountLamportsInput = Number(req.body?.amountLamports);
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+    const toAddressNormalized = normalizePublicKey(req.body?.toAddress);
+
+    const wallet = await getTradingWalletKeypair(userId);
+    if (!wallet) return res.status(404).json({ error: "Trading wallet not found" });
+
+    const destination = toAddressNormalized || normalizePublicKey(wallet.withdrawAddress);
+    if (!destination) {
+      return res.status(400).json({ error: "Destination address missing. Set withdraw address first." });
+    }
+
+    const lamports =
+      Number.isFinite(amountLamportsInput) && amountLamportsInput > 0
+        ? Math.floor(amountLamportsInput)
+        : Number.isFinite(amountSol) && amountSol > 0
+          ? Math.floor(amountSol * LAMPORTS_PER_SOL)
+          : 0;
+    if (lamports <= 0) {
+      return res.status(400).json({ error: "amountSol or amountLamports must be positive" });
+    }
+
+    const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+    const from = wallet.keypair.publicKey;
+    const fromBalance = await connection.getBalance(from, "confirmed");
+    const feeReserve = 8_000; // keep buffer for tx fee
+    if (fromBalance < lamports + feeReserve) {
+      return res.status(400).json({
+        error: "Insufficient balance",
+        details: { balanceLamports: fromBalance, requestedLamports: lamports, feeReserve },
+      });
+    }
+
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: from,
+        toPubkey: new PublicKey(destination),
+        lamports,
+      })
+    );
+    tx.feePayer = from;
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = blockhash;
+    tx.sign(wallet.keypair);
+    const signature = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+
+    const nextBalance = await connection.getBalance(from, "confirmed");
+    return res.json({
+      success: true,
+      txSignature: signature,
+      fromAddress: from.toBase58(),
+      toAddress: destination,
+      withdrawnLamports: lamports,
+      withdrawnSol: lamports / LAMPORTS_PER_SOL,
+      remainingLamports: nextBalance,
+      remainingSol: nextBalance / LAMPORTS_PER_SOL,
+    });
+  } catch (err) {
+    console.error("Withdraw error:", err);
+    return res.status(500).json({ error: err.message || "Failed to withdraw" });
+  }
+});
+
 app.get("/api/orders", async (req, res) => {
   try {
     await ensureOrdersTable();
@@ -1407,16 +1699,32 @@ app.post("/api/favorites", async (req, res) => {
 });
 
 app.get("/api/autoclose/status", (_req, res) => {
-  let botPubkey = null;
+  let configured = true;
   try {
-    botPubkey = getBotKeypair().publicKey.toBase58();
-  } catch {}
-  return res.json({
-    enabled: AUTO_CLOSE_ENABLED,
-    intervalMs: AUTO_CLOSE_INTERVAL_MS,
-    running: autoCloseRunning,
-    botPubkey,
-  });
+    getWalletEncryptionKey();
+  } catch {
+    configured = false;
+  }
+  pool
+    .query(`select count(*)::int as total from trading_wallets`)
+    .then((r) => {
+      return res.json({
+        enabled: AUTO_CLOSE_ENABLED,
+        intervalMs: AUTO_CLOSE_INTERVAL_MS,
+        running: autoCloseRunning,
+        encryptionConfigured: configured,
+        tradingWallets: r.rows[0]?.total || 0,
+      });
+    })
+    .catch(() =>
+      res.json({
+        enabled: AUTO_CLOSE_ENABLED,
+        intervalMs: AUTO_CLOSE_INTERVAL_MS,
+        running: autoCloseRunning,
+        encryptionConfigured: configured,
+        tradingWallets: null,
+      })
+    );
 });
 
 const PORT = process.env.PORT || 3000;

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
@@ -40,18 +40,24 @@ export default function WalletScreen() {
 
   const {
     twitterProfile,
-    walletAddress,
+    tradingWalletAddress,
+    withdrawAddress,
     walletLoading,
     walletError,
-    getOrCreateEmbeddedWalletAddress,
+    getOrCreateTradingWalletAddress,
+    setTradingWithdrawAddress,
+    withdrawFromTradingWallet,
   } = useWalletContext();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [withdrawToAddress, setWithdrawToAddress] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("0.01");
+  const [withdrawing, setWithdrawing] = useState(false);
 
   const copyAddress = async () => {
-    if (!walletAddress) return;
-    await Clipboard.setStringAsync(walletAddress);
+    if (!tradingWalletAddress) return;
+    await Clipboard.setStringAsync(tradingWalletAddress);
     Alert.alert("Copied", "Wallet address copied to clipboard.");
   };
 
@@ -69,9 +75,15 @@ export default function WalletScreen() {
   };
 
   useEffect(() => {
-    if (!walletAddress) return;
-    void loadBalance(walletAddress);
-  }, [walletAddress]);
+    if (!tradingWalletAddress) return;
+    void loadBalance(tradingWalletAddress);
+  }, [tradingWalletAddress]);
+
+  useEffect(() => {
+    if (withdrawAddress && !withdrawToAddress) {
+      setWithdrawToAddress(withdrawAddress);
+    }
+  }, [withdrawAddress, withdrawToAddress]);
 
   const handleCreateWallet = async () => {
     let applicationId = "unknown";
@@ -89,8 +101,8 @@ export default function WalletScreen() {
     try {
       console.log("[WALLET] Create Wallet clicked");
       console.log("[APP]", Platform.OS, "applicationId:", applicationId);
-      const address = await getOrCreateEmbeddedWalletAddress();
-      console.log("[WALLET] Embedded Solana wallet address:", address);
+      const address = await getOrCreateTradingWalletAddress();
+      console.log("[WALLET] Trading wallet address:", address);
       Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
     } catch (error: any) {
       const message = String(error?.message || error || "");
@@ -107,9 +119,9 @@ export default function WalletScreen() {
   };
 
   const openPhantom = async () => {
-    if (!walletAddress) return;
+    if (!tradingWalletAddress) return;
 
-    const transferLink = `phantom://v1/transfer?recipient=${encodeURIComponent(walletAddress)}&network=mainnet-beta`;
+    const transferLink = `phantom://v1/transfer?recipient=${encodeURIComponent(tradingWalletAddress)}&network=mainnet-beta`;
     const appBaseLink = "phantom://";
 
     try {
@@ -128,6 +140,46 @@ export default function WalletScreen() {
       Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
     } catch {
       Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
+    }
+  };
+
+  const handleSaveWithdrawAddress = async () => {
+    try {
+      const next = withdrawToAddress.trim();
+      if (!next) {
+        Alert.alert("Withdraw", "Enter destination wallet address.");
+        return;
+      }
+      const saved = await setTradingWithdrawAddress(next);
+      setWithdrawToAddress(saved);
+      Alert.alert("Saved", "Withdraw address updated.");
+    } catch (error: any) {
+      Alert.alert("Withdraw", error?.message || "Failed to save withdraw address.");
+    }
+  };
+
+  const handleWithdraw = async () => {
+    try {
+      const amount = Number(withdrawAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        Alert.alert("Withdraw", "Enter valid SOL amount.");
+        return;
+      }
+      const destination = withdrawToAddress.trim();
+      if (!destination) {
+        Alert.alert("Withdraw", "Set a destination address first.");
+        return;
+      }
+      setWithdrawing(true);
+      const result = await withdrawFromTradingWallet(amount, destination);
+      Alert.alert("Withdraw Success", `Tx: ${result.txSignature}`);
+      if (tradingWalletAddress) {
+        await loadBalance(tradingWalletAddress);
+      }
+    } catch (error: any) {
+      Alert.alert("Withdraw Failed", error?.message || "Failed to withdraw.");
+    } finally {
+      setWithdrawing(false);
     }
   };
 
@@ -153,14 +205,14 @@ export default function WalletScreen() {
           </Text>
         </View>
       ) : null}
-      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Memeswipe Wallet Address</Text>
+      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Memeswipe Trading Wallet Address</Text>
 
       {walletLoading ? (
         <View style={{ marginTop: 12 }}>
           <ActivityIndicator />
           <Text style={{ color: "#999", marginTop: 6 }}>Loading wallet address...</Text>
         </View>
-      ) : walletAddress ? (
+      ) : tradingWalletAddress ? (
         <View style={{ flex: 1 }}>
           <View
             style={{
@@ -173,10 +225,10 @@ export default function WalletScreen() {
             }}
           >
             <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13 }}>
-              {truncateMiddle(walletAddress)}
+              {truncateMiddle(tradingWalletAddress)}
             </Text>
             <Text selectable numberOfLines={1} style={{ color: "#666", fontFamily: "Courier", marginTop: 5, fontSize: 10 }}>
-              {walletAddress}
+              {tradingWalletAddress}
             </Text>
           </View>
 
@@ -189,7 +241,7 @@ export default function WalletScreen() {
 
           <View style={{ marginTop: 10, marginBottom: 10, alignItems: "center", justifyContent: "center" }}>
             <View style={{ backgroundColor: "#fff", padding: 10, borderRadius: 12 }}>
-              <QRCode value={walletAddress} size={qrSize} />
+              <QRCode value={tradingWalletAddress} size={qrSize} />
             </View>
           </View>
 
@@ -208,9 +260,9 @@ export default function WalletScreen() {
             >
               <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Open Phantom</Text>
             </Pressable>
-            <Text style={{ color: "#8f9ab7", marginTop: 6, fontSize: 12 }}>
-              Send SOL from Phantom or any Solana wallet to this address.
-            </Text>
+              <Text style={{ color: "#8f9ab7", marginTop: 6, fontSize: 12 }}>
+                Send SOL from Phantom or any Solana wallet to this address.
+              </Text>
 
             <View
               style={{
@@ -237,7 +289,7 @@ export default function WalletScreen() {
             </View>
 
             <Pressable
-              onPress={() => (walletAddress ? void loadBalance(walletAddress) : undefined)}
+              onPress={() => (tradingWalletAddress ? void loadBalance(tradingWalletAddress) : undefined)}
               style={{
                 marginTop: 6,
                 backgroundColor: "#10233f",
@@ -249,6 +301,85 @@ export default function WalletScreen() {
             >
               <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Refresh Balance</Text>
             </Pressable>
+
+            <View
+              style={{
+                marginTop: 10,
+                borderRadius: 10,
+                padding: 10,
+                borderWidth: 1,
+                borderColor: "#2a2a2a",
+                backgroundColor: "#0f131a",
+              }}
+            >
+              <Text style={{ color: "#bbb", fontWeight: "600" }}>Withdraw to Phantom / external wallet</Text>
+              <TextInput
+                value={withdrawToAddress}
+                onChangeText={setWithdrawToAddress}
+                placeholder="Destination wallet address"
+                placeholderTextColor="#68738a"
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={{
+                  marginTop: 8,
+                  borderWidth: 1,
+                  borderColor: "#2a2a2a",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  paddingVertical: 8,
+                  color: "#fff",
+                  fontSize: 12,
+                }}
+              />
+              <Pressable
+                onPress={handleSaveWithdrawAddress}
+                style={{
+                  marginTop: 8,
+                  backgroundColor: "#10233f",
+                  borderRadius: 8,
+                  paddingVertical: 9,
+                  borderWidth: 1,
+                  borderColor: "#254d78",
+                }}
+              >
+                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Save Withdraw Address</Text>
+              </Pressable>
+
+              <TextInput
+                value={withdrawAmount}
+                onChangeText={setWithdrawAmount}
+                placeholder="SOL amount (e.g. 0.01)"
+                placeholderTextColor="#68738a"
+                keyboardType="decimal-pad"
+                style={{
+                  marginTop: 8,
+                  borderWidth: 1,
+                  borderColor: "#2a2a2a",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  paddingVertical: 8,
+                  color: "#fff",
+                  fontSize: 12,
+                }}
+              />
+              <Pressable
+                onPress={() => void handleWithdraw()}
+                disabled={withdrawing}
+                style={{
+                  marginTop: 8,
+                  backgroundColor: "#2a1530",
+                  borderRadius: 8,
+                  paddingVertical: 10,
+                  borderWidth: 1,
+                  borderColor: "#63407a",
+                  opacity: withdrawing ? 0.7 : 1,
+                }}
+              >
+                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
+                  {withdrawing ? "Withdrawing..." : "Withdraw SOL"}
+                </Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       ) : (

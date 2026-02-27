@@ -1,5 +1,6 @@
 import * as FileSystem from "expo-file-system/legacy";
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   EmbeddedSolanaWalletState,
   useCreateGuestAccount,
@@ -15,16 +16,27 @@ export type TwitterProfile = {
 type WalletContextValue = {
   twitterProfile: TwitterProfile | null;
   walletAddress: string | null;
+  tradingWalletAddress: string | null;
+  withdrawAddress: string | null;
   walletLoading: boolean;
   walletError: string | null;
   setTwitterProfile: (profile: TwitterProfile | null) => void;
   getOrCreateEmbeddedWalletAddress: () => Promise<string>;
   refreshWalletAddress: () => Promise<string | null>;
+  getOrCreateTradingWalletAddress: () => Promise<string>;
+  setTradingWithdrawAddress: (address: string) => Promise<string>;
+  withdrawFromTradingWallet: (amountSol: number, toAddress?: string) => Promise<{
+    txSignature: string;
+    withdrawnSol: number;
+    remainingSol: number;
+  }>;
 };
 
 const WALLET_ADDRESS_FILE = FileSystem.documentDirectory
   ? `${FileSystem.documentDirectory}memeswipe_wallet_address.txt`
   : null;
+const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 
 const WalletContext = createContext<WalletContextValue | null>(null);
 
@@ -70,6 +82,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const [twitterProfile, setTwitterProfile] = useState<TwitterProfile | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [tradingWalletAddress, setTradingWalletAddress] = useState<string | null>(null);
+  const [withdrawAddress, setWithdrawAddress] = useState<string | null>(null);
   const [walletLoading, setWalletLoading] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
 
@@ -125,6 +139,114 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       }
     })();
   }, [walletAddress]);
+
+  const createUuidV4 = () =>
+    "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
+      const rand = Math.floor(Math.random() * 16);
+      const value = ch === "x" ? rand : (rand & 0x3) | 0x8;
+      return value.toString(16);
+    });
+
+  const getOrCreateLocalUserId = async () => {
+    const existing = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
+    if (existing) return existing;
+    const next = createUuidV4();
+    await AsyncStorage.setItem(LOCAL_USER_ID_KEY, next);
+    return next;
+  };
+
+  const getOrCreateTradingWalletAddress = async (): Promise<string> => {
+    setWalletLoading(true);
+    setWalletError(null);
+    try {
+      const userId = await getOrCreateLocalUserId();
+      const res = await fetch(`${API_BASE}/api/trading-wallet/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        walletAddress?: string;
+        withdrawAddress?: string | null;
+      };
+      if (!res.ok || !json?.walletAddress) {
+        throw new Error(json?.error || "Failed to create trading wallet");
+      }
+      setTradingWalletAddress(json.walletAddress);
+      setWithdrawAddress(json.withdrawAddress || null);
+      return json.walletAddress;
+    } catch (error: any) {
+      const message = error?.message || "Failed to create trading wallet";
+      setWalletError(message);
+      throw error;
+    } finally {
+      setWalletLoading(false);
+    }
+  };
+
+  const setTradingWithdrawAddress = async (address: string): Promise<string> => {
+    const userId = await getOrCreateLocalUserId();
+    const res = await fetch(`${API_BASE}/api/trading-wallet/withdraw-address`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, withdrawAddress: address }),
+    });
+    const json = (await res.json()) as { error?: string; withdrawAddress?: string; walletAddress?: string };
+    if (!res.ok || !json?.withdrawAddress) {
+      throw new Error(json?.error || "Failed to update withdraw address");
+    }
+    if (json.walletAddress) setTradingWalletAddress(json.walletAddress);
+    setWithdrawAddress(json.withdrawAddress);
+    return json.withdrawAddress;
+  };
+
+  const withdrawFromTradingWallet = async (amountSol: number, toAddress?: string) => {
+    const userId = await getOrCreateLocalUserId();
+    const res = await fetch(`${API_BASE}/api/trading-wallet/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, amountSol, toAddress }),
+    });
+    const json = (await res.json()) as {
+      error?: string;
+      txSignature?: string;
+      withdrawnSol?: number;
+      remainingSol?: number;
+    };
+    if (!res.ok || !json?.txSignature) {
+      throw new Error(json?.error || "Withdraw failed");
+    }
+    return {
+      txSignature: json.txSignature,
+      withdrawnSol: Number(json.withdrawnSol || 0),
+      remainingSol: Number(json.remainingSol || 0),
+    };
+  };
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const userId = await getOrCreateLocalUserId();
+        const res = await fetch(`${API_BASE}/api/trading-wallet/${encodeURIComponent(userId)}`);
+        if (!res.ok) return;
+        const json = (await res.json()) as { walletAddress?: string; withdrawAddress?: string | null };
+        if (!active) return;
+        if (json.walletAddress) {
+          setTradingWalletAddress(json.walletAddress);
+        }
+        if (typeof json.withdrawAddress === "string" && json.withdrawAddress.length > 0) {
+          setWithdrawAddress(json.withdrawAddress);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const waitForPrivyReady = async () => {
     const startedAt = Date.now();
@@ -202,13 +324,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     () => ({
       twitterProfile,
       walletAddress,
+      tradingWalletAddress,
+      withdrawAddress,
       walletLoading,
       walletError,
       setTwitterProfile,
       getOrCreateEmbeddedWalletAddress,
       refreshWalletAddress,
+      getOrCreateTradingWalletAddress,
+      setTradingWithdrawAddress,
+      withdrawFromTradingWallet,
     }),
-    [twitterProfile, walletAddress, walletLoading, walletError]
+    [twitterProfile, walletAddress, tradingWalletAddress, withdrawAddress, walletLoading, walletError]
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
