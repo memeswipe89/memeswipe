@@ -602,15 +602,19 @@ const closeOrderRow = async (
 const executeCloseSwapForOrder = async (connection, order, options = {}) => {
   const force = Boolean(options.force);
   const tokenAddress = String(order?.token_address || "").trim();
+  const outputMint = String(order?.output_mint || "").trim();
+  const sellMint = normalizePublicKey(outputMint) || normalizePublicKey(tokenAddress);
   const entryPriceUsd = Number(order?.price_usd);
   const tpRoi = Number(order?.tp_roi);
   const stopLossPct = Number(order?.stop_loss);
   const amountUsd = Number(order?.amount_usd);
 
   if (!tokenAddress) return { skipped: true, reason: "missing_token" };
+  if (!sellMint) return { skipped: true, reason: "invalid_sell_mint" };
   if (!Number.isFinite(entryPriceUsd) || entryPriceUsd <= 0) return { skipped: true, reason: "missing_entry_price" };
 
-  const livePriceUsd = await getTokenPriceUsd(tokenAddress);
+  // Prefer display token address for UI parity, fallback to real bought mint for safety.
+  const livePriceUsd = (await getTokenPriceUsd(tokenAddress)) ?? (await getTokenPriceUsd(sellMint));
   if (!Number.isFinite(livePriceUsd) || livePriceUsd <= 0) {
     return { skipped: true, reason: "missing_live_price" };
   }
@@ -625,7 +629,7 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
   const ownerWallet = await getTradingWalletKeypair(order.user_id);
   if (!ownerWallet) return { skipped: true, reason: "wallet_not_found", pnlPct, livePriceUsd };
   const signer = ownerWallet.keypair;
-  const mintBalanceRaw = await getRawTokenBalance(connection, signer.publicKey, tokenAddress);
+  const mintBalanceRaw = await getRawTokenBalance(connection, signer.publicKey, sellMint);
   if (mintBalanceRaw <= 0n) return { skipped: true, reason: "zero_balance", pnlPct, livePriceUsd };
 
   let closeSig = null;
@@ -638,7 +642,7 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
       for (const slippageBps of AUTO_CLOSE_SLIPPAGE_RETRY_BPS) {
         try {
           const { json: quoteJson } = await fetchJupiterQuote({
-            inputMint: tokenAddress,
+            inputMint: sellMint,
             outputMint,
             amount: amountRaw.toString(),
             slippageBps: String(slippageBps),
@@ -710,7 +714,7 @@ const processAutoClose = async () => {
         and coalesce(close_tx_signature, '') = ''
         and status not in ('closed', 'cancelled')
       order by created_at asc
-      limit 25
+      limit 100
       `
     );
 
