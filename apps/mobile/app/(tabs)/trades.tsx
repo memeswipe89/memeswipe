@@ -41,6 +41,7 @@ type TradeItem = {
   closeTriggerPct: number | null;
   entryPriceUsd: number | null;
   livePriceUsd: number | null;
+  tpRoi: number;
 };
 
 type Filter = 'all' | 'open' | 'closed' | 'profit' | 'loss';
@@ -61,7 +62,9 @@ const getLivePnl = (trade: TradeItem) => {
   const livePnlPct =
     trade.entryPriceUsd && trade.livePriceUsd
       ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
-      : null;
+      : trade.tpRoi > 0
+        ? trade.tpRoi
+        : null;
   const livePnlUsd =
     livePnlPct !== null ? (trade.displayAmountUsd * livePnlPct) / 100 : trade.fallbackPnlUsd;
   return { livePnlPct, livePnlUsd };
@@ -114,6 +117,7 @@ export default function TradesScreen() {
           close_reason?: string | null;
           close_trigger_pct?: number | string | null;
           price_usd?: number | string | null;
+          output_mint?: string | null;
         }[];
         error?: string;
       }>(res);
@@ -140,6 +144,7 @@ export default function TradesScreen() {
           close_reason?: string | null;
           close_trigger_pct?: number | string | null;
           price_usd?: number | string | null;
+          output_mint?: string | null;
         }[];
         }>(fallbackRes);
         if (fallbackRes.ok && Array.isArray(fallbackJson.orders)) {
@@ -166,7 +171,6 @@ export default function TradesScreen() {
           displayAmountUsd,
           createdAt: order.created_at || null,
           chain: order.chain || 'solana',
-          tokenAddress: order.token_address || '',
           inAmountRaw: typeof order.in_amount_raw === 'string' ? order.in_amount_raw : null,
           outAmountRaw: typeof order.out_amount_raw === 'string' ? order.out_amount_raw : null,
           txSignature: typeof order.tx_signature === 'string' ? order.tx_signature : null,
@@ -184,9 +188,11 @@ export default function TradesScreen() {
                   const v = toNumber(order.close_trigger_pct, Number.NaN);
                   return Number.isFinite(v) ? v : null;
                 })(),
+          tpRoi: roi,
           entryPriceUsd: entryPrice > 0 ? entryPrice : null,
           livePriceUsd: null,
-        };
+          tokenAddress: order.token_address || order.output_mint || '',
+        } as TradeItem;
       });
       setTrades(mapped);
     } catch (err: any) {

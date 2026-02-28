@@ -19,6 +19,7 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+const HAS_DATABASE_URL = typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -51,6 +52,10 @@ const tokenPriceCache = new Map();
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const AUTO_CLOSE_ENABLED = String(process.env.AUTO_CLOSE_ENABLED || "false").toLowerCase() === "true";
 const AUTO_CLOSE_INTERVAL_MS = Math.max(5_000, Number(process.env.AUTO_CLOSE_INTERVAL_MS || 10_000));
+const AUTO_CLOSE_MAX_ORDERS_PER_CYCLE = Math.max(
+  1,
+  Number(process.env.AUTO_CLOSE_MAX_ORDERS_PER_CYCLE || 1)
+);
 const AUTO_CLOSE_SLIPPAGE_RETRY_BPS = [800, 1200, 2000, 3000, 5000];
 const AUTO_CLOSE_AMOUNT_BPS = [10000, 9800, 9000, 7500, 5000, 2500];
 const AUTO_CLOSE_OUTPUT_MINTS = [
@@ -58,6 +63,7 @@ const AUTO_CLOSE_OUTPUT_MINTS = [
   USDC_MINT,
 ];
 let autoCloseRunning = false;
+let autoClosePausedUntil = 0;
 const TRADING_WALLET_TABLE = "trading_wallets";
 
 const base64UrlEncode = (buffer) =>
@@ -453,17 +459,41 @@ const encryptWalletSecret = (secretKey) => {
 };
 
 const decryptWalletSecret = (payload) => {
-  const key = getWalletEncryptionKey();
-  const parsed = JSON.parse(String(payload || ""));
-  const iv = Buffer.from(parsed.iv, "base64");
-  const tag = Buffer.from(parsed.tag, "base64");
-  const data = Buffer.from(parsed.data, "base64");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  const plain = Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
-  const arr = JSON.parse(plain);
-  if (!Array.isArray(arr) || !arr.length) throw new Error("Invalid wallet secret payload");
-  return Uint8Array.from(arr.map((n) => Number(n)));
+  const text = String(payload || "").trim();
+  if (!text) throw new Error("Invalid wallet secret payload");
+
+  // 1) Legacy/plain JSON array payload (no encryption key required).
+  if (text.startsWith("[")) {
+    const arr = JSON.parse(text);
+    if (!Array.isArray(arr) || !arr.length) throw new Error("Invalid wallet secret payload");
+    return Uint8Array.from(arr.map((n) => Number(n)));
+  }
+
+  // 2) Legacy/plain CSV payload (no encryption key required).
+  if (text.includes(",") && !text.startsWith("{")) {
+    const parts = text
+      .split(",")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isFinite(n));
+    if (parts.length) return Uint8Array.from(parts);
+  }
+
+  // 3) Encrypted JSON payload (requires TRADING_WALLET_ENCRYPTION_KEY).
+  const parsed = JSON.parse(text);
+  if (parsed && parsed.iv && parsed.tag && parsed.data) {
+    const key = getWalletEncryptionKey();
+    const iv = Buffer.from(parsed.iv, "base64");
+    const tag = Buffer.from(parsed.tag, "base64");
+    const data = Buffer.from(parsed.data, "base64");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+    const arr = JSON.parse(plain);
+    if (!Array.isArray(arr) || !arr.length) throw new Error("Invalid wallet secret payload");
+    return Uint8Array.from(arr.map((n) => Number(n)));
+  }
+
+  throw new Error("Unsupported wallet secret format");
 };
 
 const normalizePublicKey = (value) => {
@@ -487,7 +517,13 @@ const getTradingWalletRow = async (userId) => {
 const getTradingWalletKeypair = async (userId) => {
   const row = await getTradingWalletRow(userId);
   if (!row?.wallet_secret_encrypted) return null;
-  const secret = decryptWalletSecret(row.wallet_secret_encrypted);
+  let secret;
+  try {
+    secret = decryptWalletSecret(row.wallet_secret_encrypted);
+  } catch (error) {
+    console.warn("[TRADING_WALLET] failed to decode wallet secret for user", userId, error?.message || error);
+    return null;
+  }
   return {
     keypair: Keypair.fromSecretKey(secret),
     walletPublicKey: row.wallet_public_key,
@@ -540,6 +576,25 @@ const getTokenPriceUsd = async (address) => {
       if (Number.isFinite(p) && p > 0) price = p;
     }
   } catch {}
+
+  if ((price == null || !(price > 0)) && process.env.MORALIS_API_KEY) {
+    try {
+      const r = await fetch(
+        `https://solana-gateway.moralis.io/token/mainnet/${encodeURIComponent(address)}/price`,
+        {
+          headers: {
+            accept: "application/json",
+            "X-API-Key": process.env.MORALIS_API_KEY,
+          },
+        }
+      );
+      if (r.ok) {
+        const json = await r.json();
+        const p = Number(json?.usdPrice);
+        if (Number.isFinite(p) && p > 0) price = p;
+      }
+    } catch {}
+  }
 
   tokenPriceCache.set(cacheKey, { price, ts: now });
   return price;
@@ -616,9 +671,33 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
     orderOutAmountRaw = 0n;
   }
 
-  if (!tokenAddress) return { skipped: true, reason: "missing_token" };
-  if (!sellMint) return { skipped: true, reason: "invalid_sell_mint" };
-  if (!Number.isFinite(entryPriceUsd) || entryPriceUsd <= 0) return { skipped: true, reason: "missing_entry_price" };
+  if (!tokenAddress) {
+    await closeOrderRow(order.id, null, null, null, null, "invalid_token", null);
+    return { skipped: true, reason: "missing_token" };
+  }
+  if (!sellMint) {
+    await closeOrderRow(order.id, null, null, null, null, "invalid_mint", null);
+    return { skipped: true, reason: "invalid_sell_mint" };
+  }
+
+  let effectiveEntryPriceUsd = Number.isFinite(entryPriceUsd) && entryPriceUsd > 0 ? entryPriceUsd : null;
+  if (!effectiveEntryPriceUsd) {
+    // Legacy orders might miss entry price. Seed once from current live price.
+    const seedPrice = (await getTokenPriceUsd(tokenAddress)) ?? (await getTokenPriceUsd(sellMint));
+    if (Number.isFinite(seedPrice) && seedPrice > 0) {
+      effectiveEntryPriceUsd = seedPrice;
+      await pool.query(
+        `
+        update orders
+        set price_usd = coalesce(price_usd, $2)
+        where id = $1
+        `,
+        [order.id, seedPrice]
+      );
+      return { skipped: true, reason: "seeded_entry_price", pnlPct: 0, livePriceUsd: seedPrice };
+    }
+    return { skipped: true, reason: "missing_entry_price" };
+  }
 
   // Prefer display token address for UI parity, fallback to real bought mint for safety.
   const livePriceUsd = (await getTokenPriceUsd(tokenAddress)) ?? (await getTokenPriceUsd(sellMint));
@@ -626,7 +705,7 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
     return { skipped: true, reason: "missing_live_price" };
   }
 
-  const pnlPct = ((livePriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
+  const pnlPct = ((livePriceUsd - effectiveEntryPriceUsd) / effectiveEntryPriceUsd) * 100;
   const tpHit = Number.isFinite(tpRoi) && tpRoi > 0 ? pnlPct >= tpRoi : false;
   const configuredSlPct =
     Number.isFinite(stopLossPct) && stopLossPct > 0 ? Math.abs(stopLossPct) : Number.POSITIVE_INFINITY;
@@ -636,16 +715,49 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
     return { skipped: true, reason: "threshold_not_hit", pnlPct, livePriceUsd };
   }
 
+  const closeReason = force ? "manual" : tpHit ? "tp" : slHit ? "sl" : "unknown";
+  const closeTriggerPct = force ? null : tpHit ? tpRoi : slHit ? -effectiveSlPct : null;
+  const realizedPnlUsd = Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
+
+  const closeByThresholdFallback = async (fallbackReason) => {
+    if (force) {
+      return { skipped: true, reason: fallbackReason, pnlPct, livePriceUsd };
+    }
+    const updated = await closeOrderRow(
+      order.id,
+      null,
+      livePriceUsd,
+      Number.isFinite(realizedPnlUsd) ? realizedPnlUsd : null,
+      pnlPct,
+      closeReason,
+      closeTriggerPct
+    );
+    if (!updated) {
+      return { skipped: true, reason: fallbackReason, pnlPct, livePriceUsd };
+    }
+    return {
+      skipped: false,
+      closeSig: null,
+      pnlPct,
+      livePriceUsd,
+      closeReason,
+      closeTriggerPct,
+      updated,
+      fallbackClosed: true,
+      fallbackReason,
+    };
+  };
+
   const ownerWallet = await getTradingWalletKeypair(order.user_id);
-  if (!ownerWallet) return { skipped: true, reason: "wallet_not_found", pnlPct, livePriceUsd };
+  if (!ownerWallet) return closeByThresholdFallback("wallet_not_found");
   const signer = ownerWallet.keypair;
   const mintBalanceRaw = await getRawTokenBalance(connection, signer.publicKey, sellMint);
-  if (mintBalanceRaw <= 0n) return { skipped: true, reason: "zero_balance", pnlPct, livePriceUsd };
+  if (mintBalanceRaw <= 0n) return closeByThresholdFallback("zero_balance");
   const baseCloseAmountRaw =
     orderOutAmountRaw > 0n
       ? (orderOutAmountRaw < mintBalanceRaw ? orderOutAmountRaw : mintBalanceRaw)
       : mintBalanceRaw;
-  if (baseCloseAmountRaw <= 0n) return { skipped: true, reason: "zero_close_amount", pnlPct, livePriceUsd };
+  if (baseCloseAmountRaw <= 0n) return closeByThresholdFallback("zero_close_amount");
   if (baseCloseAmountRaw < mintBalanceRaw) {
     console.log("[AUTO_CLOSE] using order out_amount_raw for close sizing", {
       orderId: order.id,
@@ -704,12 +816,9 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
   }
 
   if (!closeSig) {
-    throw lastError || new Error("Unable to close route");
+    return closeByThresholdFallback("route_unavailable");
   }
 
-  const realizedPnlUsd = Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
-  const closeReason = force ? "manual" : tpHit ? "tp" : slHit ? "sl" : "unknown";
-  const closeTriggerPct = force ? null : tpHit ? tpRoi : slHit ? -effectiveSlPct : null;
   const updated = await closeOrderRow(
     order.id,
     closeSig,
@@ -724,6 +833,7 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
 
 const processAutoClose = async () => {
   if (!AUTO_CLOSE_ENABLED || autoCloseRunning) return;
+  if (Date.now() < autoClosePausedUntil) return;
   autoCloseRunning = true;
   try {
     await ensureOrdersTable();
@@ -736,10 +846,12 @@ const processAutoClose = async () => {
       from orders
       where chain = 'solana'
         and coalesce(close_tx_signature, '') = ''
-        and status not in ('closed', 'cancelled')
-      order by created_at asc
-      limit 100
+        and status not in ('closed', 'cancelled', 'filled')
+      order by created_at desc
+      limit $1
       `
+      ,
+      [AUTO_CLOSE_MAX_ORDERS_PER_CYCLE]
     );
 
     for (const order of rows.rows) {
@@ -770,7 +882,40 @@ const processAutoClose = async () => {
       }
     }
   } catch (error) {
-    console.warn("[AUTO_CLOSE] loop error", error?.message || error);
+    const isAggregate = typeof AggregateError !== "undefined" && error instanceof AggregateError;
+    const aggregateMessages = isAggregate
+      ? Array.from(error.errors || [])
+          .map((e) => String(e?.message || e))
+          .filter(Boolean)
+      : [];
+    const message = [String(error?.message || error || ""), ...aggregateMessages].join(" | ");
+
+    const isDbDown =
+      message.includes("ECONNREFUSED ::1:5432") ||
+      message.includes("connect ECONNREFUSED") ||
+      message.includes("password authentication failed") ||
+      message.includes("database") ||
+      message.includes("timeout expired");
+
+    const isRpcOrNetworkDown =
+      message.includes("failed to fetch") ||
+      message.includes("ENOTFOUND") ||
+      message.includes("EAI_AGAIN") ||
+      message.includes("ETIMEDOUT") ||
+      message.includes("ECONNRESET") ||
+      message.includes("429") ||
+      message.includes("Too many requests") ||
+      message.includes("AggregateError");
+
+    if (isDbDown || isRpcOrNetworkDown) {
+      autoClosePausedUntil = Date.now() + 60 * 1000;
+      console.warn(
+        `[AUTO_CLOSE] paused for 60s due to ${isDbDown ? "DB" : "RPC/network"} connectivity issue`,
+        message
+      );
+    } else {
+      console.warn("[AUTO_CLOSE] loop error", message);
+    }
   } finally {
     autoCloseRunning = false;
   }
@@ -1118,42 +1263,10 @@ app.get("/api/token-prices", async (req, res) => {
       return res.status(400).json({ error: "addresses query param is required" });
     }
 
-    const now = Date.now();
     const prices = {};
 
     for (const address of addresses) {
-      const cacheKey = `solana:${address}`;
-      const cached = tokenPriceCache.get(cacheKey);
-      if (cached && now - cached.ts < TOKEN_PRICE_CACHE_TTL_MS) {
-        prices[address] = cached.price;
-        continue;
-      }
-
-      let resolvedPrice = null;
-      try {
-        const dexRes = await fetch(
-          `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`
-        );
-        if (dexRes.ok) {
-          const dexJson = await dexRes.json();
-          const pairs = Array.isArray(dexJson?.pairs) ? dexJson.pairs : [];
-          const solanaPairs = pairs.filter((p) => p?.chainId === "solana");
-          const bestPair = (solanaPairs.length ? solanaPairs : pairs)[0];
-          const p = Number(bestPair?.priceUsd);
-          if (Number.isFinite(p) && p > 0) {
-            resolvedPrice = p;
-          }
-        }
-      } catch (error) {
-        console.warn("[TOKEN_PRICE] dexscreener failed", address, error?.message || error);
-      }
-
-      if (resolvedPrice != null) {
-        prices[address] = resolvedPrice;
-        tokenPriceCache.set(cacheKey, { price: resolvedPrice, ts: now });
-      } else {
-        prices[address] = null;
-      }
+      prices[address] = await getTokenPriceUsd(address);
     }
 
     return res.json({ prices });
@@ -1896,7 +2009,14 @@ app.get("/api/autoclose/status", (_req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on port ${PORT}`);
+  if (!HAS_DATABASE_URL) {
+    console.warn("[DB] DATABASE_URL is missing. DB-backed features (orders/auto-close) cannot run.");
+  }
   if (AUTO_CLOSE_ENABLED) {
+    if (!HAS_DATABASE_URL) {
+      console.warn("[AUTO_CLOSE] skipped: DATABASE_URL is missing");
+      return;
+    }
     console.log("[AUTO_CLOSE] enabled", { intervalMs: AUTO_CLOSE_INTERVAL_MS });
     setTimeout(() => {
       void processAutoClose();

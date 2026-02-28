@@ -207,6 +207,7 @@ export default function HomeScreen() {
   });
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI } = useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
+  const recoveredHiddenRef = useRef(false);
   const lastFeedFetchRef = useRef(0);
   const blockedUntilRef = useRef(0);
   const retryDelayRef = useRef(10000);
@@ -543,7 +544,7 @@ export default function HomeScreen() {
     async (segmentType: RemoteSegment, initial = false) => {
       if (segmentLoadingMore[segmentType]) return [];
       if (!segmentHasMore[segmentType] && !initial) return [];
-      if (!canFetchFeed()) return [];
+      if (!initial && !canFetchFeed()) return [];
 
       setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: true }));
       if (initial) setLoading(true);
@@ -642,19 +643,25 @@ export default function HomeScreen() {
         segmentCache[segmentType].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length < LOW_DECK_THRESHOLD &&
         segmentHasMore[segmentType]
       ) {
+        if (!canFetchFeed()) break;
         const added = await fetchNextPage(segmentType, false);
         attempts += 1;
         if (added.length > 0) break;
       }
 
+      const visibleCount = segmentCache[segmentType].filter(
+        (t) => !(t.address && hiddenTokenAddresses.has(t.address))
+      ).length;
+
       if (
         attempts >= MAX_EMPTY_FETCH_ATTEMPTS &&
-        segmentCache[segmentType].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length === 0
+        visibleCount === 0 &&
+        !segmentHasMore[segmentType]
       ) {
         setSegmentDepleted((prev) => ({ ...prev, [segmentType]: true }));
       }
     },
-    [fetchNextPage, hiddenTokenAddresses, segmentCache, segmentHasMore]
+    [canFetchFeed, fetchNextPage, hiddenTokenAddresses, segmentCache, segmentHasMore]
   );
 
   useEffect(() => {
@@ -668,8 +675,35 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
     if (segmentCache[segment].length > 0) return;
+    setSegmentDepleted((prev) => ({ ...prev, [segment]: false }));
     void fetchNextPage(segment, true);
   }, [fetchNextPage, segment, segmentCache]);
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) return;
+    if (loading || segmentLoadingMore[segment]) return;
+    const visibleCount = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address))).length;
+    if (visibleCount > 0) return;
+    if (hiddenTokenAddresses.size === 0) return;
+    if (recoveredHiddenRef.current) return;
+
+    recoveredHiddenRef.current = true;
+    setHiddenTokenAddresses(new Set());
+    void AsyncStorage.setItem(HIDDEN_TOKENS_KEY, JSON.stringify([]));
+    loadedAddressRef.current[segment] = new Set<string>();
+    setSegmentCache((prev) => ({ ...prev, [segment]: [] }));
+    setSegmentCursor((prev) => ({ ...prev, [segment]: null }));
+    setSegmentHasMore((prev) => ({ ...prev, [segment]: true }));
+    setSegmentDepleted((prev) => ({ ...prev, [segment]: false }));
+    void fetchNextPage(segment, true);
+  }, [
+    fetchNextPage,
+    hiddenTokenAddresses,
+    loading,
+    segment,
+    segmentCache,
+    segmentLoadingMore,
+  ]);
 
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
@@ -1203,6 +1237,8 @@ export default function HomeScreen() {
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'
+                  : (loading || (isRemoteSegment(segment) && segmentLoadingMore[segment]))
+                    ? 'Loading tokens...'
                   : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'No more tokens available right now'
                     : 'Deck complete'
@@ -1210,6 +1246,8 @@ export default function HomeScreen() {
               emptySubtitle={
                 segment === 'favorites'
                   ? 'Tap the heart to save tokens for later'
+                  : (loading || (isRemoteSegment(segment) && segmentLoadingMore[segment]))
+                    ? 'Please wait while we fetch market data.'
                   : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'Please check back shortly for fresh listings.'
                     : 'No more tokens in this segment.'
