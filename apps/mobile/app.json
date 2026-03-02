@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.memeswipe",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -40,7 +44,14 @@
         }
       ],
       "expo-secure-store",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.memeswipe",
+          "enableGooglePay": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
@@ -48,7 +59,11 @@
     },
     "extra": {
       "privyAppId": "cmlwc08q900bi0cjyokcd46cf",
-      "privyClientId": ""
+      "privyClientId": "",
+      "router": {},
+      "eas": {
+        "projectId": "9a0eae32-5be6-4cd4-af60-b57581c2ff78"
+      }
     }
   }
 }

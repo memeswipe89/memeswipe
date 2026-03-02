@@ -8,11 +8,11 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } fr
 export type FeedSegment = 'trending' | 'stalker' | 'bigcap' | 'smart' | 'favorites';
 
 const SEGMENTS: { key: FeedSegment; label: string }[] = [
-  { key: 'trending', label: '🔥 Trending' },
-  { key: 'stalker', label: '👀 Stalker' },
-  { key: 'bigcap', label: '💎 Big Cap' },
-  { key: 'smart', label: '🧠 Smart List' },
-  { key: 'favorites', label: '❤️ Favorites' },
+  { key: 'trending', label: 'Trending' },
+  { key: 'stalker', label: 'Stalker' },
+  { key: 'bigcap', label: 'Big Cap' },
+  { key: 'smart', label: 'Smart List' },
+  { key: 'favorites', label: 'Favorites' },
 ];
 
 const SegmentChip = memo(function SegmentChip({
@@ -43,7 +43,7 @@ const SegmentChip = memo(function SegmentChip({
       <Pressable onPress={handlePress} style={[styles.chip, active && styles.chipActive]}>
         {active ? (
           <LinearGradient
-            colors={['rgba(104,139,255,0.58)', 'rgba(74,222,128,0.32)']}
+            colors={['rgba(106,142,255,0.72)', 'rgba(83,177,255,0.42)']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.activeFill}
@@ -75,8 +75,8 @@ export const FeedSegmentedControl = memo(function FeedSegmentedControl({
 
   return (
     <View style={styles.wrap}>
-      <LinearGradient colors={['rgba(96,132,255,0.16)', 'rgba(74,222,128,0.06)']} style={styles.glow} />
-      <BlurView intensity={24} tint="dark" style={styles.blur}>
+      <LinearGradient colors={['rgba(116,146,255,0.14)', 'rgba(56,83,138,0.1)']} style={styles.glow} />
+      <BlurView intensity={18} tint="dark" style={styles.blur}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           {visibleSegments.map((segment) => (
             <SegmentChip
@@ -94,56 +94,53 @@ export const FeedSegmentedControl = memo(function FeedSegmentedControl({
 
 const styles = StyleSheet.create({
   wrap: {
-    borderRadius: 999,
+    borderRadius: 16,
     overflow: 'hidden',
   },
   glow: {
     ...StyleSheet.absoluteFillObject,
-    opacity: 0.8,
-    borderRadius: 999,
+    opacity: 0.75,
+    borderRadius: 16,
   },
   blur: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 16,
+    backgroundColor: 'rgba(20,24,36,0.9)',
   },
   scrollContent: {
-    padding: 6,
-    gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    justifyContent: 'flex-start',
+    columnGap: 6,
   },
   chip: {
-    minHeight: 38,
+    minHeight: 36,
     borderRadius: 999,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   chipActive: {
-    borderColor: 'rgba(170,196,255,0.34)',
-    shadowColor: '#6c90ff',
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
+    shadowColor: '#82a0ff',
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
   },
   activeFill: {
     borderRadius: 999,
-    marginVertical: -10,
-    marginHorizontal: -16,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    marginVertical: -9,
+    marginHorizontal: -14,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
   },
   inactiveText: {
-    color: 'rgba(255,255,255,0.66)',
+    color: 'rgba(225,235,255,0.66)',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   activeText: {
     color: '#fff',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '800',
   },
 });

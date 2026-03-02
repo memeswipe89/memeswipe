@@ -36,7 +36,7 @@ import Animated, {
 
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { useAuth } from '@/contexts/auth-context';
-import { getBalance as getDevBalance } from '@/lib/devWallet';
+import { useWalletContext } from '@/contexts/wallet-context';
 
 import { ChainSwitcher } from './chain-switcher';
 import { TradeSettings } from './trade-settings';
@@ -44,6 +44,7 @@ import { TradeSettings } from './trade-settings';
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.8);
 const DRAG_CLOSE_THRESHOLD = 120;
+const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 
 export type ProfileSheetRef = {
   open: () => void;
@@ -60,7 +61,7 @@ export const ProfileSheet = memo(
     const [mounted, setMounted] = useState(false);
     const [open, setOpen] = useState(false);
     const [inputFocused, setInputFocused] = useState(false);
-    const [devBalance, setDevBalance] = useState(0);
+    const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
 
     const openProgress = useSharedValue(0);
     const dragY = useSharedValue(0);
@@ -76,6 +77,7 @@ export const ProfileSheet = memo(
       resetSettings,
     } = useTradeSettings();
     const { logout } = useAuth();
+    const { twitterProfile, setTwitterProfile, tradingWalletAddress, walletAddress } = useWalletContext();
 
     const closeSheet = useCallback(() => {
       setOpen(false);
@@ -99,7 +101,6 @@ export const ProfileSheet = memo(
 
     useEffect(() => {
       if (open) {
-        getDevBalance().then(setDevBalance).catch(() => setDevBalance(0));
         openProgress.value = withSpring(1, {
           damping: 26,
           stiffness: 240,
@@ -120,6 +121,41 @@ export const ProfileSheet = memo(
       });
       dragY.value = 0;
     }, [dragY, open, openProgress]);
+
+    useEffect(() => {
+      if (!open) return;
+      const targetAddress = tradingWalletAddress || walletAddress;
+      if (!targetAddress) {
+        setWalletSolBalance(null);
+        return;
+      }
+      let active = true;
+      const refreshBalance = async () => {
+        try {
+          const res = await fetch(SOLANA_MAINNET_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getBalance',
+              params: [targetAddress],
+            }),
+          });
+          const json = (await res.json()) as { result?: { value?: number } };
+          const lamports = Number(json?.result?.value || 0);
+          if (!active) return;
+          setWalletSolBalance(Number.isFinite(lamports) ? lamports / 1_000_000_000 : null);
+        } catch {
+          if (!active) return;
+          setWalletSolBalance(null);
+        }
+      };
+      void refreshBalance();
+      return () => {
+        active = false;
+      };
+    }, [open, tradingWalletAddress, walletAddress]);
 
     const panGesture = Gesture.Pan()
       .enabled(!inputFocused)
@@ -153,6 +189,7 @@ export const ProfileSheet = memo(
 
     const handleLogout = useCallback(async () => {
       try {
+        setTwitterProfile(null);
         await logout();
         resetSettings();
         closeSheet();
@@ -160,7 +197,7 @@ export const ProfileSheet = memo(
         console.log('Failed to logout', err);
         Alert.alert('Logout failed', 'Please try again.');
       }
-    }, [closeSheet, logout, resetSettings]);
+    }, [closeSheet, logout, resetSettings, setTwitterProfile]);
 
     if (!mounted) return null;
 
@@ -207,8 +244,10 @@ export const ProfileSheet = memo(
                     <View style={styles.section}>
                       <Text style={styles.sectionTitle}>User Info</Text>
                       <View style={styles.balanceTopWrap}>
-                        <Text style={styles.balanceTopLabel}>Balance</Text>
-                        <Text style={styles.balanceTopValue}>${devBalance.toFixed(2)}</Text>
+                        <Text style={styles.balanceTopLabel}>Balance (SOL)</Text>
+                        <Text style={styles.balanceTopValue}>
+                          {walletSolBalance == null ? '--' : `${walletSolBalance.toFixed(4)} SOL`}
+                        </Text>
                       </View>
                       <View style={styles.userRow}>
                         <View style={styles.avatarPlaceholder}>
@@ -224,7 +263,9 @@ export const ProfileSheet = memo(
                             placeholderTextColor="#8290b3"
                             style={styles.nameInput}
                           />
-                          <Text style={styles.userId}>User ID: 1111...1111</Text>
+                          <Text style={styles.userId}>
+                            Twitter: {twitterProfile?.username ? `@${twitterProfile.username}` : 'Not connected'}
+                          </Text>
                         </View>
                       </View>
                     </View>

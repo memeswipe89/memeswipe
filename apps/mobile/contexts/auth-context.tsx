@@ -139,7 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       balance,
       requiresDeposit,
       balanceLoading,
-      isLoggedIn: true,
+      isLoggedIn: !!user,
       loading,
       refreshBalanceCheck,
       logout,

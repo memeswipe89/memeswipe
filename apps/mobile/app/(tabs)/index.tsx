@@ -9,7 +9,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppLoader } from '@/components/app-loader';
-import { FeedSegmentedControl, type FeedSegment } from '@/components/feed-segmented-control';
+import type { FeedSegment } from '@/components/feed-segmented-control';
 import { ProfileButton } from '@/components/profile/profile-button';
 import { ProfileSheet, type ProfileSheetRef } from '@/components/profile/profile-sheet';
 import { SwipeHint } from '@/components/swipe-hint-overlay';
@@ -23,7 +23,6 @@ const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MIN_SOL_RESERVE_FOR_FEES = 0.01;
 const SWAP_SLIPPAGE_RETRY_BPS = [100, 300, 800, 1500, 3000, 5000];
-const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
 const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
@@ -160,7 +159,13 @@ const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
 };
 
 export default function HomeScreen() {
-  const { twitterProfile, setTwitterProfile, tradingWalletAddress, getOrCreateTradingWalletAddress } =
+  const {
+    twitterProfile,
+    setTwitterProfile,
+    tradingWalletAddress,
+    getOrCreateTradingWalletAddress,
+    getOrCreateLocalUserId,
+  } =
     useWalletContext();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
   const connectInProgressRef = useRef(false);
@@ -205,30 +210,14 @@ export default function HomeScreen() {
     tpRoi: 0,
     txSignature: '',
   });
-  const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI } = useTradeSettings();
+  const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI, setStopLoss } =
+    useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
   const recoveredHiddenRef = useRef(false);
+  const bootstrapCheckedRef = useRef(false);
   const lastFeedFetchRef = useRef(0);
   const blockedUntilRef = useRef(0);
   const retryDelayRef = useRef(10000);
-
-  const createUuidV4 = useCallback(
-    () =>
-      "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
-        const rand = Math.floor(Math.random() * 16);
-        const value = ch === "x" ? rand : (rand & 0x3) | 0x8;
-        return value.toString(16);
-      }),
-    []
-  );
-
-  const getOrCreateLocalUserId = useCallback(async () => {
-    const existing = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
-    if (existing) return existing;
-    const next = createUuidV4();
-    await AsyncStorage.setItem(LOCAL_USER_ID_KEY, next);
-    return next;
-  }, [createUuidV4]);
 
   const checkTwitterConnection = useCallback(
     async (resolvedUserId: string) => {
@@ -383,6 +372,9 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    if (bootstrapCheckedRef.current) return;
+    bootstrapCheckedRef.current = true;
+
     const sub = Linking.addEventListener("url", ({ url }) => {
       handleTwitterRedirect(url);
     });
@@ -1013,12 +1005,21 @@ export default function HomeScreen() {
         try {
           swapMeta = await executeJupiterSwap(token);
         } catch (error: any) {
+          const message = String(error?.message || '');
+          const isNotTradable =
+            message.includes('TOKEN_NOT_TRADABLE') || message.toLowerCase().includes('not tradable');
           console.log('[TRADE][SWIPE_RIGHT] swap failed', {
             symbol: token.symbol,
             address: token.address,
-            message: error?.message || String(error),
+            message,
+            isNotTradable,
           });
-          Alert.alert('Swap Failed', error?.message || 'Unable to execute on-chain swap.');
+          if (isNotTradable) {
+            hideToken(token.address);
+            Alert.alert('Token skipped', `${token.symbol.toUpperCase()} is not tradable right now.`);
+            return;
+          }
+          Alert.alert('Swap Failed', message || 'Unable to execute on-chain swap.');
           return;
         }
 
@@ -1084,6 +1085,15 @@ export default function HomeScreen() {
       setTpROI(Number(next.toFixed(2)));
     },
     [setTpROI, tpROI]
+  );
+
+  const updateStopLoss = useCallback(
+    (delta: number) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+      const next = Math.max(MIN_PERCENT, Math.min(50, stopLoss + delta));
+      setStopLoss(Number(next.toFixed(2)));
+    },
+    [setStopLoss, stopLoss]
   );
 
   useEffect(() => {
@@ -1162,42 +1172,65 @@ export default function HomeScreen() {
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <View style={styles.screen}>
           <View style={styles.topBarWrap}>
-            <View style={styles.topBar}>
+            <View style={styles.topProfileRow}>
+              <View style={styles.brandWrap}>
+                <Text style={styles.brandText}>MemeSwipe</Text>
+              </View>
               <ProfileButton
                 onPress={() => profileSheetRef.current?.open()}
                 onLongPress={openDevWalletControls}
                 initials={(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}
                 disabled={appLoading}
               />
+            </View>
+            <View style={styles.controlsRowWrap}>
               <View style={styles.controlsRow}>
-                <GlassControlPill
-                  label="Amount"
-                  value={tradeAmount}
-                  suffix="$"
-                  onMinus={() => updateTradeAmount(-0.1)}
-                  onPlus={() => updateTradeAmount(0.1)}
-                  onCommit={(v) =>
-                    setTradeAmount(
-                      Number(Math.max(MIN_TRADE_AMOUNT_USD, Math.min(MAX_TRADE_AMOUNT_USD, v)).toFixed(4))
-                    )
-                  }
-                />
-                <GlassControlPill
-                  label="ROI"
-                  value={tpROI}
-                  suffix="%"
-                  onMinus={() => updateTpRoi(-0.1)}
-                  onPlus={() => updateTpRoi(0.1)}
-                  onCommit={(v) => setTpROI(Math.max(MIN_PERCENT, Math.min(200, v)))}
-                />
+                <View style={styles.controlSlot}>
+                  <GlassControlPill
+                    label="Amount"
+                    value={tradeAmount}
+                    suffix="$"
+                    onMinus={() => updateTradeAmount(-0.1)}
+                    onPlus={() => updateTradeAmount(0.1)}
+                    onCommit={(v) =>
+                      setTradeAmount(
+                        Number(Math.max(MIN_TRADE_AMOUNT_USD, Math.min(MAX_TRADE_AMOUNT_USD, v)).toFixed(4))
+                      )
+                    }
+                  />
+                </View>
+                <View style={styles.controlSlot}>
+                  <GlassControlPill
+                    label="ROI"
+                    value={tpROI}
+                    suffix="%"
+                    onMinus={() => updateTpRoi(-0.1)}
+                    onPlus={() => updateTpRoi(0.1)}
+                    onCommit={(v) => setTpROI(Math.max(MIN_PERCENT, Math.min(200, v)))}
+                  />
+                </View>
+                <View style={styles.controlSlot}>
+                  <GlassControlPill
+                    label="TL"
+                    value={stopLoss}
+                    suffix="%"
+                    onMinus={() => updateStopLoss(-0.1)}
+                    onPlus={() => updateStopLoss(0.1)}
+                    onCommit={(v) => setStopLoss(Math.max(MIN_PERCENT, Math.min(50, v)))}
+                  />
+                </View>
               </View>
             </View>
           <View style={styles.filterRow}>
-            <FeedSegmentedControl
-              value={segment}
-              onChange={setSegment}
-              segments={['trending', 'stalker', 'bigcap', 'smart', 'favorites']}
-            />
+            <Text style={styles.segmentLabel}>Trending</Text>
+            <Pressable
+              onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
+              style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
+            >
+              <Text style={[styles.favoritesToggleText, segment === 'favorites' && styles.favoritesToggleTextActive]}>
+                Favorites
+              </Text>
+            </Pressable>
           </View>
           {activeChain === 'solana' ? (
             <View style={styles.swapBudgetRow}>
@@ -1310,24 +1343,76 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
-  topBar: {
+  topProfileRow: {
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: 8,
-    gap: 12,
+    paddingBottom: 8,
+  },
+  brandWrap: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  brandText: {
+    color: '#eaf1ff',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.25,
+  },
+  controlsRowWrap: {
+    width: '100%',
+    paddingHorizontal: 20,
+    paddingTop: 0,
   },
   controlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  controlSlot: {
+    flex: 1,
   },
   filterRow: {
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 10,
+    paddingBottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  segmentLabel: {
+    color: '#f3f7ff',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  favoritesToggle: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  favoritesToggleActive: {
+    borderColor: 'rgba(255,128,153,0.45)',
+    backgroundColor: 'rgba(255,107,129,0.16)',
+  },
+  favoritesToggleText: {
+    color: 'rgba(225,235,255,0.76)',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  favoritesToggleTextActive: {
+    color: '#ffd6df',
   },
   swapBudgetRow: {
     paddingHorizontal: 20,
@@ -1364,22 +1449,23 @@ const styles = StyleSheet.create({
   controlRing: {
     borderRadius: 999,
     padding: 1,
+    width: '100%',
   },
   controlInner: {
-    minHeight: 42,
+    minHeight: 40,
     borderRadius: 999,
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
     backgroundColor: 'rgba(255,255,255,0.06)',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'space-between',
   },
   controlButton: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.08)',
@@ -1390,31 +1476,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   controlValueWrap: {
-    minWidth: 62,
+    minWidth: 0,
+    flex: 1,
     alignItems: 'center',
   },
   controlLabel: {
     color: 'rgba(214,224,255,0.72)',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '600',
-    letterSpacing: 0.4,
+    letterSpacing: 0.35,
     textTransform: 'uppercase',
   },
   controlValue: {
     color: '#fff',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
   },
   controlInput: {
-    minWidth: 72,
-    height: 28,
+    minWidth: 56,
+    height: 26,
     borderRadius: 8,
     backgroundColor: 'rgba(255,255,255,0.1)',
     color: '#fff',
     textAlign: 'center',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
   },
   tradePopupOverlay: {
     ...StyleSheet.absoluteFillObject,

@@ -4,14 +4,37 @@ import * as Clipboard from 'expo-clipboard';
 import QRCode from 'react-native-qrcode-svg';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/auth-context';
+import { useWalletContext } from '@/contexts/wallet-context';
 
 export default function DepositScreen() {
   const router = useRouter();
-  const { walletAddress, balance, refreshBalanceCheck } = useAuth();
+  const { balance, refreshBalanceCheck } = useAuth();
+  const {
+    walletAddress,
+    tradingWalletAddress,
+    walletLoading,
+    walletError,
+    refreshWalletAddress,
+    getOrCreateTradingWalletAddress,
+  } = useWalletContext();
+  const targetWalletAddress = tradingWalletAddress || walletAddress;
+
+  React.useEffect(() => {
+    if (targetWalletAddress) return;
+    void (async () => {
+      try {
+        const refreshed = await refreshWalletAddress();
+        if (refreshed) return;
+        await getOrCreateTradingWalletAddress();
+      } catch {
+        // surface via walletError
+      }
+    })();
+  }, [getOrCreateTradingWalletAddress, refreshWalletAddress, targetWalletAddress]);
 
   const copyAddress = async () => {
-    if (!walletAddress) return;
-    await Clipboard.setStringAsync(walletAddress);
+    if (!targetWalletAddress) return;
+    await Clipboard.setStringAsync(targetWalletAddress);
     Alert.alert('Copied', 'Wallet address copied to clipboard.');
   };
 
@@ -23,23 +46,34 @@ export default function DepositScreen() {
       <View style={styles.panel}>
         <Text style={styles.label}>Your wallet</Text>
         <Text selectable style={styles.address}>
-          {walletAddress || 'No wallet found yet'}
+          {targetWalletAddress || (walletLoading ? 'Loading wallet...' : 'No wallet found yet')}
         </Text>
-        <Text style={styles.network}>Network: Base (mainnet)</Text>
-        {typeof balance === 'number' ? <Text style={styles.balance}>Current balance: {balance.toFixed(6)} ETH</Text> : null}
+        <Text style={styles.network}>Network: Solana (mainnet)</Text>
+        {walletError ? <Text style={styles.error}>Wallet issue: {walletError}</Text> : null}
+        {typeof balance === 'number' ? <Text style={styles.balance}>Current balance: {balance.toFixed(6)} SOL</Text> : null}
       </View>
 
-      {walletAddress ? (
+      {targetWalletAddress ? (
         <View style={styles.qrWrap}>
           <View style={styles.qrCard}>
-            <QRCode value={walletAddress} size={210} />
+            <QRCode value={targetWalletAddress} size={210} />
           </View>
         </View>
       ) : null}
 
-      <Pressable style={styles.primary} onPress={copyAddress} disabled={!walletAddress}>
+      <Pressable style={styles.primary} onPress={copyAddress} disabled={!targetWalletAddress}>
         <Text style={styles.primaryText}>Copy Address</Text>
       </Pressable>
+
+      {!targetWalletAddress ? (
+        <Pressable
+          style={styles.secondary}
+          onPress={() => void getOrCreateTradingWalletAddress()}
+          disabled={walletLoading}
+        >
+          <Text style={styles.secondaryText}>{walletLoading ? 'Creating Wallet...' : 'Create Trading Wallet'}</Text>
+        </Pressable>
+      ) : null}
 
       <Pressable
         style={styles.secondary}
@@ -100,6 +134,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: '700',
   },
+  error: {
+    color: '#ef4444',
+    marginTop: 8,
+    fontSize: 12,
+  },
   qrWrap: {
     alignItems: 'center',
     marginTop: 18,
@@ -136,4 +175,3 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 });
-

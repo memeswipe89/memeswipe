@@ -11,6 +11,7 @@ import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Text, View } from "react-native";
 import { PrivyProvider } from "@privy-io/expo";
+import { StripeProvider } from '@stripe/stripe-react-native';
 import React from 'react';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
@@ -37,9 +38,15 @@ export default function RootLayout() {
   const extra = (Constants.expoConfig?.extra || {}) as {
     privyAppId?: string;
     privyClientId?: string;
+    stripePublishableKey?: string;
+    applePayMerchantId?: string;
   };
   const privyAppId = process.env.EXPO_PUBLIC_PRIVY_APP_ID || extra.privyAppId || "";
   const privyClientId = process.env.EXPO_PUBLIC_PRIVY_CLIENT_ID || extra.privyClientId;
+  const stripePublishableKey =
+    process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY || extra.stripePublishableKey || "";
+  const applePayMerchantId =
+    process.env.EXPO_PUBLIC_APPLE_PAY_MERCHANT_ID || extra.applePayMerchantId || "merchant.com.memeswipe";
 
   console.log('Privy App ID:', privyAppId);
   console.log('Privy Client ID:', privyClientId);
@@ -55,7 +62,7 @@ export default function RootLayout() {
     );
   }
 
-  return (
+  const content = (
     <PrivyProvider
       appId={privyAppId}
       clientId={privyClientId}
@@ -85,6 +92,14 @@ export default function RootLayout() {
       </AuthProvider>
     </PrivyProvider>
   );
+
+  if (!stripePublishableKey) return content;
+
+  return (
+    <StripeProvider publishableKey={stripePublishableKey} merchantIdentifier={applePayMerchantId}>
+      {content}
+    </StripeProvider>
+  );
 }
 
 function AuthGatedApp() {
@@ -97,10 +112,6 @@ function AuthGatedApp() {
     if (requiresDeposit && pathname !== '/deposit') {
       router.replace('/deposit');
       return;
-    }
-
-    if (!requiresDeposit && pathname === '/deposit') {
-      router.replace('/(tabs)');
     }
   }, [balanceLoading, loading, pathname, requiresDeposit, router]);
 

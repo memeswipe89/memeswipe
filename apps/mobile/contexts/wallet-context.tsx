@@ -1,5 +1,5 @@
 import * as FileSystem from "expo-file-system/legacy";
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   EmbeddedSolanaWalletState,
@@ -21,6 +21,7 @@ type WalletContextValue = {
   walletLoading: boolean;
   walletError: string | null;
   setTwitterProfile: (profile: TwitterProfile | null) => void;
+  getOrCreateLocalUserId: () => Promise<string>;
   getOrCreateEmbeddedWalletAddress: () => Promise<string>;
   refreshWalletAddress: () => Promise<string | null>;
   getOrCreateTradingWalletAddress: () => Promise<string>;
@@ -36,6 +37,7 @@ const WALLET_ADDRESS_FILE = FileSystem.documentDirectory
   ? `${FileSystem.documentDirectory}memeswipe_wallet_address.txt`
   : null;
 const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
+const USER_ID_MAP_PREFIX = "@memeswipe:userId:privy:";
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -147,13 +149,36 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       return value.toString(16);
     });
 
-  const getOrCreateLocalUserId = async () => {
+  const getOrCreateLocalUserId = useCallback(async () => {
+    const privyUserId = typeof (user as any)?.id === "string" ? ((user as any).id as string) : null;
     const existing = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
+
+    // Prefer stable mapping by Privy user id to avoid wallet changes across reinstalls.
+    if (privyUserId) {
+      const mapKey = `${USER_ID_MAP_PREFIX}${privyUserId}`;
+      const mapped = await AsyncStorage.getItem(mapKey);
+      if (mapped) {
+        if (existing !== mapped) await AsyncStorage.setItem(LOCAL_USER_ID_KEY, mapped);
+        return mapped;
+      }
+
+      // Migrate legacy local id to Privy mapping when available.
+      if (existing) {
+        await AsyncStorage.setItem(mapKey, existing);
+        return existing;
+      }
+
+      const stable = `privy:${privyUserId}`;
+      await AsyncStorage.setItem(mapKey, stable);
+      await AsyncStorage.setItem(LOCAL_USER_ID_KEY, stable);
+      return stable;
+    }
+
     if (existing) return existing;
     const next = createUuidV4();
     await AsyncStorage.setItem(LOCAL_USER_ID_KEY, next);
     return next;
-  };
+  }, [user]);
 
   const getOrCreateTradingWalletAddress = async (): Promise<string> => {
     setWalletLoading(true);
@@ -329,6 +354,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       walletLoading,
       walletError,
       setTwitterProfile,
+      getOrCreateLocalUserId,
       getOrCreateEmbeddedWalletAddress,
       refreshWalletAddress,
       getOrCreateTradingWalletAddress,

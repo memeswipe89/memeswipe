@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 const crypto = require("crypto");
+const Stripe = require("stripe");
 const {
   Connection,
   Keypair,
@@ -65,6 +66,7 @@ const AUTO_CLOSE_OUTPUT_MINTS = [
 let autoCloseRunning = false;
 let autoClosePausedUntil = 0;
 const TRADING_WALLET_TABLE = "trading_wallets";
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 const base64UrlEncode = (buffer) =>
   buffer
@@ -1246,6 +1248,82 @@ app.get("/api/health/db", async (req, res) => {
       res.status(500).json({ ok: false, error: err.message });
     }
   });  
+
+app.post("/api/payments/apple-pay/intent", async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(500).json({ error: "STRIPE_SECRET_KEY is not configured" });
+    }
+    const amountUsd = Number(req.body?.amountUsd);
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    const currency = String(req.body?.currency || "usd").toLowerCase();
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+      return res.status(400).json({ error: "amountUsd must be a positive number" });
+    }
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const amountCents = Math.round(amountUsd * 100);
+    const intent = await stripe.paymentIntents.create({
+      amount: amountCents,
+      currency,
+      automatic_payment_methods: { enabled: true },
+      metadata: {
+        userId,
+        source: "apple_pay",
+        product: "wallet_deposit",
+      },
+      description: `MemeSwipe wallet deposit ($${amountUsd.toFixed(2)})`,
+    });
+
+    return res.json({
+      clientSecret: intent.client_secret,
+      paymentIntentId: intent.id,
+      amount: amountCents,
+      currency,
+    });
+  } catch (err) {
+    console.error("Apple Pay intent error:", err);
+    return res.status(500).json({ error: err.message || "Failed to create Apple Pay intent" });
+  }
+});
+
+app.post("/api/payments/apple-pay/confirm", async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(500).json({ error: "STRIPE_SECRET_KEY is not configured" });
+    }
+    const paymentIntentId =
+      typeof req.body?.paymentIntentId === "string" ? req.body.paymentIntentId.trim() : "";
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    if (!paymentIntentId || !userId) {
+      return res.status(400).json({ error: "paymentIntentId and userId are required" });
+    }
+
+    const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const paid =
+      intent.status === "succeeded" || intent.status === "processing" || intent.status === "requires_capture";
+    if (!paid) {
+      return res.status(400).json({
+        error: "Payment not completed",
+        status: intent.status,
+      });
+    }
+
+    return res.json({
+      success: true,
+      paymentIntentId: intent.id,
+      status: intent.status,
+      amount: intent.amount,
+      currency: intent.currency,
+      metadata: intent.metadata || {},
+    });
+  } catch (err) {
+    console.error("Apple Pay confirm error:", err);
+    return res.status(500).json({ error: err.message || "Failed to confirm Apple Pay payment" });
+  }
+});
 
 app.get("/api/token-prices", async (req, res) => {
   try {

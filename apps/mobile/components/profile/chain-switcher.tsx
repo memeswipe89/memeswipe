@@ -36,7 +36,6 @@ export const ChainSwitcher = memo(function ChainSwitcher({ value, onChange }: Ch
       <Text style={styles.title}>Chain</Text>
       <View style={styles.row}>
         <ChainButton label="Solana" active={value === 'solana'} onPress={() => onChange('solana')} />
-        <ChainButton label="Base" active={value === 'base'} onPress={() => onChange('base')} />
       </View>
     </View>
   );

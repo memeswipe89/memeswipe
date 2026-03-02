@@ -389,13 +389,19 @@ export default function WalletScreen() {
         </View>
       ) : (
         <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
-          <Text style={{ color: "#aaa" }}>{walletError || "No wallet address found yet."}</Text>
-          <Pressable
-            onPress={handleCreateWallet}
-            style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
-          >
-            <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Wallet</Text>
-          </Pressable>
+          <Text style={{ color: "#aaa" }}>
+            {!twitterProfile
+              ? "Connect Twitter on Home first, then create your wallet."
+              : walletError || "No wallet address found yet."}
+          </Text>
+          {twitterProfile ? (
+            <Pressable
+              onPress={handleCreateWallet}
+              style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
+            >
+              <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Wallet</Text>
+            </Pressable>
+          ) : null}
         </View>
       )}
       </ScrollView>
