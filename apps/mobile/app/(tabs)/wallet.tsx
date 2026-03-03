@@ -29,6 +29,7 @@ const truncateMiddle = (value: string, keep = 6) => {
   if (value.length <= keep * 2 + 3) return value;
   return `${value.slice(0, keep)}...${value.slice(-keep)}`;
 };
+const formatSol = (value: number) => `${value.toFixed(9)} SOL`;
 
 export default function WalletScreen() {
   const { width, height } = useWindowDimensions();
@@ -286,7 +287,7 @@ export default function WalletScreen() {
                 </View>
               ) : (
                 <Text style={{ color: "#fff", marginTop: 4, fontSize: 18, fontWeight: "700" }}>
-                  {solBalance === null ? "--" : `${solBalance.toFixed(6)} SOL`}
+                  {solBalance === null ? "--" : formatSol(solBalance)}
                 </Text>
               )}
               {balanceError ? <Text style={{ color: "#ff8a8a", marginTop: 6, fontSize: 11 }}>{balanceError}</Text> : null}

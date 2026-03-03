@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { addBalance } from '@/lib/devWallet';
+import { notifyTradeClosed } from '@/lib/notifications';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
@@ -40,6 +42,9 @@ type TradeItem = {
   closeReason: 'tp' | 'sl' | 'manual' | 'unknown' | null;
   closeTriggerPct: number | null;
   entryPriceUsd: number | null;
+  closePriceUsd: number | null;
+  closePnlPct: number | null;
+  closePnlUsd: number | null;
   livePriceUsd: number | null;
   tpRoi: number;
 };
@@ -68,6 +73,17 @@ const getLivePnl = (trade: TradeItem) => {
   const livePnlUsd =
     livePnlPct !== null ? (trade.displayAmountUsd * livePnlPct) / 100 : trade.fallbackPnlUsd;
   return { livePnlPct, livePnlUsd };
+};
+
+const getDisplayedPnl = (trade: TradeItem) => {
+  if (trade.status === 'closed' && trade.closePnlPct !== null) {
+    return {
+      pnlPct: trade.closePnlPct,
+      pnlUsd: trade.closePnlUsd ?? (trade.displayAmountUsd * trade.closePnlPct) / 100,
+    };
+  }
+  const { livePnlPct, livePnlUsd } = getLivePnl(trade);
+  return { pnlPct: livePnlPct, pnlUsd: livePnlUsd };
 };
 
 export default function TradesScreen() {
@@ -117,6 +133,9 @@ export default function TradesScreen() {
           close_reason?: string | null;
           close_trigger_pct?: number | string | null;
           price_usd?: number | string | null;
+          close_price_usd?: number | string | null;
+          close_pnl_pct?: number | string | null;
+          close_pnl_usd?: number | string | null;
           output_mint?: string | null;
         }[];
         error?: string;
@@ -144,6 +163,9 @@ export default function TradesScreen() {
           close_reason?: string | null;
           close_trigger_pct?: number | string | null;
           price_usd?: number | string | null;
+          close_price_usd?: number | string | null;
+          close_pnl_pct?: number | string | null;
+          close_pnl_usd?: number | string | null;
           output_mint?: string | null;
         }[];
         }>(fallbackRes);
@@ -190,6 +212,18 @@ export default function TradesScreen() {
                 })(),
           tpRoi: roi,
           entryPriceUsd: entryPrice > 0 ? entryPrice : null,
+          closePriceUsd: (() => {
+            const v = toNumber(order.close_price_usd, 0);
+            return v > 0 ? v : null;
+          })(),
+          closePnlPct: (() => {
+            const v = toNumber(order.close_pnl_pct, Number.NaN);
+            return Number.isFinite(v) ? v : null;
+          })(),
+          closePnlUsd: (() => {
+            const v = toNumber(order.close_pnl_usd, Number.NaN);
+            return Number.isFinite(v) ? v : null;
+          })(),
           livePriceUsd: null,
           tokenAddress: order.token_address || order.output_mint || '',
         } as TradeItem;
@@ -302,8 +336,19 @@ export default function TradesScreen() {
         // Credit/debit realized PnL into app balance after confirmed on-chain close.
         const { livePnlUsd } = getLivePnl(trade);
         await addBalance(livePnlUsd);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+        const notified = await notifyTradeClosed({ symbol: trade.symbol, pnlUsd: livePnlUsd });
+        if (!notified) {
+          Alert.alert(
+            'Trade Closed',
+            `${trade.symbol.toUpperCase()} closed ${livePnlUsd >= 0 ? 'in profit' : 'in loss'} (${livePnlUsd >= 0 ? '+' : ''}$${livePnlUsd.toFixed(4)}).`
+          );
+        }
       } catch (err: any) {
-        setError(err?.message || 'Failed to close trade');
+        const message = err?.message || 'Failed to close trade';
+        setError(message);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+        Alert.alert('Close Trade Failed', message);
       } finally {
         setClosingId(null);
       }
@@ -383,7 +428,8 @@ export default function TradesScreen() {
           renderItem={({ item }) => (
             <View style={styles.card}>
               {(() => {
-                const { livePnlPct, livePnlUsd } = getLivePnl(item);
+                const { pnlPct, pnlUsd } = getDisplayedPnl(item);
+                const pnlSol = solPriceUsd && solPriceUsd > 0 ? pnlUsd / solPriceUsd : null;
                 return (
                   <>
               <View style={styles.cardTop}>
@@ -395,6 +441,11 @@ export default function TradesScreen() {
               <Text style={styles.meta}>
                 Entry Price: {item.entryPriceUsd ? `$${item.entryPriceUsd.toFixed(9)}` : '--'}
               </Text>
+              {item.status === 'closed' ? (
+                <Text style={styles.meta}>
+                  Close Price: {item.closePriceUsd ? `$${item.closePriceUsd.toFixed(9)}` : '--'}
+                </Text>
+              ) : null}
               <Text style={styles.meta}>
                 Live Price: {item.livePriceUsd ? `$${item.livePriceUsd.toFixed(9)}` : '--'}
               </Text>
@@ -403,12 +454,15 @@ export default function TradesScreen() {
                   Change: {(((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100).toFixed(2)}%
                 </Text>
               ) : null}
-              <Text style={[styles.pnl, livePnlUsd >= 0 ? styles.green : styles.red]}>
-                {livePnlUsd >= 0 ? '+' : ''}
-                {livePnlUsd.toFixed(6)} USDT
+              <Text style={[styles.pnl, pnlUsd >= 0 ? styles.green : styles.red]}>
+                {pnlUsd >= 0 ? '+' : ''}
+                {pnlUsd.toFixed(6)} USDT
               </Text>
-              <Text style={[styles.meta, livePnlPct !== null ? (livePnlPct >= 0 ? styles.green : styles.red) : null]}>
-                PnL %: {livePnlPct === null ? '--' : `${livePnlPct >= 0 ? '+' : ''}${livePnlPct.toFixed(2)}%`}
+              <Text style={[styles.meta, pnlPct !== null ? (pnlPct >= 0 ? styles.green : styles.red) : null]}>
+                PnL %: {pnlPct === null ? '--' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(4)}%`}
+              </Text>
+              <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
+                PnL SOL: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
               </Text>
               {item.status === 'closed' && item.closeReason ? (
                 <Text style={styles.meta}>

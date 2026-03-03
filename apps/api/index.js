@@ -55,7 +55,7 @@ const AUTO_CLOSE_ENABLED = String(process.env.AUTO_CLOSE_ENABLED || "false").toL
 const AUTO_CLOSE_INTERVAL_MS = Math.max(5_000, Number(process.env.AUTO_CLOSE_INTERVAL_MS || 10_000));
 const AUTO_CLOSE_MAX_ORDERS_PER_CYCLE = Math.max(
   1,
-  Number(process.env.AUTO_CLOSE_MAX_ORDERS_PER_CYCLE || 1)
+  Number(process.env.AUTO_CLOSE_MAX_ORDERS_PER_CYCLE || 5)
 );
 const AUTO_CLOSE_SLIPPAGE_RETRY_BPS = [800, 1200, 2000, 3000, 5000];
 const AUTO_CLOSE_AMOUNT_BPS = [10000, 9800, 9000, 7500, 5000, 2500];
@@ -717,8 +717,9 @@ const executeCloseSwapForOrder = async (connection, order, options = {}) => {
     return { skipped: true, reason: "threshold_not_hit", pnlPct, livePriceUsd };
   }
 
-  const closeReason = force ? "manual" : tpHit ? "tp" : slHit ? "sl" : "unknown";
-  const closeTriggerPct = force ? null : tpHit ? tpRoi : slHit ? -effectiveSlPct : null;
+  const thresholdReason = tpHit ? "tp" : slHit ? "sl" : null;
+  const closeReason = thresholdReason || (force ? "manual" : "unknown");
+  const closeTriggerPct = tpHit ? tpRoi : slHit ? -effectiveSlPct : null;
   const realizedPnlUsd = Number.isFinite(amountUsd) && amountUsd > 0 ? (amountUsd * pnlPct) / 100 : null;
 
   const closeByThresholdFallback = async (fallbackReason) => {
@@ -2022,6 +2023,15 @@ app.post("/api/orders", async (req, res) => {
       tokenAddress: createdOrder?.token_address,
       tokenSymbol: createdOrder?.token_symbol,
     });
+
+    // Kick an immediate auto-close pass right after opening a new order,
+    // so TP/SL can trigger quickly instead of waiting for the periodic loop.
+    if (AUTO_CLOSE_ENABLED && HAS_DATABASE_URL) {
+      setTimeout(() => {
+        void processAutoClose();
+      }, 1200);
+    }
+
     res.json({ success: true, order: createdOrder, requestedUserId: userId, insertedUserId: insertUserId });
   } catch (err) {
     console.error("Order error:", err);

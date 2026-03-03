@@ -11,13 +11,13 @@ import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Text, View } from "react-native";
 import { PrivyProvider } from "@privy-io/expo";
-import { StripeProvider } from '@stripe/stripe-react-native';
 import React from 'react';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
 import { TradeSettingsProvider } from '@/contexts/trade-settings-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { WalletProvider } from '@/contexts/wallet-context';
+import { initializeNotifications } from '@/lib/notifications';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const processPolyfill = require('process');
@@ -38,15 +38,13 @@ export default function RootLayout() {
   const extra = (Constants.expoConfig?.extra || {}) as {
     privyAppId?: string;
     privyClientId?: string;
-    stripePublishableKey?: string;
-    applePayMerchantId?: string;
   };
   const privyAppId = process.env.EXPO_PUBLIC_PRIVY_APP_ID || extra.privyAppId || "";
   const privyClientId = process.env.EXPO_PUBLIC_PRIVY_CLIENT_ID || extra.privyClientId;
-  const stripePublishableKey =
-    process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY || extra.stripePublishableKey || "";
-  const applePayMerchantId =
-    process.env.EXPO_PUBLIC_APPLE_PAY_MERCHANT_ID || extra.applePayMerchantId || "merchant.com.memeswipe";
+
+  React.useEffect(() => {
+    void initializeNotifications();
+  }, []);
 
   console.log('Privy App ID:', privyAppId);
   console.log('Privy Client ID:', privyClientId);
@@ -93,13 +91,7 @@ export default function RootLayout() {
     </PrivyProvider>
   );
 
-  if (!stripePublishableKey) return content;
-
-  return (
-    <StripeProvider publishableKey={stripePublishableKey} merchantIdentifier={applePayMerchantId}>
-      {content}
-    </StripeProvider>
-  );
+  return content;
 }
 
 function AuthGatedApp() {

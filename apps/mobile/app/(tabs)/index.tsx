@@ -9,6 +9,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppLoader } from '@/components/app-loader';
+import { LoadingOverlay } from '@/components/loading-overlay';
 import type { FeedSegment } from '@/components/feed-segmented-control';
 import { ProfileButton } from '@/components/profile/profile-button';
 import { ProfileSheet, type ProfileSheetRef } from '@/components/profile/profile-sheet';
@@ -175,6 +176,7 @@ export default function HomeScreen() {
   const [showTwitterPrompt, setShowTwitterPrompt] = useState(false);
   const [loading, setLoading] = useState(false);
   const [creatingOrder, setCreatingOrder] = useState(false);
+  const [buyLoading, setBuyLoading] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
   const [appLoading, setAppLoading] = useState(true);
   const [showSwipeHint, setShowSwipeHint] = useState(true);
@@ -993,57 +995,62 @@ export default function HomeScreen() {
         priceUsd: token.priceUsd,
       });
       void (async () => {
-        let swapMeta:
-          | {
-              signature: string;
-              inputMint: string;
-              outputMint: string;
-              inAmountRaw: string;
-              outAmountRaw: string;
-            }
-          | undefined;
+        setBuyLoading(true);
         try {
-          swapMeta = await executeJupiterSwap(token);
-        } catch (error: any) {
-          const message = String(error?.message || '');
-          const isNotTradable =
-            message.includes('TOKEN_NOT_TRADABLE') || message.toLowerCase().includes('not tradable');
-          console.log('[TRADE][SWIPE_RIGHT] swap failed', {
-            symbol: token.symbol,
-            address: token.address,
-            message,
-            isNotTradable,
-          });
-          if (isNotTradable) {
-            hideToken(token.address);
-            Alert.alert('Token skipped', `${token.symbol.toUpperCase()} is not tradable right now.`);
+          let swapMeta:
+            | {
+                signature: string;
+                inputMint: string;
+                outputMint: string;
+                inAmountRaw: string;
+                outAmountRaw: string;
+              }
+            | undefined;
+          try {
+            swapMeta = await executeJupiterSwap(token);
+          } catch (error: any) {
+            const message = String(error?.message || '');
+            const isNotTradable =
+              message.includes('TOKEN_NOT_TRADABLE') || message.toLowerCase().includes('not tradable');
+            console.log('[TRADE][SWIPE_RIGHT] swap failed', {
+              symbol: token.symbol,
+              address: token.address,
+              message,
+              isNotTradable,
+            });
+            if (isNotTradable) {
+              hideToken(token.address);
+              Alert.alert('Token skipped', `${token.symbol.toUpperCase()} is not tradable right now.`);
+              return;
+            }
+            Alert.alert('Swap Failed', message || 'Unable to execute on-chain swap.');
             return;
           }
-          Alert.alert('Swap Failed', message || 'Unable to execute on-chain swap.');
-          return;
-        }
 
-        const ok = await createOrder(token, swapMeta);
-        if (!ok) {
-          Alert.alert('Order Failed', `Unable to execute ${token.symbol.toUpperCase()} order.`);
-          return;
-        }
-        setTradeOpenPopup({
-          visible: true,
-          tokenName: token.name,
-          tokenSymbol: token.symbol.toUpperCase(),
-          amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
-          tpRoi: Number.isFinite(tpROI) ? tpROI : 0,
-          txSignature: swapMeta?.signature || '',
-        });
-        hideToken(token.address);
+          const ok = await createOrder(token, swapMeta);
+          if (!ok) {
+            Alert.alert('Order Failed', `Unable to execute ${token.symbol.toUpperCase()} order.`);
+            return;
+          }
+          setTradeOpenPopup({
+            visible: true,
+            tokenName: token.name,
+            tokenSymbol: token.symbol.toUpperCase(),
+            amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
+            tpRoi: Number.isFinite(tpROI) ? tpROI : 0,
+            txSignature: swapMeta?.signature || '',
+          });
+          hideToken(token.address);
 
-        setFavoriteTokens((prev) => {
-          const next = prev.filter((item) => item.address !== token.address);
-          persistFavorites(next);
-          setFavoriteAddresses(new Set(next.map((f) => f.address)));
-          return next;
-        });
+          setFavoriteTokens((prev) => {
+            const next = prev.filter((item) => item.address !== token.address);
+            persistFavorites(next);
+            setFavoriteAddresses(new Set(next.map((f) => f.address)));
+            return next;
+          });
+        } finally {
+          setBuyLoading(false);
+        }
       })();
     },
     [createOrder, executeJupiterSwap, hideToken, persistFavorites, tpROI, tradeAmount]
@@ -1264,7 +1271,7 @@ export default function HomeScreen() {
                 onToggleFavorite={handleToggleFavorite}
               favoriteAddresses={favoriteAddresses}
               isLoading={loading}
-              isInteractionLocked={appLoading}
+              isInteractionLocked={appLoading || creatingOrder || buyLoading}
               onSwipeStateChange={setIsSwiping}
               onActiveCardChange={handleActiveCardChange}
               emptyTitle={
@@ -1293,6 +1300,7 @@ export default function HomeScreen() {
         <ProfileSheet ref={profileSheetRef} />
         <SwipeHint visible={showSwipeHint} />
         <AppLoader visible={appLoading} />
+        <LoadingOverlay visible={creatingOrder || buyLoading} text="Executing trade..." />
         {tradeOpenPopup.visible ? (
           <View style={styles.tradePopupOverlay} pointerEvents="box-none">
             <View style={styles.tradePopupCard}>

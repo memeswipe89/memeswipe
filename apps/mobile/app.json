@@ -44,14 +44,8 @@
         }
       ],
       "expo-secure-store",
-      "expo-web-browser",
-      [
-        "@stripe/stripe-react-native",
-        {
-          "merchantIdentifier": "merchant.com.memeswipe",
-          "enableGooglePay": false
-        }
-      ]
+      "expo-notifications",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
