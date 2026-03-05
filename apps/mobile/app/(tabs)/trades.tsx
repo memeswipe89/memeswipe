@@ -106,6 +106,7 @@ export default function TradesScreen() {
   const [error, setError] = useState<string | null>(null);
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [closingId, setClosingId] = useState<string | null>(null);
+  const [bulkClosing, setBulkClosing] = useState(false);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const pageSize = 20;
 
@@ -306,14 +307,22 @@ export default function TradesScreen() {
         const walletAddress = await getOrCreateTradingWalletAddress();
         if (!walletAddress) throw new Error('Embedded wallet address not found');
 
-        const buildRes = await fetch(`${API_BASE}/api/trades/close/build`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress }),
-        });
-        const buildJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(buildRes);
-        if (!buildRes.ok || !buildJson?.swapTransaction) {
-          throw new Error(buildJson?.error || 'Failed to build close transaction');
+        const closeBuildSlippageBps = [300, 800, 1200, 2000, 3000, 5000];
+        let buildJson: { error?: string; swapTransaction?: string } | null = null;
+        let lastBuildError: string | null = null;
+        for (const slippageBps of closeBuildSlippageBps) {
+          const buildRes = await fetch(`${API_BASE}/api/trades/close/build`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress, slippageBps }),
+          });
+          buildJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(buildRes);
+          if (buildRes.ok && buildJson?.swapTransaction) break;
+          lastBuildError = buildJson?.error || `Failed to build close transaction (slippage ${slippageBps})`;
+          buildJson = null;
+        }
+        if (!buildJson?.swapTransaction) {
+          throw new Error(lastBuildError || 'Failed to build close transaction');
         }
 
         const provider = await getEmbeddedSolanaProvider();
@@ -389,8 +398,24 @@ export default function TradesScreen() {
     [getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress]
   );
 
+  const closeAllOpenTrades = useCallback(async () => {
+    const openTrades = trades.filter((t) => t.status === 'open');
+    if (!openTrades.length) {
+      Alert.alert('Close All', 'No open trades to close.');
+      return;
+    }
+    try {
+      setBulkClosing(true);
+      for (const trade of openTrades) {
+        await closeTrade(trade);
+      }
+    } finally {
+      setBulkClosing(false);
+    }
+  }, [closeTrade, trades]);
+
   useEffect(() => {
-    if (!twitterProfile || closingId) return;
+    if (!twitterProfile || closingId || bulkClosing) return;
     const targets = trades.filter((trade) => {
       if (trade.status !== 'open') return false;
       const pnlPct = getRealtimePnlPct(trade);
@@ -402,7 +427,7 @@ export default function TradesScreen() {
     });
     if (!targets.length) return;
     void closeTrade(targets[0]);
-  }, [closeTrade, closingId, trades, twitterProfile]);
+  }, [bulkClosing, closeTrade, closingId, trades, twitterProfile]);
 
   const filtered = useMemo(() => {
     return trades.filter((trade) => {
@@ -440,9 +465,18 @@ export default function TradesScreen() {
     <SafeAreaView style={styles.root}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Trades</Text>
-        <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
-          <Text style={styles.refreshText}>Refresh</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            onPress={() => void closeAllOpenTrades()}
+            disabled={loading || bulkClosing || Boolean(closingId)}
+            style={[styles.closeAllBtn, (loading || bulkClosing || closingId) && { opacity: 0.65 }]}
+          >
+            <Text style={styles.closeAllBtnText}>{bulkClosing ? 'Closing All...' : 'Close All Open'}</Text>
+          </Pressable>
+          <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
+            <Text style={styles.refreshText}>Refresh</Text>
+          </Pressable>
+        </View>
       </View>
 
       <TextInput
@@ -575,7 +609,17 @@ export default function TradesScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#05070f', padding: 16 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: '#fff', fontSize: 24, fontWeight: '800' },
+  closeAllBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,120,120,0.55)',
+    backgroundColor: 'rgba(255,70,70,0.16)',
+  },
+  closeAllBtnText: { color: '#ffd0d0', fontWeight: '700', fontSize: 11 },
   refreshBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,
