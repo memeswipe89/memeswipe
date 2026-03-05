@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
@@ -59,7 +59,6 @@ export default function WalletScreen() {
     getOrCreateLocalUserId,
     getOrCreateTradingWalletAddress,
     withdrawFromTradingWallet,
-    exportEmbeddedPrivateKey,
   } = useWalletContext();
   const { logout } = useAuth();
   const [solBalance, setSolBalance] = useState<number | null>(null);
@@ -70,9 +69,6 @@ export default function WalletScreen() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [exportingPk, setExportingPk] = useState(false);
-  const [privateKeyModalVisible, setPrivateKeyModalVisible] = useState(false);
-  const [exportedPrivateKey, setExportedPrivateKey] = useState("");
 
   const clearLocalAppData = async () => {
     await AsyncStorage.multiRemove([
@@ -192,30 +188,6 @@ export default function WalletScreen() {
     }
   };
 
-  const openExportPrivateKeyPopup = async () => {
-    try {
-      setExportingPk(true);
-      const pk = await exportEmbeddedPrivateKey();
-      setExportedPrivateKey(pk);
-      setPrivateKeyModalVisible(true);
-    } catch (error: any) {
-      Alert.alert("Export Private Key", error?.message || "Private key export failed.");
-    } finally {
-      setExportingPk(false);
-    }
-  };
-
-  const closePrivateKeyPopup = () => {
-    setPrivateKeyModalVisible(false);
-    setExportedPrivateKey("");
-  };
-
-  const copyPrivateKey = async () => {
-    if (!exportedPrivateKey) return;
-    await Clipboard.setStringAsync(exportedPrivateKey);
-    Alert.alert("Copied", "Private key copied to clipboard.");
-  };
-
   const disconnectTwitter = async () => {
     try {
       setDisconnectingTwitter(true);
@@ -273,77 +245,6 @@ export default function WalletScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
-      <Modal
-        transparent
-        visible={privateKeyModalVisible}
-        animationType="fade"
-        onRequestClose={closePrivateKeyPopup}
-      >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.72)",
-            alignItems: "center",
-            justifyContent: "center",
-            paddingHorizontal: 20,
-          }}
-        >
-          <View
-            style={{
-              width: "100%",
-              maxWidth: 420,
-              borderRadius: 12,
-              padding: 14,
-              borderWidth: 1,
-              borderColor: "#29446b",
-              backgroundColor: "#0b1220",
-            }}
-          >
-            <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700" }}>Export Private Key</Text>
-            <Text style={{ color: "#9fb7d8", marginTop: 8, lineHeight: 20 }}>
-              Our private keys are never stored or accessible by our platform.
-            </Text>
-            <View
-              style={{
-                marginTop: 10,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: "#2a3a52",
-                backgroundColor: "#0a1528",
-                padding: 10,
-                maxHeight: 160,
-              }}
-            >
-              <ScrollView>
-                <Text selectable style={{ color: "#d8e8ff", fontSize: 12, fontFamily: "Courier" }}>
-                  {exportedPrivateKey}
-                </Text>
-              </ScrollView>
-            </View>
-
-            <Pressable
-              onPress={() => void copyPrivateKey()}
-              style={{ marginTop: 10, borderRadius: 8, backgroundColor: "#1d9bf0", paddingVertical: 10 }}
-            >
-              <Text style={{ textAlign: "center", color: "#fff", fontWeight: "700" }}>Copy Private Key</Text>
-            </Pressable>
-            <Pressable
-              onPress={closePrivateKeyPopup}
-              style={{
-                marginTop: 8,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: "#2a3a52",
-                backgroundColor: "#111827",
-                paddingVertical: 10,
-              }}
-            >
-              <Text style={{ textAlign: "center", color: "#d1d5db", fontWeight: "700" }}>Close</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-
       <ScrollView
         contentContainerStyle={{ paddingBottom: 18 }}
         showsVerticalScrollIndicator={false}
@@ -410,28 +311,9 @@ export default function WalletScreen() {
               backgroundColor: "#111",
             }}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13, flex: 1 }}>
-                {truncateMiddle(tradingWalletAddress)}
-              </Text>
-              <Pressable
-                onPress={() => void openExportPrivateKeyPopup()}
-                disabled={exportingPk}
-                style={{
-                  backgroundColor: "#10233f",
-                  borderRadius: 8,
-                  paddingHorizontal: 10,
-                  paddingVertical: 7,
-                  borderWidth: 1,
-                  borderColor: "#254d78",
-                  opacity: exportingPk ? 0.7 : 1,
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>
-                  {exportingPk ? "..." : "Export Key"}
-                </Text>
-              </Pressable>
-            </View>
+            <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13 }}>
+              {truncateMiddle(tradingWalletAddress)}
+            </Text>
             <Text selectable numberOfLines={1} style={{ color: "#666", fontFamily: "Courier", marginTop: 5, fontSize: 10 }}>
               {tradingWalletAddress}
             </Text>

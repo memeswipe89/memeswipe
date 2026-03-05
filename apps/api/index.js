@@ -32,9 +32,7 @@ let ensureOrdersTablePromise = null;
 let ensureTradingWalletsTablePromise = null;
 const userFkTargetCache = new Map();
 const FEED_CACHE_TTL_MS = 60 * 1000;
-const QUOTA_BLOCK_MS = 60 * 60 * 1000;
 const feedCache = new Map();
-let moralisBlockedUntil = 0;
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const DEFAULT_SOL_USD_FALLBACK = Number(process.env.SOL_USD_FALLBACK || 200);
 const JUPITER_QUOTE_URLS = [
@@ -708,47 +706,21 @@ const processAutoClose = async () => {
 
 const fetchGraduatedFeed = async (req, res) => {
   try {
-    if (!process.env.MORALIS_API_KEY) {
-      return res.status(500).json({ error: "MORALIS_API_KEY is not configured" });
-    }
-
+    const limitRaw = Number(req.query.limit || 50);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, limitRaw)) : 50;
     const now = Date.now();
-    if (now < moralisBlockedUntil) {
-      return res.status(429).json({
-        error: "Moralis feed temporarily blocked due to quota/rate limits",
-        blockedUntil: moralisBlockedUntil,
-        tokens: [],
-        cursor: null,
-      });
-    }
-
-    const limit = req.query.limit || 50;
-    const cursor = req.query.cursor ? String(req.query.cursor) : "";
-    const cacheKey = `graduated:${limit}:${cursor}`;
+    const cacheKey = `dexscreener:${limit}`;
     const cached = feedCache.get(cacheKey);
     if (cached && now - cached.lastFetch < FEED_CACHE_TTL_MS) {
       return res.json(cached.payload);
     }
 
-    const qs = new URLSearchParams({ limit: String(limit) });
-    if (cursor) qs.set("cursor", cursor);
-    const url = `https://solana-gateway.moralis.io/token/mainnet/exchange/pumpfun/graduated?${qs.toString()}`;
-
-    const r = await fetch(url, {
-      headers: {
-        accept: "application/json",
-        "X-API-Key": process.env.MORALIS_API_KEY,
-      },
-    });
+    const r = await fetch("https://api.dexscreener.com/latest/dex/search?q=solana");
 
     if (!r.ok) {
       const text = await r.text();
-      const lowerText = String(text || "").toLowerCase();
-      if (r.status === 401 || r.status === 429 || lowerText.includes("quota")) {
-        moralisBlockedUntil = Date.now() + QUOTA_BLOCK_MS;
-      }
       return res.status(r.status).json({
-        error: "Moralis request failed",
+        error: "DexScreener request failed",
         details: text || null,
         tokens: [],
         cursor: null,
@@ -756,16 +728,31 @@ const fetchGraduatedFeed = async (req, res) => {
     }
 
     const data = await r.json();
-
-    // Normalize output for your app
-    const tokens = (data.result || []).map((t) => ({
-      name: t.name || t.symbol || "Unknown",
-      symbol: t.symbol || "",
-      address: t.address || t.mint || t.tokenAddress,
-      priceUsd: t.priceUsd ?? null,
-      liquidityUsd: t.liquidityUsd ?? null,
-      graduatedAt: t.graduatedAt ?? null,
-    }));
+    const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
+    const tokensByAddress = new Map();
+    for (const pair of pairs) {
+      if (String(pair?.chainId || "").toLowerCase() !== "solana") continue;
+      const address = String(pair?.baseToken?.address || "").trim();
+      if (!address) continue;
+      const existing = tokensByAddress.get(address);
+      const liquidity = Number(pair?.liquidity?.usd || 0);
+      if (!existing || liquidity > Number(existing?.liquidityUsd || 0)) {
+        tokensByAddress.set(address, {
+          name: pair?.baseToken?.name || pair?.baseToken?.symbol || "Unknown",
+          symbol: pair?.baseToken?.symbol || "",
+          address,
+          priceUsd: Number(pair?.priceUsd || 0) || null,
+          liquidityUsd: liquidity || null,
+          volume24hUsd: Number(pair?.volume?.h24 || 0) || null,
+          marketCapUsd: Number(pair?.marketCap || 0) || null,
+          change24hPct: Number(pair?.priceChange?.h24 || 0) || null,
+          graduatedAt: null,
+        });
+      }
+    }
+    const tokens = Array.from(tokensByAddress.values())
+      .sort((a, b) => Number(b?.liquidityUsd || 0) - Number(a?.liquidityUsd || 0))
+      .slice(0, limit);
 
     if (!tokens.length) {
       return res.json({
@@ -779,7 +766,7 @@ const fetchGraduatedFeed = async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({
-      error: "Failed to fetch Moralis feed",
+      error: "Failed to fetch DexScreener feed",
       cursor: null,
       tokens: [],
     });

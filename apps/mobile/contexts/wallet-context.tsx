@@ -23,7 +23,6 @@ type WalletContextValue = {
   getOrCreateLocalUserId: () => Promise<string>;
   getOrCreateEmbeddedWalletAddress: () => Promise<string>;
   getEmbeddedSolanaProvider: () => Promise<any>;
-  exportEmbeddedPrivateKey: () => Promise<string>;
   refreshWalletAddress: () => Promise<string | null>;
   getOrCreateTradingWalletAddress: () => Promise<string>;
   withdrawFromTradingWallet: (amountSol: number, toAddress?: string) => Promise<{
@@ -302,36 +301,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     throw new Error("Privy Solana provider unavailable");
   };
 
-  const exportEmbeddedPrivateKey = async (): Promise<string> => {
-    const provider = await getEmbeddedSolanaProvider();
-    let response: any = null;
-
-    if (provider && typeof provider.exportPrivateKey === "function") {
-      response = await provider.exportPrivateKey();
-    } else if (provider && typeof provider.request === "function") {
-      try {
-        response = await provider.request({ method: "exportPrivateKey" });
-      } catch {
-        response = await provider.request({ method: "exportPrivateKey", params: {} });
-      }
-    }
-
-    const extracted =
-      (typeof response === "string" ? response : null) ||
-      response?.privateKey ||
-      response?.private_key ||
-      response?.data?.privateKey ||
-      response?.data?.private_key ||
-      response?.exportedPrivateKey ||
-      null;
-
-    if (typeof extracted !== "string" || !extracted.trim()) {
-      throw new Error("Private key export is unavailable for this wallet.");
-    }
-
-    return extracted.trim();
-  };
-
   const value = useMemo<WalletContextValue>(
     () => ({
       twitterProfile,
@@ -343,7 +312,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       getOrCreateLocalUserId,
       getOrCreateEmbeddedWalletAddress,
       getEmbeddedSolanaProvider,
-      exportEmbeddedPrivateKey,
       refreshWalletAddress,
       getOrCreateTradingWalletAddress,
       withdrawFromTradingWallet,
