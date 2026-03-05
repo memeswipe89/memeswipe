@@ -3,10 +3,21 @@ import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextIn
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
+import { useRouter } from "expo-router";
+import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
+const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
+const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
+const FAVORITES_KEY = "@memeswipe:favorites:v1";
+const HIDDEN_TOKENS_KEY = "@memeswipe:hidden-tokens:v1";
+const LAST_AMOUNT_KEY = "@memeswipe:lastAmount";
+const LAST_ROI_KEY = "@memeswipe:lastROI";
+const BONUS_2000_APPLIED_KEY = "@memeswipe:bonus2000:applied";
 
 const getSolBalance = async (address: string): Promise<number> => {
   const response = await fetch(MAINNET_RPC_URL, {
@@ -32,6 +43,7 @@ const truncateMiddle = (value: string, keep = 6) => {
 const formatSol = (value: number) => `${value.toFixed(9)} SOL`;
 
 export default function WalletScreen() {
+  const router = useRouter();
   const { width, height } = useWindowDimensions();
   const qrSize = useMemo(() => {
     const byWidth = width * 0.56;
@@ -41,20 +53,37 @@ export default function WalletScreen() {
 
   const {
     twitterProfile,
+    setTwitterProfile,
     tradingWalletAddress,
     withdrawAddress,
     walletLoading,
     walletError,
+    getOrCreateLocalUserId,
     getOrCreateTradingWalletAddress,
     setTradingWithdrawAddress,
     withdrawFromTradingWallet,
   } = useWalletContext();
+  const { logout } = useAuth();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [withdrawToAddress, setWithdrawToAddress] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("0.01");
   const [withdrawing, setWithdrawing] = useState(false);
+  const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const clearLocalAppData = async () => {
+    await AsyncStorage.multiRemove([
+      TWITTER_PROFILE_CACHE_KEY,
+      LOCAL_USER_ID_KEY,
+      FAVORITES_KEY,
+      HIDDEN_TOKENS_KEY,
+      LAST_AMOUNT_KEY,
+      LAST_ROI_KEY,
+      BONUS_2000_APPLIED_KEY,
+    ]);
+  };
 
   const copyAddress = async () => {
     if (!tradingWalletAddress) return;
@@ -184,6 +213,61 @@ export default function WalletScreen() {
     }
   };
 
+  const disconnectTwitter = async () => {
+    try {
+      setDisconnectingTwitter(true);
+      const userId = await getOrCreateLocalUserId();
+      const res = await fetch(`${API_BASE}/api/twitter/connection/${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to disconnect Twitter");
+      }
+      setTwitterProfile(null);
+      await clearLocalAppData();
+      router.replace("/(tabs)");
+      Alert.alert("Twitter Disconnected", "Your Twitter account has been disconnected.");
+    } catch (error: any) {
+      Alert.alert("Twitter", error?.message || "Failed to disconnect Twitter.");
+    } finally {
+      setDisconnectingTwitter(false);
+    }
+  };
+
+  const handleDisconnectTwitter = () => {
+    Alert.alert("Disconnect Twitter", "Are you sure you want to disconnect this Twitter account?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Disconnect", style: "destructive", onPress: () => void disconnectTwitter() },
+    ]);
+  };
+
+  const handleLogout = () => {
+    Alert.alert("Logout", "Are you sure you want to logout from this app?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            try {
+              setLoggingOut(true);
+              setTwitterProfile(null);
+              await clearLocalAppData();
+              await logout();
+              router.replace("/(tabs)");
+              Alert.alert("Logged out", "You have been logged out.");
+            } catch (error: any) {
+              Alert.alert("Logout", error?.message || "Failed to logout.");
+            } finally {
+              setLoggingOut(false);
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
       <ScrollView
@@ -208,11 +292,34 @@ export default function WalletScreen() {
           <Text style={{ color: "#8f9ab7", marginTop: 2, fontSize: 11 }} numberOfLines={1}>
             ID: {twitterProfile.id}
           </Text>
+          <Pressable
+            onPress={handleDisconnectTwitter}
+            disabled={disconnectingTwitter || loggingOut}
+            style={{
+              marginTop: 10,
+              borderRadius: 8,
+              paddingVertical: 9,
+              backgroundColor: "#3b0f16",
+              borderWidth: 1,
+              borderColor: "#8a2335",
+              opacity: disconnectingTwitter || loggingOut ? 0.7 : 1,
+            }}
+          >
+            <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
+              {disconnectingTwitter ? "Disconnecting..." : "Disconnect Twitter"}
+            </Text>
+          </Pressable>
         </View>
       ) : null}
       <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Memeswipe Trading Wallet Address</Text>
 
-      {walletLoading ? (
+      {!twitterProfile ? (
+        <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
+          <Text style={{ color: "#aaa" }}>
+            Connect Twitter on Home first, then create/use your wallet.
+          </Text>
+        </View>
+      ) : walletLoading ? (
         <View style={{ marginTop: 12 }}>
           <ActivityIndicator />
           <Text style={{ color: "#999", marginTop: 6 }}>Loading wallet address...</Text>
@@ -385,6 +492,24 @@ export default function WalletScreen() {
                 </Text>
               </Pressable>
             </View>
+
+            <Pressable
+              onPress={handleLogout}
+              disabled={loggingOut || disconnectingTwitter}
+              style={{
+                marginTop: 12,
+                borderRadius: 10,
+                paddingVertical: 10,
+                borderWidth: 1,
+                borderColor: "#5f2128",
+                backgroundColor: "#2b1115",
+                opacity: loggingOut || disconnectingTwitter ? 0.7 : 1,
+              }}
+            >
+              <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
+                {loggingOut ? "Logging out..." : "Logout"}
+              </Text>
+            </Pressable>
 
           </View>
         </View>

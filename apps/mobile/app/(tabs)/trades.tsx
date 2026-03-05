@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { addBalance } from '@/lib/devWallet';
 import { notifyTradeClosed } from '@/lib/notifications';
+import { useWalletContext } from '@/contexts/wallet-context';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
@@ -87,6 +88,7 @@ const getDisplayedPnl = (trade: TradeItem) => {
 };
 
 export default function TradesScreen() {
+  const { twitterProfile } = useWalletContext();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
@@ -107,6 +109,12 @@ export default function TradesScreen() {
 
   const loadTrades = useCallback(async () => {
     try {
+      if (!twitterProfile) {
+        setTrades([]);
+        setError(null);
+        setLoading(false);
+        return;
+      }
       setLoading(true);
       setError(null);
       const resolvedUserId = userId || (await AsyncStorage.getItem(LOCAL_USER_ID_KEY)) || '';
@@ -143,36 +151,7 @@ export default function TradesScreen() {
       if (!res.ok) {
         throw new Error(json?.error || 'Failed to load trades');
       }
-      let sourceOrders = json.orders || [];
-      if (!sourceOrders.length) {
-        const fallbackRes = await fetch(`${API_BASE}/api/orders?limit=200`);
-        const fallbackJson = await parseApiJson<{
-          orders?: {
-            id?: string | number;
-            token_symbol?: string;
-            chain?: string;
-            token_address?: string;
-            status?: string;
-            amount_usd?: number | string;
-            tp_roi?: number | string;
-            created_at?: string;
-            in_amount_raw?: string | null;
-            out_amount_raw?: string | null;
-            tx_signature?: string | null;
-          close_tx_signature?: string | null;
-          close_reason?: string | null;
-          close_trigger_pct?: number | string | null;
-          price_usd?: number | string | null;
-          close_price_usd?: number | string | null;
-          close_pnl_pct?: number | string | null;
-          close_pnl_usd?: number | string | null;
-          output_mint?: string | null;
-        }[];
-        }>(fallbackRes);
-        if (fallbackRes.ok && Array.isArray(fallbackJson.orders)) {
-          sourceOrders = fallbackJson.orders;
-        }
-      }
+      const sourceOrders = json.orders || [];
 
       const mapped: TradeItem[] = sourceOrders.map((order) => {
         const amount = toNumber(order.amount_usd, 0);
@@ -234,16 +213,21 @@ export default function TradesScreen() {
     } finally {
       setLoading(false);
     }
-  }, [solPriceUsd, userId]);
+  }, [solPriceUsd, twitterProfile, userId]);
 
   useEffect(() => {
+    if (!twitterProfile) {
+      setLoading(false);
+      return;
+    }
     void loadTrades();
-  }, [loadTrades]);
+  }, [loadTrades, twitterProfile]);
 
   useFocusEffect(
     useCallback(() => {
+      if (!twitterProfile) return;
       void loadTrades();
-    }, [loadTrades])
+    }, [loadTrades, twitterProfile])
   );
 
   useEffect(() => {
@@ -377,6 +361,16 @@ export default function TradesScreen() {
       await Linking.openURL(url);
     }
   }, []);
+
+  if (!twitterProfile) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <View style={styles.centerState}>
+          <Text style={styles.muted}>Connect Twitter first to view your trades.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.root}>

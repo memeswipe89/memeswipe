@@ -281,30 +281,9 @@ const ensureUserExistsForTable = async (sourceTableName, userId) => {
   }
 };
 
-const resolveExistingFkUserId = async (sourceTableName) => {
-  const fkTarget = await resolveUserFkTarget(sourceTableName);
-  if (!fkTarget) return null;
-
-  const qSchema = `"${String(fkTarget.schema).replace(/"/g, '""')}"`;
-  const qTable = `"${String(fkTarget.table).replace(/"/g, '""')}"`;
-  const qColumn = `"${String(fkTarget.column).replace(/"/g, '""')}"`;
-  const existing = await pool.query(
-    `select ${qColumn} as id from ${qSchema}.${qTable} limit 1`
-  );
-
-  const id = existing.rows[0]?.id;
-  return typeof id === "string" && id.length > 0 ? id : null;
-};
-
 const resolveInsertUserId = async (sourceTableName, requestedUserId) => {
-  try {
-    await ensureUserExistsForTable(sourceTableName, requestedUserId);
-    return requestedUserId;
-  } catch (error) {
-    const fallbackId = await resolveExistingFkUserId(sourceTableName);
-    if (fallbackId) return fallbackId;
-    throw error;
-  }
+  await ensureUserExistsForTable(sourceTableName, requestedUserId);
+  return requestedUserId;
 };
 
 const buildCallbackUrl = (req) => {
@@ -1723,55 +1702,34 @@ app.get("/api/orders", async (req, res) => {
       void processAutoClose();
     }
     const userId = typeof req.query.userId === "string" ? req.query.userId.trim() : "";
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
     const status = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
     const statusFilter = status === "open" || status === "closed" ? status : "";
     const limitRaw = Number(req.query.limit || 50);
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
-
-    if (userId) {
-      const result = statusFilter
-        ? await pool.query(
-            `
-            select *
-            from orders
-            where user_id = $1 and status = $2
-            order by created_at desc
-            limit $3
-            `,
-            [userId, statusFilter, limit]
-          )
-        : await pool.query(
-            `
-            select *
-            from orders
-            where user_id = $1
-            order by created_at desc
-            limit $2
-            `,
-            [userId, limit]
-          );
-      return res.json({ orders: result.rows });
-    }
 
     const result = statusFilter
       ? await pool.query(
           `
           select *
           from orders
-          where status = $1
+          where user_id = $1 and status = $2
           order by created_at desc
-          limit $2
+          limit $3
           `,
-          [statusFilter, limit]
+          [userId, statusFilter, limit]
         )
       : await pool.query(
           `
           select *
           from orders
+          where user_id = $1
           order by created_at desc
-          limit $1
+          limit $2
           `,
-          [limit]
+          [userId, limit]
         );
     return res.json({ orders: result.rows });
   } catch (err) {

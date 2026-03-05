@@ -7,6 +7,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Alert,
   Dimensions,
@@ -45,6 +46,7 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.8);
 const DRAG_CLOSE_THRESHOLD = 120;
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
+const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
 
 export type ProfileSheetRef = {
   open: () => void;
@@ -190,6 +192,7 @@ export const ProfileSheet = memo(
     const handleLogout = useCallback(async () => {
       try {
         setTwitterProfile(null);
+        await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
         await logout();
         resetSettings();
         closeSheet();

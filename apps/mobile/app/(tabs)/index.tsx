@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
+import Constants from 'expo-constants';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -29,12 +31,15 @@ const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
 const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
 const LAST_ROI_KEY = '@memeswipe:lastROI';
 const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
+const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
 const PAGE_LIMIT = 50;
 const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
 const MIN_TRADE_AMOUNT_USD = 0.0001;
 const MAX_TRADE_AMOUNT_USD = 500;
 const MIN_PERCENT = 0.1;
+const TWITTER_CONNECTION_TIMEOUT_MS = 5000;
+const TWITTER_AUTH_START_TIMEOUT_MS = 10000;
 type FavoriteToken = {
   address: string;
   name: string;
@@ -159,6 +164,8 @@ const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
   return `/api/feed/${chain}/graduated`;
 };
 
+void WebBrowser.maybeCompleteAuthSession();
+
 export default function HomeScreen() {
   const {
     twitterProfile,
@@ -222,12 +229,28 @@ export default function HomeScreen() {
   const retryDelayRef = useRef(10000);
 
   const checkTwitterConnection = useCallback(
-    async (resolvedUserId: string) => {
+    async (resolvedUserId: string, options?: { background?: boolean; allowStale?: boolean }) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TWITTER_CONNECTION_TIMEOUT_MS);
       try {
-        setCheckingTwitter(true);
-        const res = await fetch(`${API_BASE}/api/twitter/connection/${resolvedUserId}`);
+        if (!options?.background) {
+          setCheckingTwitter(true);
+        }
+        const res = await fetch(`${API_BASE}/api/twitter/connection/${resolvedUserId}`, {
+          signal: controller.signal,
+        });
         if (!res.ok) {
-          setShowTwitterPrompt(true);
+          if (res.status === 404) {
+            setTwitterProfile(null);
+            setShowTwitterPrompt(false);
+            await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
+            return;
+          }
+          if (options?.allowStale && twitterProfile) {
+            setShowTwitterPrompt(false);
+            return;
+          }
+          setShowTwitterPrompt(false);
           return;
         }
         const data = (await res.json()) as {
@@ -236,24 +259,33 @@ export default function HomeScreen() {
           twitterUserId?: string;
         };
         if (data.connected && data.twitterUsername && data.twitterUserId) {
-          setTwitterProfile({
+          const profile = {
             username: data.twitterUsername,
             id: data.twitterUserId,
-          });
+          };
+          setTwitterProfile(profile);
+          await AsyncStorage.setItem(TWITTER_PROFILE_CACHE_KEY, JSON.stringify(profile));
           setShowTwitterPrompt(false);
           return;
         }
         setTwitterProfile(null);
-        setShowTwitterPrompt(true);
+        setShowTwitterPrompt(false);
+        await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
       } catch (error) {
         console.log(error);
-        setTwitterProfile(null);
-        setShowTwitterPrompt(true);
+        if (options?.allowStale && twitterProfile) {
+          setShowTwitterPrompt(false);
+          return;
+        }
+        setShowTwitterPrompt(false);
       } finally {
-        setCheckingTwitter(false);
+        clearTimeout(timeoutId);
+        if (!options?.background) {
+          setCheckingTwitter(false);
+        }
       }
     },
-    [setTwitterProfile]
+    [setTwitterProfile, twitterProfile]
   );
 
   const handleTwitterRedirect = useCallback(
@@ -282,7 +314,9 @@ export default function HomeScreen() {
         return;
       }
 
-      setTwitterProfile({ username: twitterUsername, id: twitterUserId });
+      const profile = { username: twitterUsername, id: twitterUserId };
+      setTwitterProfile(profile);
+      void AsyncStorage.setItem(TWITTER_PROFILE_CACHE_KEY, JSON.stringify(profile));
       setShowTwitterPrompt(false);
       Alert.alert("Connected", `Connected as @${twitterUsername}`);
     },
@@ -388,23 +422,56 @@ export default function HomeScreen() {
     (async () => {
       const localUserId = await getOrCreateLocalUserId();
       setUserId(localUserId);
-      await checkTwitterConnection(localUserId);
+      const cachedProfileRaw = await AsyncStorage.getItem(TWITTER_PROFILE_CACHE_KEY);
+      let hasCachedProfile = false;
+
+      if (cachedProfileRaw) {
+        try {
+          const cachedProfile = JSON.parse(cachedProfileRaw) as { username?: string; id?: string };
+          if (cachedProfile?.username && cachedProfile?.id) {
+            setTwitterProfile({ username: cachedProfile.username, id: cachedProfile.id });
+            setShowTwitterPrompt(false);
+            setCheckingTwitter(false);
+            hasCachedProfile = true;
+          } else {
+            await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
+          }
+        } catch {
+          await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
+        }
+      }
+
+      await checkTwitterConnection(localUserId, { background: hasCachedProfile, allowStale: hasCachedProfile });
     })();
 
     return () => sub.remove();
-  }, [checkTwitterConnection, getOrCreateLocalUserId, handleTwitterRedirect]);
+  }, [checkTwitterConnection, getOrCreateLocalUserId, handleTwitterRedirect, setTwitterProfile]);
 
   const connectTwitter = useCallback(async () => {
     try {
       connectInProgressRef.current = true;
       setTwitterConnectLoading(true);
-      const returnUrl = Linking.createURL("twitter-connected");
+      const resolvedUserId = (userId || '').trim() || (await getOrCreateLocalUserId());
+      if (!resolvedUserId) {
+        throw new Error('User session is missing. Please reopen the app and try again.');
+      }
+      if (resolvedUserId !== userId) {
+        setUserId(resolvedUserId);
+      }
+      const returnUrl =
+        Constants.appOwnership === 'expo'
+          ? Linking.createURL('twitter-connected')
+          : Linking.createURL('twitter-connected', { scheme: 'mobile' });
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TWITTER_AUTH_START_TIMEOUT_MS);
       const startRes = await fetch(
-        `${API_BASE}/api/twitter/auth/start?userId=${encodeURIComponent(userId)}&returnUrl=${encodeURIComponent(returnUrl)}`
+        `${API_BASE}/api/twitter/auth/start?userId=${encodeURIComponent(resolvedUserId)}&returnUrl=${encodeURIComponent(returnUrl)}`,
+        { signal: controller.signal }
       );
+      clearTimeout(timeoutId);
 
-      const startJson = (await startRes.json()) as { authUrl?: string; error?: string };
+      const startJson = await parseApiJson<{ authUrl?: string; error?: string }>(startRes);
       if (!startRes.ok || !startJson?.authUrl) {
         connectInProgressRef.current = false;
         setTwitterConnectLoading(false);
@@ -417,14 +484,40 @@ export default function HomeScreen() {
         setTwitterConnectLoading(false);
         throw new Error("Cannot open Twitter auth URL");
       }
-      await Linking.openURL(startJson.authUrl);
+
+      // Prefer opening in Twitter/X app when installed; fallback to auth-session/browser.
+      const hasTwitterApp = (await Linking.canOpenURL('twitter://')) || (await Linking.canOpenURL('x://'));
+      if (hasTwitterApp) {
+        await Linking.openURL(startJson.authUrl);
+        return;
+      }
+
+      const authResult = await WebBrowser.openAuthSessionAsync(startJson.authUrl, returnUrl);
+      if (authResult.type === 'success' && authResult.url) {
+        handleTwitterRedirect(authResult.url);
+        return;
+      }
+
+      // Some Android/Expo Go combinations may not complete auth-session callback reliably.
+      // Fallback to opening the URL directly in browser so user can still continue the flow.
+      if (authResult.type === 'cancel' || authResult.type === 'dismiss' || authResult.type === 'opened') {
+        const opened = await Linking.openURL(startJson.authUrl).then(() => true).catch(() => false);
+        if (!opened) {
+          throw new Error('Unable to open Twitter auth page. Please check browser availability.');
+        }
+      }
+
+      if (authResult.type === 'cancel' || authResult.type === 'dismiss') {
+        connectInProgressRef.current = false;
+        setTwitterConnectLoading(false);
+      }
     } catch (error: any) {
       connectInProgressRef.current = false;
       setTwitterConnectLoading(false);
       console.log(error);
       Alert.alert("Twitter Connect", error?.message || "Failed to connect Twitter");
     }
-  }, [userId]);
+  }, [getOrCreateLocalUserId, handleTwitterRedirect, userId]);
 
   useEffect(() => {
     const hideTimer = setTimeout(() => setShowSwipeHint(false), 5000);
@@ -984,11 +1077,19 @@ export default function HomeScreen() {
   );
 
   const handleReject = useCallback((token: SwipeToken) => {
+    if (!twitterProfile) {
+      setShowTwitterPrompt(true);
+      return;
+    }
     hideToken(token.address);
-  }, [hideToken]);
+  }, [hideToken, twitterProfile]);
 
   const handleBuy = useCallback(
     (token: SwipeToken) => {
+      if (!twitterProfile) {
+        setShowTwitterPrompt(true);
+        return;
+      }
       console.log('[TRADE][SWIPE_RIGHT] token selected', {
         symbol: token.symbol,
         address: token.address,
@@ -1053,7 +1154,7 @@ export default function HomeScreen() {
         }
       })();
     },
-    [createOrder, executeJupiterSwap, hideToken, persistFavorites, tpROI, tradeAmount]
+    [createOrder, executeJupiterSwap, hideToken, persistFavorites, tpROI, tradeAmount, twitterProfile]
   );
 
   const openDevWalletControls = useCallback(() => {
@@ -1134,45 +1235,6 @@ export default function HomeScreen() {
     }, 2500);
     return () => clearTimeout(timer);
   }, [tradeOpenPopup.visible]);
-
-  if (checkingTwitter) {
-    return (
-      <SafeAreaView style={[styles.safeArea, { justifyContent: "center", alignItems: "center" }]}>
-        <Text style={{ color: "#fff", fontSize: 16 }}>Checking Twitter connection...</Text>
-      </SafeAreaView>
-    );
-  }
-
-  if (showTwitterPrompt) {
-    return (
-      <SafeAreaView style={[styles.safeArea, { justifyContent: "center", paddingHorizontal: 22 }]}>
-        <View style={{ alignItems: "center" }}>
-          <Text style={{ color: "#fff", fontSize: 34, fontWeight: "800", textAlign: "center" }}>
-            Connect Twitter
-          </Text>
-          <Text style={{ color: "#97A0BA", marginTop: 12, textAlign: "center", fontSize: 15 }}>
-            Connect your Twitter/X account to continue.
-          </Text>
-          <Pressable
-            onPress={connectTwitter}
-            disabled={twitterConnectLoading}
-            style={{
-              marginTop: 24,
-              minWidth: 220,
-              borderRadius: 12,
-              backgroundColor: "#fff",
-              paddingVertical: 14,
-              paddingHorizontal: 20,
-            }}
-          >
-            <Text style={{ textAlign: "center", color: "#000", fontWeight: "800" }}>
-              {twitterConnectLoading ? "Connecting..." : "Connect Twitter"}
-            </Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -1301,6 +1363,34 @@ export default function HomeScreen() {
         <SwipeHint visible={showSwipeHint} />
         <AppLoader visible={appLoading} />
         <LoadingOverlay visible={creatingOrder || buyLoading} text="Executing trade..." />
+        {showTwitterPrompt ? (
+          <View style={styles.connectPromptOverlay} pointerEvents="box-none">
+            <View style={styles.connectPromptCard}>
+              <Text style={styles.connectPromptTitle}>Connect Twitter</Text>
+              <View style={styles.connectPromptActions}>
+                <Pressable
+                  onPress={() => setShowTwitterPrompt(false)}
+                  style={[styles.connectPromptBtn, styles.connectPromptBtnSecondary]}
+                >
+                  <Text style={styles.connectPromptBtnSecondaryText}>Maybe Later</Text>
+                </Pressable>
+                <Pressable
+                  onPress={connectTwitter}
+                  disabled={twitterConnectLoading || checkingTwitter}
+                  style={[
+                    styles.connectPromptBtn,
+                    styles.connectPromptBtnPrimary,
+                    (twitterConnectLoading || checkingTwitter) && { opacity: 0.7 },
+                  ]}
+                >
+                  <Text style={styles.connectPromptBtnPrimaryText}>
+                    {twitterConnectLoading ? "Connecting..." : "Connect Twitter"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        ) : null}
         {tradeOpenPopup.visible ? (
           <View style={styles.tradePopupOverlay} pointerEvents="box-none">
             <View style={styles.tradePopupCard}>
@@ -1564,6 +1654,68 @@ const styles = StyleSheet.create({
   tradePopupButtonText: {
     color: '#112644',
     fontSize: 15,
+    fontWeight: '800',
+  },
+  connectPromptOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 18,
+    paddingBottom: 28,
+  },
+  connectPromptCard: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(10,14,24,0.94)',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  connectPromptTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  connectPromptText: {
+    marginTop: 6,
+    color: '#9fb1d9',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  connectPromptHint: {
+    marginTop: 6,
+    color: '#7f95c5',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  connectPromptActions: {
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  connectPromptBtn: {
+    flex: 1,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectPromptBtnSecondary: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  connectPromptBtnPrimary: {
+    backgroundColor: '#fff',
+  },
+  connectPromptBtnSecondaryText: {
+    color: '#d3def6',
+    fontWeight: '700',
+  },
+  connectPromptBtnPrimaryText: {
+    color: '#111',
     fontWeight: '800',
   },
 });
