@@ -1,12 +1,22 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
+import { useRouter } from "expo-router";
+import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
+const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
+const FAVORITES_KEY = "@memeswipe:favorites:v1";
+const HIDDEN_TOKENS_KEY = "@memeswipe:hidden-tokens:v1";
+const LAST_AMOUNT_KEY = "@memeswipe:lastAmount";
+const LAST_ROI_KEY = "@memeswipe:lastROI";
+const BONUS_2000_APPLIED_KEY = "@memeswipe:bonus2000:applied";
 
 const getSolBalance = async (address: string): Promise<number> => {
   const response = await fetch(MAINNET_RPC_URL, {
@@ -29,8 +39,10 @@ const truncateMiddle = (value: string, keep = 6) => {
   if (value.length <= keep * 2 + 3) return value;
   return `${value.slice(0, keep)}...${value.slice(-keep)}`;
 };
+const formatSol = (value: number) => `${value.toFixed(9)} SOL`;
 
 export default function WalletScreen() {
+  const router = useRouter();
   const { width, height } = useWindowDimensions();
   const qrSize = useMemo(() => {
     const byWidth = width * 0.56;
@@ -40,20 +52,38 @@ export default function WalletScreen() {
 
   const {
     twitterProfile,
+    setTwitterProfile,
     tradingWalletAddress,
-    withdrawAddress,
     walletLoading,
     walletError,
+    getOrCreateLocalUserId,
     getOrCreateTradingWalletAddress,
-    setTradingWithdrawAddress,
     withdrawFromTradingWallet,
+    exportEmbeddedPrivateKey,
   } = useWalletContext();
+  const { logout } = useAuth();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [withdrawToAddress, setWithdrawToAddress] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("0.01");
   const [withdrawing, setWithdrawing] = useState(false);
+  const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [exportingPk, setExportingPk] = useState(false);
+  const [privateKeyModalVisible, setPrivateKeyModalVisible] = useState(false);
+  const [exportedPrivateKey, setExportedPrivateKey] = useState("");
+
+  const clearLocalAppData = async () => {
+    await AsyncStorage.multiRemove([
+      TWITTER_PROFILE_CACHE_KEY,
+      FAVORITES_KEY,
+      HIDDEN_TOKENS_KEY,
+      LAST_AMOUNT_KEY,
+      LAST_ROI_KEY,
+      BONUS_2000_APPLIED_KEY,
+    ]);
+  };
 
   const copyAddress = async () => {
     if (!tradingWalletAddress) return;
@@ -79,12 +109,6 @@ export default function WalletScreen() {
     void loadBalance(tradingWalletAddress);
   }, [tradingWalletAddress]);
 
-  useEffect(() => {
-    if (withdrawAddress && !withdrawToAddress) {
-      setWithdrawToAddress(withdrawAddress);
-    }
-  }, [withdrawAddress, withdrawToAddress]);
-
   const handleCreateWallet = async () => {
     let applicationId = "unknown";
     try {
@@ -102,7 +126,7 @@ export default function WalletScreen() {
       console.log("[WALLET] Create Wallet clicked");
       console.log("[APP]", Platform.OS, "applicationId:", applicationId);
       const address = await getOrCreateTradingWalletAddress();
-      console.log("[WALLET] Trading wallet address:", address);
+      console.log("[WALLET] Embedded wallet address:", address);
       Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
     } catch (error: any) {
       const message = String(error?.message || error || "");
@@ -143,21 +167,6 @@ export default function WalletScreen() {
     }
   };
 
-  const handleSaveWithdrawAddress = async () => {
-    try {
-      const next = withdrawToAddress.trim();
-      if (!next) {
-        Alert.alert("Withdraw", "Enter destination wallet address.");
-        return;
-      }
-      const saved = await setTradingWithdrawAddress(next);
-      setWithdrawToAddress(saved);
-      Alert.alert("Saved", "Withdraw address updated.");
-    } catch (error: any) {
-      Alert.alert("Withdraw", error?.message || "Failed to save withdraw address.");
-    }
-  };
-
   const handleWithdraw = async () => {
     try {
       const amount = Number(withdrawAmount);
@@ -183,9 +192,163 @@ export default function WalletScreen() {
     }
   };
 
+  const openExportPrivateKeyPopup = async () => {
+    try {
+      setExportingPk(true);
+      const pk = await exportEmbeddedPrivateKey();
+      setExportedPrivateKey(pk);
+      setPrivateKeyModalVisible(true);
+    } catch (error: any) {
+      Alert.alert("Export Private Key", error?.message || "Private key export failed.");
+    } finally {
+      setExportingPk(false);
+    }
+  };
+
+  const closePrivateKeyPopup = () => {
+    setPrivateKeyModalVisible(false);
+    setExportedPrivateKey("");
+  };
+
+  const copyPrivateKey = async () => {
+    if (!exportedPrivateKey) return;
+    await Clipboard.setStringAsync(exportedPrivateKey);
+    Alert.alert("Copied", "Private key copied to clipboard.");
+  };
+
+  const disconnectTwitter = async () => {
+    try {
+      setDisconnectingTwitter(true);
+      const userId = await getOrCreateLocalUserId();
+      const res = await fetch(`${API_BASE}/api/twitter/connection/${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to disconnect Twitter");
+      }
+      setTwitterProfile(null);
+      await clearLocalAppData();
+      router.replace("/(tabs)");
+      Alert.alert("Twitter Disconnected", "Your Twitter account has been disconnected.");
+    } catch (error: any) {
+      Alert.alert("Twitter", error?.message || "Failed to disconnect Twitter.");
+    } finally {
+      setDisconnectingTwitter(false);
+    }
+  };
+
+  const handleDisconnectTwitter = () => {
+    Alert.alert("Disconnect Twitter", "Are you sure you want to disconnect this Twitter account?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Disconnect", style: "destructive", onPress: () => void disconnectTwitter() },
+    ]);
+  };
+
+  const handleLogout = () => {
+    Alert.alert("Logout", "Are you sure you want to logout from this app?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            try {
+              setLoggingOut(true);
+              setTwitterProfile(null);
+              await clearLocalAppData();
+              await logout();
+              router.replace("/(tabs)");
+              Alert.alert("Logged out", "You have been logged out.");
+            } catch (error: any) {
+              Alert.alert("Logout", error?.message || "Failed to logout.");
+            } finally {
+              setLoggingOut(false);
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
-      <View style={{ flex: 1 }}>
+      <Modal
+        transparent
+        visible={privateKeyModalVisible}
+        animationType="fade"
+        onRequestClose={closePrivateKeyPopup}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.72)",
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 20,
+          }}
+        >
+          <View
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              borderRadius: 12,
+              padding: 14,
+              borderWidth: 1,
+              borderColor: "#29446b",
+              backgroundColor: "#0b1220",
+            }}
+          >
+            <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700" }}>Export Private Key</Text>
+            <Text style={{ color: "#9fb7d8", marginTop: 8, lineHeight: 20 }}>
+              Our private keys are never stored or accessible by our platform.
+            </Text>
+            <View
+              style={{
+                marginTop: 10,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "#2a3a52",
+                backgroundColor: "#0a1528",
+                padding: 10,
+                maxHeight: 160,
+              }}
+            >
+              <ScrollView>
+                <Text selectable style={{ color: "#d8e8ff", fontSize: 12, fontFamily: "Courier" }}>
+                  {exportedPrivateKey}
+                </Text>
+              </ScrollView>
+            </View>
+
+            <Pressable
+              onPress={() => void copyPrivateKey()}
+              style={{ marginTop: 10, borderRadius: 8, backgroundColor: "#1d9bf0", paddingVertical: 10 }}
+            >
+              <Text style={{ textAlign: "center", color: "#fff", fontWeight: "700" }}>Copy Private Key</Text>
+            </Pressable>
+            <Pressable
+              onPress={closePrivateKeyPopup}
+              style={{
+                marginTop: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "#2a3a52",
+                backgroundColor: "#111827",
+                paddingVertical: 10,
+              }}
+            >
+              <Text style={{ textAlign: "center", color: "#d1d5db", fontWeight: "700" }}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 18 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
       {twitterProfile ? (
         <View
           style={{
@@ -203,11 +366,34 @@ export default function WalletScreen() {
           <Text style={{ color: "#8f9ab7", marginTop: 2, fontSize: 11 }} numberOfLines={1}>
             ID: {twitterProfile.id}
           </Text>
+          <Pressable
+            onPress={handleDisconnectTwitter}
+            disabled={disconnectingTwitter || loggingOut}
+            style={{
+              marginTop: 10,
+              borderRadius: 8,
+              paddingVertical: 9,
+              backgroundColor: "#3b0f16",
+              borderWidth: 1,
+              borderColor: "#8a2335",
+              opacity: disconnectingTwitter || loggingOut ? 0.7 : 1,
+            }}
+          >
+            <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
+              {disconnectingTwitter ? "Disconnecting..." : "Disconnect Twitter"}
+            </Text>
+          </Pressable>
         </View>
       ) : null}
-      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Memeswipe Trading Wallet Address</Text>
+      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
 
-      {walletLoading ? (
+      {!twitterProfile ? (
+        <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
+          <Text style={{ color: "#aaa" }}>
+            Connect Twitter on Home first, then create/use your wallet.
+          </Text>
+        </View>
+      ) : walletLoading ? (
         <View style={{ marginTop: 12 }}>
           <ActivityIndicator />
           <Text style={{ color: "#999", marginTop: 6 }}>Loading wallet address...</Text>
@@ -224,9 +410,28 @@ export default function WalletScreen() {
               backgroundColor: "#111",
             }}
           >
-            <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13 }}>
-              {truncateMiddle(tradingWalletAddress)}
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13, flex: 1 }}>
+                {truncateMiddle(tradingWalletAddress)}
+              </Text>
+              <Pressable
+                onPress={() => void openExportPrivateKeyPopup()}
+                disabled={exportingPk}
+                style={{
+                  backgroundColor: "#10233f",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  paddingVertical: 7,
+                  borderWidth: 1,
+                  borderColor: "#254d78",
+                  opacity: exportingPk ? 0.7 : 1,
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>
+                  {exportingPk ? "..." : "Export Key"}
+                </Text>
+              </Pressable>
+            </View>
             <Text selectable numberOfLines={1} style={{ color: "#666", fontFamily: "Courier", marginTop: 5, fontSize: 10 }}>
               {tradingWalletAddress}
             </Text>
@@ -282,7 +487,7 @@ export default function WalletScreen() {
                 </View>
               ) : (
                 <Text style={{ color: "#fff", marginTop: 4, fontSize: 18, fontWeight: "700" }}>
-                  {solBalance === null ? "--" : `${solBalance.toFixed(6)} SOL`}
+                  {solBalance === null ? "--" : formatSol(solBalance)}
                 </Text>
               )}
               {balanceError ? <Text style={{ color: "#ff8a8a", marginTop: 6, fontSize: 11 }}>{balanceError}</Text> : null}
@@ -312,7 +517,7 @@ export default function WalletScreen() {
                 backgroundColor: "#0f131a",
               }}
             >
-              <Text style={{ color: "#bbb", fontWeight: "600" }}>Withdraw to Phantom / external wallet</Text>
+              <Text style={{ color: "#bbb", fontWeight: "600" }}>Send SOL to Phantom / external wallet</Text>
               <TextInput
                 value={withdrawToAddress}
                 onChangeText={setWithdrawToAddress}
@@ -331,20 +536,6 @@ export default function WalletScreen() {
                   fontSize: 12,
                 }}
               />
-              <Pressable
-                onPress={handleSaveWithdrawAddress}
-                style={{
-                  marginTop: 8,
-                  backgroundColor: "#10233f",
-                  borderRadius: 8,
-                  paddingVertical: 9,
-                  borderWidth: 1,
-                  borderColor: "#254d78",
-                }}
-              >
-                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Save Withdraw Address</Text>
-              </Pressable>
-
               <TextInput
                 value={withdrawAmount}
                 onChangeText={setWithdrawAmount}
@@ -376,24 +567,49 @@ export default function WalletScreen() {
                 }}
               >
                 <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
-                  {withdrawing ? "Withdrawing..." : "Withdraw SOL"}
+                  {withdrawing ? "Sending..." : "Send SOL"}
                 </Text>
               </Pressable>
             </View>
+
+            <Pressable
+              onPress={handleLogout}
+              disabled={loggingOut || disconnectingTwitter}
+              style={{
+                marginTop: 12,
+                borderRadius: 10,
+                paddingVertical: 10,
+                borderWidth: 1,
+                borderColor: "#5f2128",
+                backgroundColor: "#2b1115",
+                opacity: loggingOut || disconnectingTwitter ? 0.7 : 1,
+              }}
+            >
+              <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
+                {loggingOut ? "Logging out..." : "Logout"}
+              </Text>
+            </Pressable>
+
           </View>
         </View>
       ) : (
         <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
-          <Text style={{ color: "#aaa" }}>{walletError || "No wallet address found yet."}</Text>
-          <Pressable
-            onPress={handleCreateWallet}
-            style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
-          >
-            <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Wallet</Text>
-          </Pressable>
+          <Text style={{ color: "#aaa" }}>
+            {!twitterProfile
+              ? "Connect Twitter on Home first, then create your wallet."
+              : walletError || "No wallet address found yet."}
+          </Text>
+          {twitterProfile ? (
+            <Pressable
+              onPress={handleCreateWallet}
+              style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
+            >
+              <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Privy Wallet</Text>
+            </Pressable>
+          ) : null}
         </View>
       )}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
