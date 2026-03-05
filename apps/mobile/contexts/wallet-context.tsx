@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import * as FileSystem from "expo-file-system/legacy";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   EmbeddedSolanaWalletState,
@@ -6,7 +7,6 @@ import {
   useEmbeddedSolanaWallet,
   usePrivy,
 } from "@privy-io/expo";
-import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 export type TwitterProfile = {
   id: string;
@@ -17,14 +17,14 @@ type WalletContextValue = {
   twitterProfile: TwitterProfile | null;
   walletAddress: string | null;
   tradingWalletAddress: string | null;
+  withdrawAddress: string | null;
   walletLoading: boolean;
   walletError: string | null;
   setTwitterProfile: (profile: TwitterProfile | null) => void;
-  getOrCreateLocalUserId: () => Promise<string>;
   getOrCreateEmbeddedWalletAddress: () => Promise<string>;
-  getEmbeddedSolanaProvider: () => Promise<any>;
   refreshWalletAddress: () => Promise<string | null>;
   getOrCreateTradingWalletAddress: () => Promise<string>;
+  setTradingWithdrawAddress: (address: string) => Promise<string>;
   withdrawFromTradingWallet: (amountSol: number, toAddress?: string) => Promise<{
     txSignature: string;
     withdrawnSol: number;
@@ -32,10 +32,11 @@ type WalletContextValue = {
   }>;
 };
 
+const WALLET_ADDRESS_FILE = FileSystem.documentDirectory
+  ? `${FileSystem.documentDirectory}memeswipe_wallet_address.txt`
+  : null;
 const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
-const USER_ID_MAP_PREFIX = "@memeswipe:userId:privy:";
-const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 
 const WalletContext = createContext<WalletContextValue | null>(null);
 
@@ -82,6 +83,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [twitterProfile, setTwitterProfile] = useState<TwitterProfile | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [tradingWalletAddress, setTradingWalletAddress] = useState<string | null>(null);
+  const [withdrawAddress, setWithdrawAddress] = useState<string | null>(null);
   const [walletLoading, setWalletLoading] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
 
@@ -97,14 +99,46 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const address = getAddressFromState(solanaWallet);
     if (address) {
       setWalletAddress(address);
-      setTradingWalletAddress(address);
       setWalletError(null);
-      return;
     }
-    // No active embedded wallet in current Privy session; clear stale local state.
-    setWalletAddress(null);
-    setTradingWalletAddress(null);
   }, [solanaWallet]);
+
+  useEffect(() => {
+    (async () => {
+      if (!WALLET_ADDRESS_FILE) return;
+
+      try {
+        const raw = await FileSystem.readAsStringAsync(WALLET_ADDRESS_FILE);
+        const trimmed = raw.trim();
+        if (trimmed) {
+          setWalletAddress(trimmed);
+        }
+      } catch {
+        // No cache yet.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      if (!WALLET_ADDRESS_FILE) return;
+
+      if (!walletAddress) {
+        try {
+          await FileSystem.deleteAsync(WALLET_ADDRESS_FILE, { idempotent: true });
+        } catch {
+          // Ignore cache cleanup errors.
+        }
+        return;
+      }
+
+      try {
+        await FileSystem.writeAsStringAsync(WALLET_ADDRESS_FILE, walletAddress);
+      } catch {
+        // Ignore cache write errors.
+      }
+    })();
+  }, [walletAddress]);
 
   const createUuidV4 = () =>
     "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
@@ -113,100 +147,106 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       return value.toString(16);
     });
 
-  const getOrCreateLocalUserId = useCallback(async () => {
-    const privyUserId = typeof (user as any)?.id === "string" ? ((user as any).id as string) : null;
+  const getOrCreateLocalUserId = async () => {
     const existing = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
-
-    // Prefer stable mapping by Privy user id to avoid wallet changes across reinstalls.
-    if (privyUserId) {
-      const mapKey = `${USER_ID_MAP_PREFIX}${privyUserId}`;
-      const mapped = await AsyncStorage.getItem(mapKey);
-      if (mapped && UUID_RE.test(mapped)) {
-        if (existing !== mapped) await AsyncStorage.setItem(LOCAL_USER_ID_KEY, mapped);
-        return mapped;
-      }
-
-      // Migrate legacy local id to Privy mapping when available.
-      if (existing && UUID_RE.test(existing)) {
-        await AsyncStorage.setItem(mapKey, existing);
-        return existing;
-      }
-
-      const stable = createUuidV4();
-      await AsyncStorage.setItem(mapKey, stable);
-      await AsyncStorage.setItem(LOCAL_USER_ID_KEY, stable);
-      return stable;
-    }
-
-    if (existing && UUID_RE.test(existing)) return existing;
+    if (existing) return existing;
     const next = createUuidV4();
     await AsyncStorage.setItem(LOCAL_USER_ID_KEY, next);
     return next;
-  }, [user]);
+  };
 
   const getOrCreateTradingWalletAddress = async (): Promise<string> => {
-    const embeddedWalletAddress = await getOrCreateEmbeddedWalletAddress();
-    setTradingWalletAddress(embeddedWalletAddress);
-    return embeddedWalletAddress;
+    setWalletLoading(true);
+    setWalletError(null);
+    try {
+      const userId = await getOrCreateLocalUserId();
+      const res = await fetch(`${API_BASE}/api/trading-wallet/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        walletAddress?: string;
+        withdrawAddress?: string | null;
+      };
+      if (!res.ok || !json?.walletAddress) {
+        throw new Error(json?.error || "Failed to create trading wallet");
+      }
+      setTradingWalletAddress(json.walletAddress);
+      setWithdrawAddress(json.withdrawAddress || null);
+      return json.walletAddress;
+    } catch (error: any) {
+      const message = error?.message || "Failed to create trading wallet";
+      setWalletError(message);
+      throw error;
+    } finally {
+      setWalletLoading(false);
+    }
+  };
+
+  const setTradingWithdrawAddress = async (address: string): Promise<string> => {
+    const userId = await getOrCreateLocalUserId();
+    const res = await fetch(`${API_BASE}/api/trading-wallet/withdraw-address`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, withdrawAddress: address }),
+    });
+    const json = (await res.json()) as { error?: string; withdrawAddress?: string; walletAddress?: string };
+    if (!res.ok || !json?.withdrawAddress) {
+      throw new Error(json?.error || "Failed to update withdraw address");
+    }
+    if (json.walletAddress) setTradingWalletAddress(json.walletAddress);
+    setWithdrawAddress(json.withdrawAddress);
+    return json.withdrawAddress;
   };
 
   const withdrawFromTradingWallet = async (amountSol: number, toAddress?: string) => {
-    const destination = String(toAddress || "").trim();
-    if (!destination) throw new Error("Destination wallet address is required");
-    const lamports = Math.floor(Number(amountSol) * 1_000_000_000);
-    if (!Number.isFinite(lamports) || lamports <= 0) throw new Error("Invalid withdraw amount");
-
-    const fromAddress = await getOrCreateEmbeddedWalletAddress();
-    if (!fromAddress) throw new Error("Embedded wallet not found");
-
-    const connection = new Connection(SOLANA_MAINNET_RPC, "confirmed");
-    const provider = await getEmbeddedSolanaProvider();
-    const fromPubkey = new PublicKey(fromAddress);
-    const toPubkey = new PublicKey(destination);
-
-    const { blockhash } = await connection.getLatestBlockhash("finalized");
-    const tx = new Transaction({
-      feePayer: fromPubkey,
-      recentBlockhash: blockhash,
-    }).add(
-      SystemProgram.transfer({
-        fromPubkey,
-        toPubkey,
-        lamports,
-      })
-    );
-
-    let signedTx: Transaction | null = null;
-
-    if (provider && typeof provider.signTransaction === "function") {
-      const signed = await provider.signTransaction({ transaction: tx });
-      if (signed?.signedTransaction?.serialize) {
-        signedTx = signed.signedTransaction as Transaction;
-      }
-    } else if (provider && typeof provider.request === "function") {
-      const signed = await provider.request({
-        method: "signTransaction",
-        params: { transaction: tx },
-      });
-      if (signed?.signedTransaction?.serialize) {
-        signedTx = signed.signedTransaction as Transaction;
-      }
-    }
-
-    if (!signedTx) throw new Error("Embedded wallet could not sign withdraw transaction");
-    const txSignature = await connection.sendRawTransaction(signedTx.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
+    const userId = await getOrCreateLocalUserId();
+    const res = await fetch(`${API_BASE}/api/trading-wallet/withdraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, amountSol, toAddress }),
     });
-    await connection.confirmTransaction(txSignature, "confirmed");
-    const remainingLamports = await connection.getBalance(fromPubkey, "confirmed");
-
+    const json = (await res.json()) as {
+      error?: string;
+      txSignature?: string;
+      withdrawnSol?: number;
+      remainingSol?: number;
+    };
+    if (!res.ok || !json?.txSignature) {
+      throw new Error(json?.error || "Withdraw failed");
+    }
     return {
-      txSignature,
-      withdrawnSol: Number(amountSol),
-      remainingSol: Number(remainingLamports / 1_000_000_000),
+      txSignature: json.txSignature,
+      withdrawnSol: Number(json.withdrawnSol || 0),
+      remainingSol: Number(json.remainingSol || 0),
     };
   };
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const userId = await getOrCreateLocalUserId();
+        const res = await fetch(`${API_BASE}/api/trading-wallet/${encodeURIComponent(userId)}`);
+        if (!res.ok) return;
+        const json = (await res.json()) as { walletAddress?: string; withdrawAddress?: string | null };
+        if (!active) return;
+        if (json.walletAddress) {
+          setTradingWalletAddress(json.walletAddress);
+        }
+        if (typeof json.withdrawAddress === "string" && json.withdrawAddress.length > 0) {
+          setWithdrawAddress(json.withdrawAddress);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const waitForPrivyReady = async () => {
     const startedAt = Date.now();
@@ -280,43 +320,22 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const getEmbeddedSolanaProvider = async () => {
-    await waitForPrivyReady();
-    await ensurePrivyUser();
-
-    const wallets = "wallets" in solanaRef.current ? solanaRef.current.wallets : null;
-    if (Array.isArray(wallets) && wallets.length > 0 && typeof wallets[0]?.getProvider === "function") {
-      return wallets[0].getProvider();
-    }
-
-    if ("getProvider" in solanaRef.current && typeof solanaRef.current.getProvider === "function") {
-      return solanaRef.current.getProvider();
-    }
-
-    if ("create" in solanaRef.current && typeof solanaRef.current.create === "function") {
-      const provider = await solanaRef.current.create();
-      if (provider) return provider;
-    }
-
-    throw new Error("Privy Solana provider unavailable");
-  };
-
   const value = useMemo<WalletContextValue>(
     () => ({
       twitterProfile,
       walletAddress,
       tradingWalletAddress,
+      withdrawAddress,
       walletLoading,
       walletError,
       setTwitterProfile,
-      getOrCreateLocalUserId,
       getOrCreateEmbeddedWalletAddress,
-      getEmbeddedSolanaProvider,
       refreshWalletAddress,
       getOrCreateTradingWalletAddress,
+      setTradingWithdrawAddress,
       withdrawFromTradingWallet,
     }),
-    [twitterProfile, walletAddress, tradingWalletAddress, walletLoading, walletError]
+    [twitterProfile, walletAddress, tradingWalletAddress, withdrawAddress, walletLoading, walletError]
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
