@@ -54,12 +54,10 @@ export default function WalletScreen() {
     twitterProfile,
     setTwitterProfile,
     tradingWalletAddress,
-    withdrawAddress,
     walletLoading,
     walletError,
     getOrCreateLocalUserId,
     getOrCreateTradingWalletAddress,
-    setTradingWithdrawAddress,
     withdrawFromTradingWallet,
   } = useWalletContext();
   const { logout } = useAuth();
@@ -107,12 +105,6 @@ export default function WalletScreen() {
     void loadBalance(tradingWalletAddress);
   }, [tradingWalletAddress]);
 
-  useEffect(() => {
-    if (withdrawAddress && !withdrawToAddress) {
-      setWithdrawToAddress(withdrawAddress);
-    }
-  }, [withdrawAddress, withdrawToAddress]);
-
   const handleCreateWallet = async () => {
     let applicationId = "unknown";
     try {
@@ -130,7 +122,7 @@ export default function WalletScreen() {
       console.log("[WALLET] Create Wallet clicked");
       console.log("[APP]", Platform.OS, "applicationId:", applicationId);
       const address = await getOrCreateTradingWalletAddress();
-      console.log("[WALLET] Trading wallet address:", address);
+      console.log("[WALLET] Embedded wallet address:", address);
       Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
     } catch (error: any) {
       const message = String(error?.message || error || "");
@@ -168,21 +160,6 @@ export default function WalletScreen() {
       Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
     } catch {
       Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
-    }
-  };
-
-  const handleSaveWithdrawAddress = async () => {
-    try {
-      const next = withdrawToAddress.trim();
-      if (!next) {
-        Alert.alert("Withdraw", "Enter destination wallet address.");
-        return;
-      }
-      const saved = await setTradingWithdrawAddress(next);
-      setWithdrawToAddress(saved);
-      Alert.alert("Saved", "Withdraw address updated.");
-    } catch (error: any) {
-      Alert.alert("Withdraw", error?.message || "Failed to save withdraw address.");
     }
   };
 
@@ -309,7 +286,7 @@ export default function WalletScreen() {
           </Pressable>
         </View>
       ) : null}
-      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Memeswipe Trading Wallet Address</Text>
+      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
 
       {!twitterProfile ? (
         <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
@@ -422,7 +399,7 @@ export default function WalletScreen() {
                 backgroundColor: "#0f131a",
               }}
             >
-              <Text style={{ color: "#bbb", fontWeight: "600" }}>Withdraw to Phantom / external wallet</Text>
+              <Text style={{ color: "#bbb", fontWeight: "600" }}>Send SOL to Phantom / external wallet</Text>
               <TextInput
                 value={withdrawToAddress}
                 onChangeText={setWithdrawToAddress}
@@ -441,20 +418,6 @@ export default function WalletScreen() {
                   fontSize: 12,
                 }}
               />
-              <Pressable
-                onPress={handleSaveWithdrawAddress}
-                style={{
-                  marginTop: 8,
-                  backgroundColor: "#10233f",
-                  borderRadius: 8,
-                  paddingVertical: 9,
-                  borderWidth: 1,
-                  borderColor: "#254d78",
-                }}
-              >
-                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Save Withdraw Address</Text>
-              </Pressable>
-
               <TextInput
                 value={withdrawAmount}
                 onChangeText={setWithdrawAmount}
@@ -486,7 +449,7 @@ export default function WalletScreen() {
                 }}
               >
                 <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
-                  {withdrawing ? "Withdrawing..." : "Withdraw SOL"}
+                  {withdrawing ? "Sending..." : "Send SOL"}
                 </Text>
               </Pressable>
             </View>
@@ -523,7 +486,7 @@ export default function WalletScreen() {
               onPress={handleCreateWallet}
               style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
             >
-              <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Wallet</Text>
+              <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Privy Wallet</Text>
             </Pressable>
           ) : null}
         </View>

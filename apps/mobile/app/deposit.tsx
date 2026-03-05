@@ -71,7 +71,7 @@ export default function DepositScreen() {
           onPress={() => void getOrCreateTradingWalletAddress()}
           disabled={walletLoading}
         >
-          <Text style={styles.secondaryText}>{walletLoading ? 'Creating Wallet...' : 'Create Trading Wallet'}</Text>
+          <Text style={styles.secondaryText}>{walletLoading ? 'Creating Wallet...' : 'Create Privy Wallet'}</Text>
         </Pressable>
       ) : null}
 

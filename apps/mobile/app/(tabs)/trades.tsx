@@ -92,7 +92,7 @@ const getDisplayedPnl = (trade: TradeItem) => {
 
 export default function TradesScreen() {
   const { twitterProfile } = useWalletContext();
-  const { tradingWalletAddress, getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider } = useWalletContext();
+  const { getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider } = useWalletContext();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
@@ -300,7 +300,7 @@ export default function TradesScreen() {
         setClosingId(orderId);
         const resolvedUserId = userId || (await AsyncStorage.getItem(LOCAL_USER_ID_KEY)) || '';
         if (!resolvedUserId) throw new Error('User id not found');
-        const walletAddress = tradingWalletAddress || (await getOrCreateTradingWalletAddress());
+        const walletAddress = await getOrCreateTradingWalletAddress();
         if (!walletAddress) throw new Error('Embedded wallet address not found');
 
         const buildRes = await fetch(`${API_BASE}/api/trades/close/build`, {
@@ -314,25 +314,27 @@ export default function TradesScreen() {
         }
 
         const provider = await getEmbeddedSolanaProvider();
-        const unsignedTxBytes = Uint8Array.from(Buffer.from(buildJson.swapTransaction, 'base64'));
-        let signedTxBytes: Uint8Array | null = null;
+        const unsignedTx = VersionedTransaction.deserialize(Uint8Array.from(Buffer.from(buildJson.swapTransaction, 'base64')));
+        let signedTx: VersionedTransaction | null = null;
 
         if (provider && typeof provider.signTransaction === 'function') {
-          const signed = await provider.signTransaction({ transaction: unsignedTxBytes });
-          signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+          const signed = await provider.signTransaction({ transaction: unsignedTx });
+          if (signed?.signedTransaction?.serialize) {
+            signedTx = signed.signedTransaction as VersionedTransaction;
+          }
         } else if (provider && typeof provider.request === 'function') {
           const signed = await provider.request({
             method: 'signTransaction',
-            params: { transaction: unsignedTxBytes },
+            params: { transaction: unsignedTx },
           });
-          signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+          if (signed?.signedTransaction?.serialize) {
+            signedTx = signed.signedTransaction as VersionedTransaction;
+          }
         }
 
-        if (!signedTxBytes) {
+        if (!signedTx) {
           throw new Error('Embedded wallet could not sign close transaction.');
         }
-
-        const signedTx = VersionedTransaction.deserialize(signedTxBytes);
         const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
         const signature = await connection.sendRawTransaction(signedTx.serialize(), {
           skipPreflight: false,
@@ -381,7 +383,7 @@ export default function TradesScreen() {
         setClosingId(null);
       }
     },
-    [getEmbeddedSolanaProvider, getOrCreateTradingWalletAddress, tradingWalletAddress, userId]
+    [getEmbeddedSolanaProvider, getOrCreateTradingWalletAddress, userId]
   );
 
   const filtered = useMemo(() => {

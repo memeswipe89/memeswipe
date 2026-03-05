@@ -5,7 +5,6 @@ const crypto = require("crypto");
 const Stripe = require("stripe");
 const {
   Connection,
-  VersionedTransaction,
   PublicKey,
 } = require("@solana/web3.js");
 require("dotenv").config();
@@ -17,6 +16,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 const HAS_DATABASE_URL = typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0;
+let legacyTradingWalletCleanupPromise = null;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -27,7 +27,6 @@ const oauthStateStore = new Map();
 let ensureTwitterTablePromise = null;
 let ensureFavoritesTablePromise = null;
 let ensureOrdersTablePromise = null;
-let ensureTradingWalletsTablePromise = null;
 const userFkTargetCache = new Map();
 const FEED_CACHE_TTL_MS = 60 * 1000;
 const QUOTA_BLOCK_MS = 60 * 60 * 1000;
@@ -61,7 +60,6 @@ const AUTO_CLOSE_OUTPUT_MINTS = [
 ];
 let autoCloseRunning = false;
 let autoClosePausedUntil = 0;
-const TRADING_WALLET_TABLE = "trading_wallets";
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 const base64UrlEncode = (buffer) =>
@@ -75,6 +73,19 @@ const createCodeVerifier = () => base64UrlEncode(crypto.randomBytes(32));
 
 const createCodeChallenge = (verifier) =>
   base64UrlEncode(crypto.createHash("sha256").update(verifier).digest());
+
+const cleanupLegacyTradingWalletTable = async () => {
+  if (!HAS_DATABASE_URL) return;
+  if (!legacyTradingWalletCleanupPromise) {
+    legacyTradingWalletCleanupPromise = pool.query(`drop table if exists trading_wallets`);
+  }
+  try {
+    await legacyTradingWalletCleanupPromise;
+  } catch (error) {
+    legacyTradingWalletCleanupPromise = null;
+    throw error;
+  }
+};
 
 const ensureTwitterConnectionsTable = async () => {
   if (!ensureTwitterTablePromise) {
@@ -179,36 +190,6 @@ const ensureOrdersTable = async () => {
   }
 };
 
-const ensureTradingWalletsTable = async () => {
-  if (!ensureTradingWalletsTablePromise) {
-    ensureTradingWalletsTablePromise = (async () => {
-      await pool.query(`
-        create table if not exists trading_wallets (
-          user_id uuid primary key,
-          wallet_public_key text not null unique,
-          wallet_secret_encrypted text,
-          withdraw_address text,
-          created_at timestamptz not null default now(),
-          updated_at timestamptz not null default now()
-        )
-      `);
-      await pool.query(`alter table trading_wallets add column if not exists wallet_public_key text`);
-      await pool.query(`alter table trading_wallets add column if not exists wallet_secret_encrypted text`);
-      await pool.query(`alter table trading_wallets add column if not exists withdraw_address text`);
-      await pool.query(`alter table trading_wallets add column if not exists created_at timestamptz not null default now()`);
-      await pool.query(`alter table trading_wallets add column if not exists updated_at timestamptz not null default now()`);
-      await pool.query(`alter table trading_wallets alter column wallet_secret_encrypted drop not null`);
-    })();
-  }
-
-  try {
-    await ensureTradingWalletsTablePromise;
-  } catch (error) {
-    ensureTradingWalletsTablePromise = null;
-    throw error;
-  }
-};
-
 const resolveUserFkTarget = async (sourceTableName) => {
   if (userFkTargetCache.has(sourceTableName)) {
     return userFkTargetCache.get(sourceTableName);
@@ -300,6 +281,9 @@ const buildRedirectUrl = (returnUrl, params) => {
   });
   return url.toString();
 };
+
+const UUID_V4_OR_V1_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isUuid = (value) => UUID_V4_OR_V1_RE.test(String(value || "").trim());
 
 const isAllowedReturnUrl = (value) => {
   if (!value || typeof value !== "string") return false;
@@ -406,14 +390,6 @@ const normalizePublicKey = (value) => {
   } catch {
     return null;
   }
-};
-
-const getTradingWalletRow = async (userId) => {
-  const r = await pool.query(
-    `select user_id, wallet_public_key, withdraw_address from trading_wallets where user_id = $1 limit 1`,
-    [userId]
-  );
-  return r.rows[0] || null;
 };
 
 const getTokenPriceUsd = async (address) => {
@@ -544,7 +520,6 @@ const processAutoClose = async () => {
   autoCloseRunning = true;
   try {
     await ensureOrdersTable();
-    await ensureTradingWalletsTable();
     const rows = await pool.query(
       `
       select *
@@ -638,7 +613,6 @@ const processAutoClose = async () => {
 app.post("/api/trades/close/build", async (req, res) => {
   try {
     await ensureOrdersTable();
-    await ensureTradingWalletsTable();
     const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
     const orderId = Number(req.body?.orderId);
     const walletAddress = normalizePublicKey(req.body?.walletAddress);
@@ -656,13 +630,6 @@ app.post("/api/trades/close/build", async (req, res) => {
     );
     if (!row.rows.length) return res.status(404).json({ error: "Order not found" });
     const order = row.rows[0];
-    const walletRow = await getTradingWalletRow(userId);
-    if (!walletRow?.wallet_public_key) {
-      return res.status(400).json({ error: "Trading wallet not found. Create wallet first." });
-    }
-    if (walletRow.wallet_public_key !== walletAddress) {
-      return res.status(400).json({ error: "walletAddress does not match registered trading wallet" });
-    }
     if (String(order.status || "").toLowerCase() === "closed" && order.close_tx_signature) {
       return res.status(400).json({ error: "Order is already closed" });
     }
@@ -819,7 +786,6 @@ const migrateLegacyUserDataByTwitterIdentity = async (currentUserId, twitterUser
   await ensureTwitterConnectionsTable();
   await ensureOrdersTable();
   await ensureFavoritesTable();
-  await ensureTradingWalletsTable();
   await resolveInsertUserId("orders", currentUserId);
 
   const legacyUsersRes = await pool.query(
@@ -849,18 +815,6 @@ const migrateLegacyUserDataByTwitterIdentity = async (currentUserId, twitterUser
       [legacyUserId, currentUserId]
     );
     await pool.query(`delete from favorites where user_id = $1`, [legacyUserId]);
-    await pool.query(
-      `
-      insert into trading_wallets (user_id, wallet_public_key, wallet_secret_encrypted, withdraw_address, created_at, updated_at)
-      select $2, wallet_public_key, null, withdraw_address, created_at, now()
-      from trading_wallets tw
-      where tw.user_id = $1
-        and not exists (select 1 from trading_wallets cur where cur.user_id = $2)
-      on conflict (user_id) do nothing
-      `,
-      [legacyUserId, currentUserId]
-    );
-    await pool.query(`delete from trading_wallets where user_id = $1`, [legacyUserId]);
     await pool.query(`delete from twitter_connections where user_id = $1`, [legacyUserId]);
   }
 
@@ -1042,8 +996,17 @@ app.get("/api/twitter/auth/callback", async (req, res) => {
       throw new Error("Twitter user data missing");
     }
 
-    const migratedFromUserIds = await migrateLegacyUserDataByTwitterIdentity(stateData.userId, twitterUserId);
+    const resolvedUserId = isUuid(stateData.userId) ? stateData.userId : crypto.randomUUID();
+    if (resolvedUserId !== stateData.userId) {
+      console.warn("[TWITTER] invalid userId from client; generated fallback uuid", {
+        inputUserId: stateData.userId,
+        resolvedUserId,
+      });
+    }
+
+    const migratedFromUserIds = await migrateLegacyUserDataByTwitterIdentity(resolvedUserId, twitterUserId);
     await ensureTwitterConnectionsTable();
+    const insertUserId = await resolveInsertUserId("twitter_connections", resolvedUserId);
     await pool.query(
       `
       insert into twitter_connections (user_id, twitter_user_id, twitter_username, connected_at, updated_at)
@@ -1053,19 +1016,20 @@ app.get("/api/twitter/auth/callback", async (req, res) => {
           twitter_username = excluded.twitter_username,
           updated_at = now()
       `,
-      [stateData.userId, twitterUserId, twitterUsername]
+      [insertUserId, twitterUserId, twitterUsername]
     );
 
     if (migratedFromUserIds.length) {
       console.log("[TWITTER] migrated legacy user data", {
         twitterUserId,
-        currentUserId: stateData.userId,
+        currentUserId: insertUserId,
         migratedFromUserIds,
       });
     }
 
     const successUrl = buildRedirectUrl(stateData.returnUrl, {
       status: "success",
+      userId: insertUserId,
       twitterUserId,
       twitterUsername,
     });
@@ -1075,6 +1039,7 @@ app.get("/api/twitter/auth/callback", async (req, res) => {
     const failedUrl = buildRedirectUrl(stateData.returnUrl, {
       status: "error",
       error: "twitter_auth_failed",
+      reason: String(err?.message || "unknown").slice(0, 120),
     });
     return res.redirect(failedUrl);
   }
@@ -1292,25 +1257,15 @@ app.post("/api/jupiter/swap", async (req, res) => {
 app.post("/api/trades/open", async (req, res) => {
   try {
     await ensureOrdersTable();
-    await ensureTradingWalletsTable();
 
     const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
     const tokenAddress = typeof req.body?.tokenAddress === "string" ? req.body.tokenAddress.trim() : "";
-    const walletAddressOverride = normalizePublicKey(req.body?.walletAddress);
+    const walletAddress = normalizePublicKey(req.body?.walletAddress);
     const amountUsd = Number(req.body?.amountUsd);
     const slippageBpsRaw = Number(req.body?.slippageBps ?? 300);
     const slippageBps = Number.isFinite(slippageBpsRaw) ? Math.max(10, Math.min(5000, slippageBpsRaw)) : 300;
-    if (!userId || !tokenAddress || !Number.isFinite(amountUsd) || amountUsd <= 0) {
-      return res.status(400).json({ error: "userId, tokenAddress and positive amountUsd are required" });
-    }
-
-    const walletRow = await getTradingWalletRow(userId);
-    const walletAddress = walletAddressOverride || walletRow?.wallet_public_key || null;
-    if (!walletAddress) {
-      return res.status(400).json({ error: "Trading wallet not found. Create wallet first." });
-    }
-    if (walletRow?.wallet_public_key && walletAddressOverride && walletRow.wallet_public_key !== walletAddressOverride) {
-      return res.status(400).json({ error: "walletAddress does not match registered trading wallet" });
+    if (!userId || !tokenAddress || !walletAddress || !Number.isFinite(amountUsd) || amountUsd <= 0) {
+      return res.status(400).json({ error: "userId, walletAddress, tokenAddress and positive amountUsd are required" });
     }
 
     const { price: solPriceUsd } = await getSolUsdPrice();
@@ -1382,117 +1337,6 @@ app.post("/api/trades/open", async (req, res) => {
   } catch (err) {
     console.error("Open trade swap error:", err);
     return res.status(500).json({ error: err.message || "Failed to open on-chain trade" });
-  }
-});
-
-app.post("/api/trading-wallet/create", async (req, res) => {
-  try {
-    await ensureTradingWalletsTable();
-    const requestedUserId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
-    const requestedWalletAddress = normalizePublicKey(req.body?.walletAddress);
-    if (!requestedUserId) {
-      return res.status(400).json({ error: "userId is required" });
-    }
-    if (!requestedWalletAddress) {
-      return res.status(400).json({ error: "walletAddress is required" });
-    }
-    const userId = await resolveInsertUserId(TRADING_WALLET_TABLE, requestedUserId);
-
-    const existing = await getTradingWalletRow(userId);
-    if (existing?.wallet_public_key && existing.wallet_public_key === requestedWalletAddress) {
-      return res.json({
-        success: true,
-        userId,
-        walletAddress: existing.wallet_public_key,
-        withdrawAddress: existing.withdraw_address || null,
-        created: false,
-      });
-    }
-    const result = await pool.query(
-      `
-      insert into trading_wallets (user_id, wallet_public_key, created_at, updated_at)
-      values ($1, $2, now(), now())
-      on conflict (user_id) do update
-      set wallet_public_key = excluded.wallet_public_key,
-          updated_at = now()
-      returning user_id, wallet_public_key, withdraw_address
-      `,
-      [userId, requestedWalletAddress]
-    );
-
-    return res.json({
-      success: true,
-      userId: result.rows[0].user_id,
-      walletAddress: result.rows[0].wallet_public_key,
-      withdrawAddress: result.rows[0].withdraw_address || null,
-      created: !existing?.wallet_public_key,
-    });
-  } catch (err) {
-    console.error("Trading wallet create error:", err);
-    return res.status(500).json({ error: err.message || "Failed to create trading wallet" });
-  }
-});
-
-app.get("/api/trading-wallet/:userId", async (req, res) => {
-  try {
-    await ensureTradingWalletsTable();
-    const userId = typeof req.params?.userId === "string" ? req.params.userId.trim() : "";
-    if (!userId) return res.status(400).json({ error: "userId is required" });
-    const row = await getTradingWalletRow(userId);
-    if (!row?.wallet_public_key) return res.status(404).json({ error: "Trading wallet not found" });
-    return res.json({
-      success: true,
-      userId: row.user_id,
-      walletAddress: row.wallet_public_key,
-      withdrawAddress: row.withdraw_address || null,
-    });
-  } catch (err) {
-    console.error("Trading wallet fetch error:", err);
-    return res.status(500).json({ error: err.message || "Failed to fetch trading wallet" });
-  }
-});
-
-app.patch("/api/trading-wallet/withdraw-address", async (req, res) => {
-  try {
-    await ensureTradingWalletsTable();
-    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
-    const normalized = normalizePublicKey(req.body?.withdrawAddress);
-    if (!userId || !normalized) {
-      return res.status(400).json({ error: "userId and valid withdrawAddress are required" });
-    }
-    const r = await pool.query(
-      `
-      update trading_wallets
-      set withdraw_address = $2, updated_at = now()
-      where user_id = $1
-      returning user_id, wallet_public_key, withdraw_address
-      `,
-      [userId, normalized]
-    );
-    if (!r.rows.length) return res.status(404).json({ error: "Trading wallet not found" });
-    return res.json({
-      success: true,
-      userId: r.rows[0].user_id,
-      walletAddress: r.rows[0].wallet_public_key,
-      withdrawAddress: r.rows[0].withdraw_address || null,
-    });
-  } catch (err) {
-    console.error("Withdraw address update error:", err);
-    return res.status(500).json({ error: err.message || "Failed to update withdraw address" });
-  }
-});
-
-app.post("/api/trading-wallet/withdraw", async (req, res) => {
-  try {
-    await ensureTradingWalletsTable();
-    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
-    if (!userId) return res.status(400).json({ error: "userId is required" });
-    return res.status(410).json({
-      error: "Server-side withdraw is deprecated. Use Privy embedded wallet signing on client.",
-    });
-  } catch (err) {
-    console.error("Withdraw error:", err);
-    return res.status(500).json({ error: err.message || "Failed to withdraw" });
   }
 });
 
@@ -1825,28 +1669,13 @@ app.post("/api/favorites", async (req, res) => {
 });
 
 app.get("/api/autoclose/status", (_req, res) => {
-  pool
-    .query(`select count(*)::int as total from trading_wallets`)
-    .then((r) => {
-      return res.json({
-        enabled: AUTO_CLOSE_ENABLED,
-        supported: false,
-        mode: "non_custodial_privy",
-        intervalMs: AUTO_CLOSE_INTERVAL_MS,
-        running: autoCloseRunning,
-        tradingWallets: r.rows[0]?.total || 0,
-      });
-    })
-    .catch(() =>
-      res.json({
-        enabled: AUTO_CLOSE_ENABLED,
-        supported: false,
-        mode: "non_custodial_privy",
-        intervalMs: AUTO_CLOSE_INTERVAL_MS,
-        running: autoCloseRunning,
-        tradingWallets: null,
-      })
-    );
+  return res.json({
+    enabled: AUTO_CLOSE_ENABLED,
+    supported: false,
+    mode: "non_custodial_privy",
+    intervalMs: AUTO_CLOSE_INTERVAL_MS,
+    running: autoCloseRunning,
+  });
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1855,6 +1684,13 @@ app.listen(PORT, "0.0.0.0", () => {
   if (!HAS_DATABASE_URL) {
     console.warn("[DB] DATABASE_URL is missing. DB-backed features (orders/auto-close) cannot run.");
   }
+  void cleanupLegacyTradingWalletTable()
+    .then(() => {
+      console.log("[DB] legacy trading_wallets table removed");
+    })
+    .catch((error) => {
+      console.warn("[DB] failed to remove legacy trading_wallets table", error?.message || error);
+    });
   if (AUTO_CLOSE_ENABLED) {
     if (!HAS_DATABASE_URL) {
       console.warn("[AUTO_CLOSE] skipped: DATABASE_URL is missing");

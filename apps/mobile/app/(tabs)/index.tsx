@@ -35,6 +35,7 @@ const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
 const LAST_ROI_KEY = '@memeswipe:lastROI';
 const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
+const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const PAGE_LIMIT = 50;
 const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
@@ -307,8 +308,18 @@ export default function HomeScreen() {
       const status = parsed.queryParams?.status;
       if (status !== "success") {
         const error = parsed.queryParams?.error;
-        Alert.alert("Twitter Connect", `Twitter connection failed${error ? `: ${error}` : "."}`);
+        const reason = parsed.queryParams?.reason;
+        Alert.alert(
+          "Twitter Connect",
+          `Twitter connection failed${error ? `: ${error}` : "."}${typeof reason === "string" ? `\n${reason}` : ""}`
+        );
         return;
+      }
+
+      const callbackUserId = parsed.queryParams?.userId;
+      if (typeof callbackUserId === "string" && callbackUserId.length > 0) {
+        void AsyncStorage.setItem(LOCAL_USER_ID_KEY, callbackUserId);
+        setUserId(callbackUserId);
       }
 
       const twitterUsername = parsed.queryParams?.twitterUsername;
@@ -896,7 +907,7 @@ export default function HomeScreen() {
         throw new Error('On-chain swaps are currently enabled only for Solana feed.');
       }
 
-      const resolvedWalletAddress = tradingWalletAddress || (await getOrCreateTradingWalletAddress());
+      const resolvedWalletAddress = await getOrCreateTradingWalletAddress();
       if (!resolvedWalletAddress) {
         throw new Error('No wallet address found. Create wallet first from Wallet tab.');
       }
@@ -959,25 +970,27 @@ export default function HomeScreen() {
           }
 
           const provider = await getEmbeddedSolanaProvider();
-          const unsignedTxBytes = Uint8Array.from(Buffer.from(swapJson.swapTransaction, 'base64'));
-          let signedTxBytes: Uint8Array | null = null;
+          const unsignedTx = VersionedTransaction.deserialize(Uint8Array.from(Buffer.from(swapJson.swapTransaction, 'base64')));
+          let signedTx: VersionedTransaction | null = null;
 
           if (provider && typeof provider.signTransaction === 'function') {
-            const signed = await provider.signTransaction({ transaction: unsignedTxBytes });
-            signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+            const signed = await provider.signTransaction({ transaction: unsignedTx });
+            if (signed?.signedTransaction?.serialize) {
+              signedTx = signed.signedTransaction as VersionedTransaction;
+            }
           } else if (provider && typeof provider.request === 'function') {
             const signed = await provider.request({
               method: 'signTransaction',
-              params: { transaction: unsignedTxBytes },
+              params: { transaction: unsignedTx },
             });
-            signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+            if (signed?.signedTransaction?.serialize) {
+              signedTx = signed.signedTransaction as VersionedTransaction;
+            }
           }
 
-          if (!signedTxBytes) {
+          if (!signedTx) {
             throw new Error('Embedded wallet could not sign transaction.');
           }
-
-          const signedTx = VersionedTransaction.deserialize(signedTxBytes);
           const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
           const signature = await connection.sendRawTransaction(signedTx.serialize(), {
             skipPreflight: false,
@@ -1019,7 +1032,7 @@ export default function HomeScreen() {
 
       throw lastError || new Error('Swap failed after retries');
     },
-    [activeChain, getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress, tradeAmount, tradingWalletAddress, userId]
+    [activeChain, getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress, tradeAmount, userId]
   );
 
   const createOrder = useCallback(
