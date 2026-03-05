@@ -1,26 +1,21 @@
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const fallbackHistory = [0.21, 0.22, 0.19, 0.25, 0.27, 0.24, 0.29];
 
-export async function getPriceHistory(address: string): Promise<number[]> {
+type ChartResponse = {
+  points?: number[];
+};
+
+export async function getPriceHistory(address: string, change24hPct = 0): Promise<number[]> {
   try {
     if (!address) return fallbackHistory;
-
-    const res = await fetch(`https://deep-index.moralis.io/api/v2.2/erc20/${address}/price`, {
-      headers: {
-        'X-API-Key': process.env.EXPO_PUBLIC_MORALIS_KEY || '',
-      },
-    });
-
+    const res = await fetch(
+      `${API_BASE}/api/token-chart/${encodeURIComponent(address)}?change24hPct=${encodeURIComponent(String(change24hPct))}`
+    );
     if (!res.ok) return fallbackHistory;
-    const json = (await res.json()) as { usdPrice?: number };
-
-    if (!json?.usdPrice || !Number.isFinite(Number(json.usdPrice))) {
-      return fallbackHistory;
-    }
-
-    const base = Number(json.usdPrice);
-    return [base * 0.92, base * 0.95, base * 0.91, base * 1.02, base * 0.98, base * 1.04, base];
+    const json = (await res.json()) as ChartResponse;
+    const points = Array.isArray(json?.points) ? json.points.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+    return points.length > 1 ? points : fallbackHistory;
   } catch {
     return fallbackHistory;
   }
 }
-

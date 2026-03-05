@@ -45,6 +45,9 @@ const JUPITER_SWAP_URLS = [
 ];
 const TOKEN_PRICE_CACHE_TTL_MS = 20 * 1000;
 const tokenPriceCache = new Map();
+const TOKEN_CHART_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TOKEN_CHART_MIN_SAMPLE_INTERVAL_MS = 30 * 1000;
+const tokenChartCache = new Map();
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const AUTO_CLOSE_ENABLED = String(process.env.AUTO_CLOSE_ENABLED || "false").toLowerCase() === "true";
 const AUTO_CLOSE_INTERVAL_MS = Math.max(5_000, Number(process.env.AUTO_CLOSE_INTERVAL_MS || 10_000));
@@ -433,7 +436,65 @@ const getTokenPriceUsd = async (address) => {
   }
 
   tokenPriceCache.set(cacheKey, { price, ts: now });
+  if (Number.isFinite(price) && price > 0) {
+    recordTokenChartPrice(cacheKey, price, now);
+  }
   return price;
+};
+
+const pruneTokenChartSeries = (series, nowTs) =>
+  series.filter((point) => point.t >= nowTs - TOKEN_CHART_WINDOW_MS);
+
+const recordTokenChartPrice = (address, price, ts = Date.now()) => {
+  if (!address || !Number.isFinite(price) || price <= 0) return;
+  const key = String(address).toLowerCase();
+  const existing = tokenChartCache.get(key) || [];
+  const pruned = pruneTokenChartSeries(existing, ts);
+  const last = pruned[pruned.length - 1];
+  if (last && ts - last.t < TOKEN_CHART_MIN_SAMPLE_INTERVAL_MS) {
+    last.v = price;
+    tokenChartCache.set(key, pruned);
+    return;
+  }
+  pruned.push({ t: ts, v: price });
+  tokenChartCache.set(key, pruned);
+};
+
+const buildBackfill24hSeries = (currentPrice, change24hPct, points = 288) => {
+  const safeCurrent = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : 1;
+  const normalizedPct = Number.isFinite(change24hPct) ? change24hPct : 0;
+  const denominator = 1 + normalizedPct / 100;
+  const startPrice = denominator > 0 ? safeCurrent / denominator : safeCurrent * 0.9;
+  const out = [];
+  for (let i = 0; i < points; i += 1) {
+    const progress = i / Math.max(1, points - 1);
+    const trend = startPrice + (safeCurrent - startPrice) * progress;
+    const wobble = Math.sin(progress * Math.PI * 6) * trend * 0.006;
+    out.push(Number((trend + wobble).toFixed(12)));
+  }
+  return out;
+};
+
+const getTokenChart24h = (address, fallbackPrice, fallbackChange24hPct) => {
+  const key = String(address || "").toLowerCase();
+  const nowTs = Date.now();
+  const series = pruneTokenChartSeries(tokenChartCache.get(key) || [], nowTs);
+  if (series.length) tokenChartCache.set(key, series);
+  if (series.length >= 2) {
+    return {
+      points: series.map((point) => point.v),
+      source: "live_cache",
+      startTs: series[0].t,
+      endTs: series[series.length - 1].t,
+    };
+  }
+  const synthetic = buildBackfill24hSeries(fallbackPrice, fallbackChange24hPct, 288);
+  return {
+    points: synthetic,
+    source: "backfill",
+    startTs: nowTs - TOKEN_CHART_WINDOW_MS,
+    endTs: nowTs,
+  };
 };
 
 const getRawTokenBalance = async (connection, ownerPubkey, mint) => {
@@ -726,17 +787,26 @@ const fetchDexFallbackFeed = async (limitRaw) => {
   const pairs = Array.isArray(json?.pairs) ? json.pairs : [];
   const tokens = pairs
     .filter((p) => String(p?.chainId || "").toLowerCase() === "solana")
-    .map((p) => ({
-      name: p?.baseToken?.name || p?.baseToken?.symbol || "Unknown",
-      symbol: p?.baseToken?.symbol || "",
-      address: p?.baseToken?.address || "",
-      priceUsd: Number(p?.priceUsd || 0) || 0,
-      liquidityUsd: Number(p?.liquidity?.usd || 0) || 0,
-      volume24hUsd: Number(p?.volume?.h24 || 0) || 0,
-      marketCapUsd: Number(p?.marketCap || 0) || 0,
-      change24hPct: Number(p?.priceChange?.h24 || 0) || 0,
-      graduatedAt: null,
-    }))
+    .map((p) => {
+      const address = p?.baseToken?.address || "";
+      const priceUsd = Number(p?.priceUsd || 0) || 0;
+      const change24hPct = Number(p?.priceChange?.h24 || 0) || 0;
+      if (address && Number.isFinite(priceUsd) && priceUsd > 0) {
+        recordTokenChartPrice(address, priceUsd);
+      }
+      return {
+        name: p?.baseToken?.name || p?.baseToken?.symbol || "Unknown",
+        symbol: p?.baseToken?.symbol || "",
+        address,
+        priceUsd,
+        liquidityUsd: Number(p?.liquidity?.usd || 0) || 0,
+        volume24hUsd: Number(p?.volume?.h24 || 0) || 0,
+        marketCapUsd: Number(p?.marketCap || 0) || 0,
+        change24hPct,
+        chartData: getTokenChart24h(address, priceUsd, change24hPct).points,
+        graduatedAt: null,
+      };
+    })
     .filter((t) => t.address)
     .sort((a, b) => b.liquidityUsd - a.liquidityUsd)
     .slice(0, safeLimit);
@@ -1150,13 +1220,39 @@ app.get("/api/token-prices", async (req, res) => {
     const prices = {};
 
     for (const address of addresses) {
-      prices[address] = await getTokenPriceUsd(address);
+      const price = await getTokenPriceUsd(address);
+      prices[address] = price;
+      if (Number.isFinite(price) && price > 0) {
+        recordTokenChartPrice(address, price);
+      }
     }
 
     return res.json({ prices });
   } catch (err) {
     console.error("Token prices error:", err);
     return res.status(500).json({ error: err.message || "Failed to fetch token prices" });
+  }
+});
+
+app.get("/api/token-chart/:address", async (req, res) => {
+  try {
+    const address = String(req.params.address || "").trim();
+    if (!address) return res.status(400).json({ error: "address is required" });
+
+    const price = await getTokenPriceUsd(address);
+    const change24hPct = Number(req.query.change24hPct || 0);
+    const chart = getTokenChart24h(address, Number.isFinite(price) ? price : 0, change24hPct);
+    return res.json({
+      address,
+      range: "24h",
+      points: chart.points,
+      source: chart.source,
+      startTs: chart.startTs,
+      endTs: chart.endTs,
+    });
+  } catch (err) {
+    console.error("Token chart error:", err);
+    return res.status(500).json({ error: err.message || "Failed to fetch token chart" });
   }
 });
 

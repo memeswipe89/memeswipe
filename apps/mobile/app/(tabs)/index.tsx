@@ -95,7 +95,7 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
   const price = toNumber(token.priceUsd, 0);
   const chart =
     Array.isArray(token.chartData) && token.chartData.length > 1
-      ? token.chartData.map((n) => toNumber(n, price || 1)).slice(-20)
+      ? token.chartData.map((n) => toNumber(n, price || 1)).slice(-288)
       : buildFallbackChart(price);
 
   return {
@@ -113,7 +113,7 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
 };
 
 const mergeLiveUpdate = (prev: SwipeToken, incoming: SwipeToken): SwipeToken => {
-  const history = [...prev.chartData, incoming.priceUsd].slice(-20);
+  const history = [...prev.chartData, incoming.priceUsd].slice(-288);
 
   const changed =
     prev.priceUsd !== incoming.priceUsd ||

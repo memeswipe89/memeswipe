@@ -173,7 +173,7 @@ const MomentumGraph = memo(function MomentumGraph({ data }: { data: number[] }) 
 
   return (
     <Animated.View style={[styles.graphContainer, animatedStyle]}>
-      <TradeChart data={data.slice(-30)} />
+      <TradeChart data={data.slice(-288)} />
     </Animated.View>
   );
 });
@@ -240,24 +240,31 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
 
   useEffect(() => {
     let active = true;
-    getPriceHistory(token.address)
-      .then((values) => {
+    const refreshHistory = async () => {
+      try {
+        const values = await getPriceHistory(token.address, token.change24hPct);
         if (!active) return;
         if (Array.isArray(values) && values.length > 1) {
           setHistory(values);
           return;
         }
         setHistory(token.chartData || []);
-      })
-      .catch(() => {
+      } catch {
         if (!active) return;
         setHistory(token.chartData || []);
-      });
+      }
+    };
+
+    void refreshHistory();
+    const intervalId = setInterval(() => {
+      void refreshHistory();
+    }, 15000);
 
     return () => {
       active = false;
+      clearInterval(intervalId);
     };
-  }, [token.address, token.chartData]);
+  }, [token.address, token.change24hPct, token.chartData]);
 
   return (
     <View style={styles.cardWrap}>
