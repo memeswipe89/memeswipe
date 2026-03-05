@@ -7,8 +7,11 @@ import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import { FontAwesome } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Connection, VersionedTransaction } from '@solana/web3.js';
+import { Buffer } from 'buffer';
 
 import { AppLoader } from '@/components/app-loader';
 import { LoadingOverlay } from '@/components/loading-overlay';
@@ -172,6 +175,7 @@ export default function HomeScreen() {
     setTwitterProfile,
     tradingWalletAddress,
     getOrCreateTradingWalletAddress,
+    getEmbeddedSolanaProvider,
     getOrCreateLocalUserId,
   } =
     useWalletContext();
@@ -939,6 +943,7 @@ export default function HomeScreen() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               userId: resolvedUserId,
+              walletAddress: resolvedWalletAddress,
               tokenAddress: token.address,
               amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
               slippageBps,
@@ -946,16 +951,40 @@ export default function HomeScreen() {
           });
           const swapJson = await parseApiJson<{
             error?: string;
-            signature?: string;
+            swapTransaction?: string;
             quote?: { inAmount?: string; outAmount?: string; inputMint?: string; outputMint?: string };
           }>(swapRes);
-          if (!swapRes.ok || !swapJson?.signature) {
-            throw new Error(swapJson?.error || 'Failed to build Jupiter swap');
+          if (!swapRes.ok || !swapJson?.swapTransaction) {
+            throw new Error(swapJson?.error || 'Failed to build Jupiter swap transaction');
           }
-          const signature = String(swapJson.signature || '');
-          if (!signature) {
-            throw new Error('Signed transaction was sent but no signature returned.');
+
+          const provider = await getEmbeddedSolanaProvider();
+          const unsignedTxBytes = Uint8Array.from(Buffer.from(swapJson.swapTransaction, 'base64'));
+          let signedTxBytes: Uint8Array | null = null;
+
+          if (provider && typeof provider.signTransaction === 'function') {
+            const signed = await provider.signTransaction({ transaction: unsignedTxBytes });
+            signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+          } else if (provider && typeof provider.request === 'function') {
+            const signed = await provider.request({
+              method: 'signTransaction',
+              params: { transaction: unsignedTxBytes },
+            });
+            signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
           }
+
+          if (!signedTxBytes) {
+            throw new Error('Embedded wallet could not sign transaction.');
+          }
+
+          const signedTx = VersionedTransaction.deserialize(signedTxBytes);
+          const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
+          const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            maxRetries: 3,
+          });
+          await connection.confirmTransaction(signature, 'confirmed');
+
           console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
             signature,
             slippageBps,
@@ -990,7 +1019,7 @@ export default function HomeScreen() {
 
       throw lastError || new Error('Swap failed after retries');
     },
-    [activeChain, getOrCreateLocalUserId, getOrCreateTradingWalletAddress, tradeAmount, tradingWalletAddress, userId]
+    [activeChain, getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress, tradeAmount, tradingWalletAddress, userId]
   );
 
   const createOrder = useCallback(
@@ -1364,30 +1393,51 @@ export default function HomeScreen() {
         <AppLoader visible={appLoading} />
         <LoadingOverlay visible={creatingOrder || buyLoading} text="Executing trade..." />
         {showTwitterPrompt ? (
-          <View style={styles.connectPromptOverlay} pointerEvents="box-none">
+          <View style={styles.connectPromptOverlay} pointerEvents="auto">
+            <BlurView intensity={58} tint="dark" style={styles.connectPromptBackdrop} />
+            <View style={styles.connectPromptBackdropDim} />
             <View style={styles.connectPromptCard}>
-              <Text style={styles.connectPromptTitle}>Connect Twitter</Text>
-              <View style={styles.connectPromptActions}>
-                <Pressable
-                  onPress={() => setShowTwitterPrompt(false)}
-                  style={[styles.connectPromptBtn, styles.connectPromptBtnSecondary]}
+              <View style={styles.connectPromptIconWrap}>
+                <LinearGradient
+                  colors={['rgba(29,155,240,0.25)', 'rgba(29,155,240,0.08)']}
+                  style={styles.connectPromptIconRing}
                 >
-                  <Text style={styles.connectPromptBtnSecondaryText}>Maybe Later</Text>
-                </Pressable>
+                  <View style={styles.connectPromptIconCircle}>
+                    <FontAwesome name="twitter" size={24} color="#1D9BF0" />
+                  </View>
+                </LinearGradient>
+              </View>
+              <Text style={styles.connectPromptTitle}>Connect Account</Text>
+              <Text style={styles.connectPromptText}>
+                Link your Twitter profile to enable real-time sentiment analysis and automated trading execution.
+              </Text>
+              <View style={styles.connectPromptActions}>
                 <Pressable
                   onPress={connectTwitter}
                   disabled={twitterConnectLoading || checkingTwitter}
-                  style={[
+                  style={({ pressed }) => [
                     styles.connectPromptBtn,
                     styles.connectPromptBtnPrimary,
+                    pressed && styles.connectPromptBtnPressed,
                     (twitterConnectLoading || checkingTwitter) && { opacity: 0.7 },
                   ]}
                 >
                   <Text style={styles.connectPromptBtnPrimaryText}>
-                    {twitterConnectLoading ? "Connecting..." : "Connect Twitter"}
+                    {twitterConnectLoading ? "CONNECTING..." : "CONNECT TWITTER"}
                   </Text>
                 </Pressable>
+                <Pressable
+                  onPress={() => setShowTwitterPrompt(false)}
+                  style={({ pressed }) => [
+                    styles.connectPromptBtn,
+                    styles.connectPromptBtnSecondary,
+                    pressed && styles.connectPromptBtnPressed,
+                  ]}
+                >
+                  <Text style={styles.connectPromptBtnSecondaryText}>MAYBE LATER</Text>
+                </Pressable>
               </View>
+              <Text style={styles.connectPromptFooter}>By connecting, you agree to the Terms of Service</Text>
             </View>
           </View>
         ) : null}
@@ -1659,64 +1709,108 @@ const styles = StyleSheet.create({
   connectPromptOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 18,
-    paddingBottom: 28,
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+    paddingBottom: 0,
+    zIndex: 220,
+    elevation: 220,
+  },
+  connectPromptBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  connectPromptBackdropDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2,4,10,0.64)',
   },
   connectPromptCard: {
     width: '100%',
-    maxWidth: 420,
-    borderRadius: 16,
+    maxWidth: 360,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
+    borderColor: 'rgba(29,155,240,0.24)',
     backgroundColor: 'rgba(10,14,24,0.94)',
     paddingHorizontal: 14,
     paddingVertical: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.55,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 16,
+  },
+  connectPromptIconWrap: {
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  connectPromptIconRing: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 1,
+  },
+  connectPromptIconCircle: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   connectPromptTitle: {
+    marginTop: 8,
+    textAlign: 'center',
     color: '#fff',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  connectPromptText: {
-    marginTop: 6,
-    color: '#9fb1d9',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  connectPromptHint: {
-    marginTop: 6,
-    color: '#7f95c5',
-    fontSize: 11,
+    fontSize: 26,
     fontWeight: '600',
   },
+  connectPromptText: {
+    marginTop: 10,
+    color: '#9fb1d9',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
   connectPromptActions: {
-    marginTop: 12,
-    flexDirection: 'row',
-    gap: 8,
+    marginTop: 14,
+    gap: 10,
   },
   connectPromptBtn: {
-    flex: 1,
-    borderRadius: 10,
-    paddingVertical: 11,
+    borderRadius: 6,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  connectPromptBtnPressed: {
+    opacity: 0.86,
+  },
   connectPromptBtnSecondary: {
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'transparent',
   },
   connectPromptBtnPrimary: {
-    backgroundColor: '#fff',
+    backgroundColor: '#1D9BF0',
   },
   connectPromptBtnSecondaryText: {
-    color: '#d3def6',
+    color: '#8f8ca0',
+    fontSize: 12,
+    letterSpacing: 1.4,
     fontWeight: '700',
   },
   connectPromptBtnPrimaryText: {
-    color: '#111',
+    color: '#07141f',
+    fontSize: 11,
+    letterSpacing: 1.6,
     fontWeight: '800',
+  },
+  connectPromptFooter: {
+    marginTop: 12,
+    textAlign: 'center',
+    color: 'rgba(170,165,180,0.5)',
+    fontSize: 10,
   },
 });
 

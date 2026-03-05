@@ -7,6 +7,8 @@ import {
   useEmbeddedSolanaWallet,
   usePrivy,
 } from "@privy-io/expo";
+import { Buffer } from "buffer";
+import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 export type TwitterProfile = {
   id: string;
@@ -23,6 +25,7 @@ type WalletContextValue = {
   setTwitterProfile: (profile: TwitterProfile | null) => void;
   getOrCreateLocalUserId: () => Promise<string>;
   getOrCreateEmbeddedWalletAddress: () => Promise<string>;
+  getEmbeddedSolanaProvider: () => Promise<any>;
   refreshWalletAddress: () => Promise<string | null>;
   getOrCreateTradingWalletAddress: () => Promise<string>;
   setTradingWithdrawAddress: (address: string) => Promise<string>;
@@ -39,6 +42,7 @@ const WALLET_ADDRESS_FILE = FileSystem.documentDirectory
 const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
 const USER_ID_MAP_PREFIX = "@memeswipe:userId:privy:";
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
+const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
 
 const WalletContext = createContext<WalletContextValue | null>(null);
 
@@ -168,7 +172,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         return existing;
       }
 
-      const stable = `privy:${privyUserId}`;
+      const stable = createUuidV4();
       await AsyncStorage.setItem(mapKey, stable);
       await AsyncStorage.setItem(LOCAL_USER_ID_KEY, stable);
       return stable;
@@ -185,10 +189,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setWalletError(null);
     try {
       const userId = await getOrCreateLocalUserId();
+      const embeddedWalletAddress = await getOrCreateEmbeddedWalletAddress();
       const res = await fetch(`${API_BASE}/api/trading-wallet/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ userId, walletAddress: embeddedWalletAddress }),
       });
       const json = (await res.json()) as {
         error?: string;
@@ -227,25 +232,61 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   };
 
   const withdrawFromTradingWallet = async (amountSol: number, toAddress?: string) => {
-    const userId = await getOrCreateLocalUserId();
-    const res = await fetch(`${API_BASE}/api/trading-wallet/withdraw`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, amountSol, toAddress }),
+    const destination = String(toAddress || "").trim();
+    if (!destination) throw new Error("Destination wallet address is required");
+    const lamports = Math.floor(Number(amountSol) * 1_000_000_000);
+    if (!Number.isFinite(lamports) || lamports <= 0) throw new Error("Invalid withdraw amount");
+
+    const fromAddress = tradingWalletAddress || (await getOrCreateTradingWalletAddress());
+    if (!fromAddress) throw new Error("Trading wallet not found");
+
+    const connection = new Connection(SOLANA_MAINNET_RPC, "confirmed");
+    const provider = await getEmbeddedSolanaProvider();
+    const fromPubkey = new PublicKey(fromAddress);
+    const toPubkey = new PublicKey(destination);
+
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    const tx = new Transaction({
+      feePayer: fromPubkey,
+      recentBlockhash: blockhash,
+    }).add(
+      SystemProgram.transfer({
+        fromPubkey,
+        toPubkey,
+        lamports,
+      })
+    );
+
+    const unsignedTxBytes = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
     });
-    const json = (await res.json()) as {
-      error?: string;
-      txSignature?: string;
-      withdrawnSol?: number;
-      remainingSol?: number;
-    };
-    if (!res.ok || !json?.txSignature) {
-      throw new Error(json?.error || "Withdraw failed");
+    const requestBytes = Uint8Array.from(unsignedTxBytes);
+    let signedTxBytes: Uint8Array | null = null;
+
+    if (provider && typeof provider.signTransaction === "function") {
+      const signed = await provider.signTransaction({ transaction: requestBytes });
+      signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+    } else if (provider && typeof provider.request === "function") {
+      const signed = await provider.request({
+        method: "signTransaction",
+        params: { transaction: requestBytes },
+      });
+      signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
     }
+
+    if (!signedTxBytes) throw new Error("Embedded wallet could not sign withdraw transaction");
+    const txSignature = await connection.sendRawTransaction(Buffer.from(signedTxBytes), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+    await connection.confirmTransaction(txSignature, "confirmed");
+    const remainingLamports = await connection.getBalance(fromPubkey, "confirmed");
+
     return {
-      txSignature: json.txSignature,
-      withdrawnSol: Number(json.withdrawnSol || 0),
-      remainingSol: Number(json.remainingSol || 0),
+      txSignature,
+      withdrawnSol: Number(amountSol),
+      remainingSol: Number(remainingLamports / 1_000_000_000),
     };
   };
 
@@ -345,6 +386,27 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const getEmbeddedSolanaProvider = async () => {
+    await waitForPrivyReady();
+    await ensurePrivyUser();
+
+    const wallets = "wallets" in solanaRef.current ? solanaRef.current.wallets : null;
+    if (Array.isArray(wallets) && wallets.length > 0 && typeof wallets[0]?.getProvider === "function") {
+      return wallets[0].getProvider();
+    }
+
+    if ("getProvider" in solanaRef.current && typeof solanaRef.current.getProvider === "function") {
+      return solanaRef.current.getProvider();
+    }
+
+    if ("create" in solanaRef.current && typeof solanaRef.current.create === "function") {
+      const provider = await solanaRef.current.create();
+      if (provider) return provider;
+    }
+
+    throw new Error("Privy Solana provider unavailable");
+  };
+
   const value = useMemo<WalletContextValue>(
     () => ({
       twitterProfile,
@@ -356,6 +418,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       setTwitterProfile,
       getOrCreateLocalUserId,
       getOrCreateEmbeddedWalletAddress,
+      getEmbeddedSolanaProvider,
       refreshWalletAddress,
       getOrCreateTradingWalletAddress,
       setTradingWithdrawAddress,

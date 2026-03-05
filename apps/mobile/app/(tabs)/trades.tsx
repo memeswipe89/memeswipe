@@ -8,9 +8,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import { addBalance } from '@/lib/devWallet';
 import { notifyTradeClosed } from '@/lib/notifications';
 import { useWalletContext } from '@/contexts/wallet-context';
+import { Connection, VersionedTransaction } from '@solana/web3.js';
+import { Buffer } from 'buffer';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
+const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
   try {
@@ -89,6 +92,7 @@ const getDisplayedPnl = (trade: TradeItem) => {
 
 export default function TradesScreen() {
   const { twitterProfile } = useWalletContext();
+  const { tradingWalletAddress, getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider } = useWalletContext();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
@@ -296,14 +300,54 @@ export default function TradesScreen() {
         setClosingId(orderId);
         const resolvedUserId = userId || (await AsyncStorage.getItem(LOCAL_USER_ID_KEY)) || '';
         if (!resolvedUserId) throw new Error('User id not found');
-        const res = await fetch(`${API_BASE}/api/trades/close`, {
+        const walletAddress = tradingWalletAddress || (await getOrCreateTradingWalletAddress());
+        if (!walletAddress) throw new Error('Embedded wallet address not found');
+
+        const buildRes = await fetch(`${API_BASE}/api/trades/close/build`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: resolvedUserId, orderId }),
+          body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress }),
         });
-        const json = await parseApiJson<{ error?: string; closeTxSignature?: string }>(res);
-        if (!res.ok) throw new Error(json?.error || 'Failed to close trade');
-        const closeTxSignature = typeof json?.closeTxSignature === 'string' ? json.closeTxSignature : null;
+        const buildJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(buildRes);
+        if (!buildRes.ok || !buildJson?.swapTransaction) {
+          throw new Error(buildJson?.error || 'Failed to build close transaction');
+        }
+
+        const provider = await getEmbeddedSolanaProvider();
+        const unsignedTxBytes = Uint8Array.from(Buffer.from(buildJson.swapTransaction, 'base64'));
+        let signedTxBytes: Uint8Array | null = null;
+
+        if (provider && typeof provider.signTransaction === 'function') {
+          const signed = await provider.signTransaction({ transaction: unsignedTxBytes });
+          signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+        } else if (provider && typeof provider.request === 'function') {
+          const signed = await provider.request({
+            method: 'signTransaction',
+            params: { transaction: unsignedTxBytes },
+          });
+          signedTxBytes = signed?.signedTransaction ? Uint8Array.from(signed.signedTransaction) : null;
+        }
+
+        if (!signedTxBytes) {
+          throw new Error('Embedded wallet could not sign close transaction.');
+        }
+
+        const signedTx = VersionedTransaction.deserialize(signedTxBytes);
+        const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
+        const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
+        await connection.confirmTransaction(signature, 'confirmed');
+
+        const res = await fetch(`${API_BASE}/api/orders/${encodeURIComponent(orderId)}/close`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: resolvedUserId, closeTxSignature: signature }),
+        });
+        const json = await parseApiJson<{ error?: string }>(res);
+        if (!res.ok) throw new Error(json?.error || 'Failed to finalize close');
+        const closeTxSignature = signature;
 
         setTrades((prev) =>
           prev.map((t) =>
@@ -337,7 +381,7 @@ export default function TradesScreen() {
         setClosingId(null);
       }
     },
-    [userId]
+    [getEmbeddedSolanaProvider, getOrCreateTradingWalletAddress, tradingWalletAddress, userId]
   );
 
   const filtered = useMemo(() => {

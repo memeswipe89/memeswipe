@@ -12,7 +12,6 @@ import { useWalletContext } from "@/contexts/wallet-context";
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
-const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
 const FAVORITES_KEY = "@memeswipe:favorites:v1";
 const HIDDEN_TOKENS_KEY = "@memeswipe:hidden-tokens:v1";
 const LAST_AMOUNT_KEY = "@memeswipe:lastAmount";
@@ -76,7 +75,6 @@ export default function WalletScreen() {
   const clearLocalAppData = async () => {
     await AsyncStorage.multiRemove([
       TWITTER_PROFILE_CACHE_KEY,
-      LOCAL_USER_ID_KEY,
       FAVORITES_KEY,
       HIDDEN_TOKENS_KEY,
       LAST_AMOUNT_KEY,
