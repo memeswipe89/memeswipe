@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,7 +11,6 @@ import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
-const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
@@ -51,6 +49,7 @@ type TradeItem = {
   closePnlUsd: number | null;
   livePriceUsd: number | null;
   tpRoi: number;
+  stopLossPct: number | null;
 };
 
 type Filter = 'all' | 'open' | 'closed' | 'profit' | 'loss';
@@ -79,6 +78,13 @@ const getLivePnl = (trade: TradeItem) => {
   return { livePnlPct, livePnlUsd };
 };
 
+const getRealtimePnlPct = (trade: TradeItem) => {
+  if (!trade.entryPriceUsd || !trade.livePriceUsd || trade.entryPriceUsd <= 0 || trade.livePriceUsd <= 0) {
+    return null;
+  }
+  return ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100;
+};
+
 const getDisplayedPnl = (trade: TradeItem) => {
   if (trade.status === 'closed' && trade.closePnlPct !== null) {
     return {
@@ -92,24 +98,16 @@ const getDisplayedPnl = (trade: TradeItem) => {
 
 export default function TradesScreen() {
   const { twitterProfile } = useWalletContext();
-  const { getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider } = useWalletContext();
+  const { getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider, getOrCreateLocalUserId } = useWalletContext();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [trades, setTrades] = useState<TradeItem[]>([]);
-  const [userId, setUserId] = useState<string>('');
   const [closingId, setClosingId] = useState<string | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const pageSize = 20;
-
-  useEffect(() => {
-    void (async () => {
-      const stored = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
-      if (stored) setUserId(stored);
-    })();
-  }, []);
 
   const loadTrades = useCallback(async () => {
     try {
@@ -121,7 +119,7 @@ export default function TradesScreen() {
       }
       setLoading(true);
       setError(null);
-      const resolvedUserId = userId || (await AsyncStorage.getItem(LOCAL_USER_ID_KEY)) || '';
+      const resolvedUserId = await getOrCreateLocalUserId();
       if (!resolvedUserId) {
         throw new Error('User id not found');
       }
@@ -137,6 +135,7 @@ export default function TradesScreen() {
           status?: string;
           amount_usd?: number | string;
           tp_roi?: number | string;
+          stop_loss?: number | string | null;
           created_at?: string;
           in_amount_raw?: string | null;
           out_amount_raw?: string | null;
@@ -194,6 +193,10 @@ export default function TradesScreen() {
                   return Number.isFinite(v) ? v : null;
                 })(),
           tpRoi: roi,
+          stopLossPct: (() => {
+            const v = toNumber(order.stop_loss, Number.NaN);
+            return Number.isFinite(v) ? v : null;
+          })(),
           entryPriceUsd: entryPrice > 0 ? entryPrice : null,
           closePriceUsd: (() => {
             const v = toNumber(order.close_price_usd, 0);
@@ -217,7 +220,7 @@ export default function TradesScreen() {
     } finally {
       setLoading(false);
     }
-  }, [solPriceUsd, twitterProfile, userId]);
+  }, [getOrCreateLocalUserId, solPriceUsd, twitterProfile]);
 
   useEffect(() => {
     if (!twitterProfile) {
@@ -298,7 +301,7 @@ export default function TradesScreen() {
       if (!orderId) return;
       try {
         setClosingId(orderId);
-        const resolvedUserId = userId || (await AsyncStorage.getItem(LOCAL_USER_ID_KEY)) || '';
+        const resolvedUserId = await getOrCreateLocalUserId();
         if (!resolvedUserId) throw new Error('User id not found');
         const walletAddress = await getOrCreateTradingWalletAddress();
         if (!walletAddress) throw new Error('Embedded wallet address not found');
@@ -383,8 +386,23 @@ export default function TradesScreen() {
         setClosingId(null);
       }
     },
-    [getEmbeddedSolanaProvider, getOrCreateTradingWalletAddress, userId]
+    [getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress]
   );
+
+  useEffect(() => {
+    if (!twitterProfile || closingId) return;
+    const targets = trades.filter((trade) => {
+      if (trade.status !== 'open') return false;
+      const pnlPct = getRealtimePnlPct(trade);
+      if (pnlPct === null) return false;
+      const tpHit = Number.isFinite(trade.tpRoi) && pnlPct >= trade.tpRoi;
+      const slHit =
+        trade.stopLossPct !== null && Number.isFinite(trade.stopLossPct) && pnlPct <= -Math.abs(trade.stopLossPct);
+      return tpHit || slHit;
+    });
+    if (!targets.length) return;
+    void closeTrade(targets[0]);
+  }, [closeTrade, closingId, trades, twitterProfile]);
 
   const filtered = useMemo(() => {
     return trades.filter((trade) => {

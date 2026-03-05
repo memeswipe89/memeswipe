@@ -1199,6 +1199,97 @@ app.post("/api/jupiter/swap", async (req, res) => {
   }
 });
 
+app.post("/api/trades/close/build", async (req, res) => {
+  try {
+    await ensureOrdersTable();
+    const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    const walletAddress = typeof req.body?.walletAddress === "string" ? req.body.walletAddress.trim() : "";
+    const orderId = Number(req.body?.orderId);
+    const slippageBpsRaw = Number(req.body?.slippageBps ?? 300);
+    const slippageBps = Number.isFinite(slippageBpsRaw) ? Math.max(10, Math.min(5000, slippageBpsRaw)) : 300;
+
+    if (!userId || !walletAddress || !Number.isFinite(orderId) || orderId <= 0) {
+      return res.status(400).json({ error: "userId, walletAddress and valid orderId are required" });
+    }
+
+    const scoped = await pool.query(
+      `
+      select *
+      from orders
+      where id = $1 and user_id = $2
+      limit 1
+      `,
+      [orderId, userId]
+    );
+    const fallback = scoped.rows.length
+      ? scoped
+      : await pool.query(
+          `
+          select *
+          from orders
+          where id = $1
+          limit 1
+          `,
+          [orderId]
+        );
+    const order = fallback.rows[0];
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (String(order.status || "").toLowerCase() === "closed") {
+      return res.status(400).json({ error: "Order is already closed" });
+    }
+
+    const inputMint = String(order.output_mint || order.token_address || "").trim();
+    const outputMint = SOL_MINT;
+    const inAmountRaw = String(order.out_amount_raw || "").trim();
+    if (!inputMint || !inAmountRaw || !/^\d+$/.test(inAmountRaw) || Number(inAmountRaw) <= 0) {
+      return res.status(400).json({ error: "Order is missing closeable token amount (out_amount_raw)" });
+    }
+
+    const { json: quoteJson, source: quoteSource } = await fetchJupiterQuote({
+      inputMint,
+      outputMint,
+      amount: inAmountRaw,
+      slippageBps: String(slippageBps),
+      swapMode: "ExactIn",
+    });
+    if (!quoteJson?.outAmount) {
+      return res.status(400).json({ error: "No route found for close swap" });
+    }
+
+    const { json: swapJson, source: swapSource } = await fetchJupiterSwapTx({
+      quoteResponse: quoteJson,
+      userPublicKey: walletAddress,
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      dynamicSlippage: true,
+      prioritizationFeeLamports: "auto",
+    });
+    if (!swapJson?.swapTransaction) {
+      return res.status(500).json({ error: "Jupiter returned no swap transaction for close" });
+    }
+
+    return res.json({
+      success: true,
+      swapTransaction: swapJson.swapTransaction,
+      quote: {
+        inAmount: String(quoteJson.inAmount || inAmountRaw),
+        outAmount: String(quoteJson.outAmount || "0"),
+        inputMint,
+        outputMint,
+        slippageBps,
+      },
+      routeSource: {
+        quote: quoteSource,
+        swap: swapSource,
+      },
+      lastValidBlockHeight: swapJson.lastValidBlockHeight || null,
+    });
+  } catch (err) {
+    console.error("Close build error:", err);
+    return res.status(500).json({ error: err.message || "Failed to build close transaction" });
+  }
+});
+
 app.post("/api/trading-wallet/create", async (req, res) => {
   try {
     await ensureTradingWalletsTable();
