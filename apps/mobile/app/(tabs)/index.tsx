@@ -948,14 +948,13 @@ export default function HomeScreen() {
 
       for (const slippageBps of SWAP_SLIPPAGE_RETRY_BPS) {
         try {
-          const resolvedUserId = (userId || '').trim() || (await getOrCreateLocalUserId());
-          const swapRes = await fetch(`${API_BASE}/api/trades/open`, {
+          const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              userId: resolvedUserId,
-              walletAddress: resolvedWalletAddress,
-              tokenAddress: token.address,
+              inputMint: SOL_MINT,
+              outputMint: token.address,
+              userPublicKey: resolvedWalletAddress,
               amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
               slippageBps,
             }),
@@ -1032,7 +1031,7 @@ export default function HomeScreen() {
 
       throw lastError || new Error('Swap failed after retries');
     },
-    [activeChain, getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress, tradeAmount, userId]
+    [activeChain, getEmbeddedSolanaProvider, getOrCreateTradingWalletAddress, tradeAmount]
   );
 
   const createOrder = useCallback(
@@ -1119,12 +1118,8 @@ export default function HomeScreen() {
   );
 
   const handleReject = useCallback((token: SwipeToken) => {
-    if (!twitterProfile) {
-      setShowTwitterPrompt(true);
-      return;
-    }
     hideToken(token.address);
-  }, [hideToken, twitterProfile]);
+  }, [hideToken]);
 
   const handleBuy = useCallback(
     (token: SwipeToken) => {
@@ -1296,7 +1291,7 @@ export default function HomeScreen() {
             </View>
             <View style={styles.controlsRowWrap}>
               <View style={styles.controlsRow}>
-                <View style={styles.controlSlot}>
+                <View style={[styles.controlSlot, styles.controlSlotAmount]}>
                   <GlassControlPill
                     label="Amount"
                     value={tradeAmount}
@@ -1310,7 +1305,7 @@ export default function HomeScreen() {
                     }
                   />
                 </View>
-                <View style={styles.controlSlot}>
+                <View style={[styles.controlSlot, styles.controlSlotCompact]}>
                   <GlassControlPill
                     label="ROI"
                     value={tpROI}
@@ -1320,9 +1315,9 @@ export default function HomeScreen() {
                     onCommit={(v) => setTpROI(Math.max(MIN_PERCENT, Math.min(200, v)))}
                   />
                 </View>
-                <View style={styles.controlSlot}>
+                <View style={[styles.controlSlot, styles.controlSlotCompact]}>
                   <GlassControlPill
-                    label="TL"
+                    label="SL"
                     value={stopLoss}
                     suffix="%"
                     onMinus={() => updateStopLoss(-0.1)}
@@ -1540,6 +1535,12 @@ const styles = StyleSheet.create({
   },
   controlSlot: {
     flex: 1,
+  },
+  controlSlotAmount: {
+    flex: 1.16,
+  },
+  controlSlotCompact: {
+    flex: 0.92,
   },
   filterRow: {
     paddingHorizontal: 20,
@@ -1881,7 +1882,7 @@ const GlassControlPill = ({
               style={styles.controlInput}
             />
           ) : (
-            <Text style={styles.controlValue}>
+            <Text style={styles.controlValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>
               {isDollar ? `${suffix}${formatAmount(value)}` : `${formatAmount(value)}${suffix}`}
             </Text>
           )}
