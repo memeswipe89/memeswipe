@@ -715,11 +715,16 @@ const fetchGraduatedFeed = async (req, res) => {
       return res.json(cached.payload);
     }
 
-    const r = await fetch("https://api.dexscreener.com/latest/dex/search?q=solana");
-
-    if (!r.ok) {
-      const text = await r.text();
-      return res.status(r.status).json({
+    const searchTerms = ["solana", "pump", "meme", "raydium"];
+    const responses = await Promise.all(
+      searchTerms.map((term) =>
+        fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(term)}`)
+      )
+    );
+    const firstFailed = responses.find((r) => !r.ok);
+    if (firstFailed) {
+      const text = await firstFailed.text();
+      return res.status(firstFailed.status).json({
         error: "DexScreener request failed",
         details: text || null,
         tokens: [],
@@ -727,19 +732,34 @@ const fetchGraduatedFeed = async (req, res) => {
       });
     }
 
-    const data = await r.json();
-    const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
+    const payloads = await Promise.all(responses.map((r) => r.json()));
+    const pairs = payloads.flatMap((data) => (Array.isArray(data?.pairs) ? data.pairs : []));
     const tokensByAddress = new Map();
+    const isSolLike = (token) => {
+      const address = String(token?.address || "").trim();
+      const symbol = String(token?.symbol || "").trim().toUpperCase();
+      return address === SOL_MINT || symbol === "SOL" || symbol === "WSOL";
+    };
+
+    const pickTradeToken = (pair) => {
+      const base = pair?.baseToken || null;
+      const quote = pair?.quoteToken || null;
+      if (base && !isSolLike(base)) return base;
+      if (quote && !isSolLike(quote)) return quote;
+      return base || quote || null;
+    };
+
     for (const pair of pairs) {
       if (String(pair?.chainId || "").toLowerCase() !== "solana") continue;
-      const address = String(pair?.baseToken?.address || "").trim();
+      const chosen = pickTradeToken(pair);
+      const address = String(chosen?.address || "").trim();
       if (!address) continue;
       const existing = tokensByAddress.get(address);
       const liquidity = Number(pair?.liquidity?.usd || 0);
       if (!existing || liquidity > Number(existing?.liquidityUsd || 0)) {
         tokensByAddress.set(address, {
-          name: pair?.baseToken?.name || pair?.baseToken?.symbol || "Unknown",
-          symbol: pair?.baseToken?.symbol || "",
+          name: chosen?.name || chosen?.symbol || "Unknown",
+          symbol: chosen?.symbol || "",
           address,
           priceUsd: Number(pair?.priceUsd || 0) || null,
           liquidityUsd: liquidity || null,
@@ -760,7 +780,7 @@ const fetchGraduatedFeed = async (req, res) => {
         cursor: null,
       });
     }
-    const payload = { tokens, cursor: data.cursor || null };
+    const payload = { tokens, cursor: null };
     feedCache.set(cacheKey, { payload, lastFetch: now });
     return res.json(payload);
   } catch (e) {
