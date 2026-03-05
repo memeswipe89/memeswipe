@@ -1603,14 +1603,16 @@ app.post("/api/orders", async (req, res) => {
       !Number.isFinite(normalizedAmount) ||
       normalizedAmount <= 0 ||
       !Number.isFinite(normalizedTp) ||
-      normalizedTp <= 0
+      normalizedTp <= 0 ||
+      !txSignature
     ) {
       return res.status(400).json({
-        error: "Missing required fields",
+        error: "Missing required fields (on-chain txSignature is required)",
         details: {
           hasUserId: Boolean(userId),
           hasChain: Boolean(chain),
           hasTokenAddress: Boolean(tokenAddress),
+          hasTxSignature: Boolean(txSignature),
           amount: normalizedAmount,
           tp: normalizedTp,
         },

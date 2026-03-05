@@ -1049,6 +1049,10 @@ export default function HomeScreen() {
         Alert.alert('Error', 'Token address missing in API response');
         return false;
       }
+      if (!swapMeta?.signature) {
+        Alert.alert('Order Failed', 'On-chain transaction signature missing. Trade not created.');
+        return false;
+      }
       const amount = Number.isFinite(tradeAmount)
         ? Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount)
         : MIN_TRADE_AMOUNT_USD;
@@ -1083,11 +1087,11 @@ export default function HomeScreen() {
           change24hPct: token.change24hPct,
           graduationTime: token.graduationTime || null,
           chartData: Array.isArray(token.chartData) ? token.chartData : [],
-          txSignature: swapMeta?.signature || null,
-          inputMint: swapMeta?.inputMint || null,
-          outputMint: swapMeta?.outputMint || null,
-          inAmountRaw: swapMeta?.inAmountRaw || null,
-          outAmountRaw: swapMeta?.outAmountRaw || null,
+          txSignature: swapMeta.signature,
+          inputMint: swapMeta.inputMint,
+          outputMint: swapMeta.outputMint,
+          inAmountRaw: swapMeta.inAmountRaw,
+          outAmountRaw: swapMeta.outAmountRaw,
         };
         console.log('[TRADE][SWIPE_RIGHT] sending order payload', tradePayload);
 
