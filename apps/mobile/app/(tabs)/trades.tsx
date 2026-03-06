@@ -25,6 +25,28 @@ const parseApiJson = async <T,>(response: Response): Promise<T> => {
     throw new Error(`Invalid server response (${response.status}): ${preview || 'empty body'}`);
   }
 };
+const joinApiUrl = (base: string, path: string) => `${base.replace(/\/+$/, '')}${path}`;
+const fetchJsonWithFallback = async <T,>(
+  paths: string[],
+  init?: RequestInit
+): Promise<{ response: Response; json: T; url: string }> => {
+  let lastError: unknown = null;
+  for (const path of paths) {
+    const url = joinApiUrl(API_BASE, path);
+    try {
+      const response = await fetch(url, init);
+      const raw = await response.text();
+      const isHtml404 = response.status === 404 && raw.trim().startsWith('<');
+      if (isHtml404) continue;
+      const json = JSON.parse(raw) as T;
+      return { response, json, url };
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('All API endpoints failed');
+};
 
 type TradeStatus = 'open' | 'closed';
 type TradeItem = {
@@ -108,6 +130,7 @@ export default function TradesScreen() {
   const [closingId, setClosingId] = useState<string | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const autoCloseRetryAfterRef = useRef<Record<string, number>>({});
+  const lastAutoClosePriceFetchRef = useRef(0);
   const pageSize = 20;
 
   const loadTrades = useCallback(async () => {
@@ -124,10 +147,7 @@ export default function TradesScreen() {
       if (!resolvedUserId) {
         throw new Error('User id not found');
       }
-      const res = await fetch(
-        `${API_BASE}/api/orders?userId=${encodeURIComponent(resolvedUserId)}&limit=200`
-      );
-      const json = await parseApiJson<{
+      const { response: res, json } = await fetchJsonWithFallback<{
         orders?: {
           id?: string | number;
           token_symbol?: string;
@@ -151,7 +171,10 @@ export default function TradesScreen() {
           output_mint?: string | null;
         }[];
         error?: string;
-      }>(res);
+      }>([
+        `/api/orders?userId=${encodeURIComponent(resolvedUserId)}&limit=200`,
+        `/orders?userId=${encodeURIComponent(resolvedUserId)}&limit=200`,
+      ]);
       if (!res.ok) {
         throw new Error(json?.error || 'Failed to load trades');
       }
@@ -242,8 +265,11 @@ export default function TradesScreen() {
     let active = true;
     const refreshSolPrice = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/solana/price-usd`);
-        const json = await parseApiJson<{ priceUsd?: number }>(res);
+        const { response: res, json } = await fetchJsonWithFallback<{ priceUsd?: number }>([
+          '/api/solana/price-usd',
+          '/solana/price-usd',
+        ]);
+        if (!res.ok) return;
         if (!active) return;
         const price = Number(json?.priceUsd || 0);
         if (Number.isFinite(price) && price > 0) {
@@ -273,10 +299,11 @@ export default function TradesScreen() {
           )
         );
         if (!addresses.length) return;
-        const res = await fetch(
-          `${API_BASE}/api/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`
-        );
-        const json = await parseApiJson<{ prices?: Record<string, number | null> }>(res);
+        const { response: res, json } = await fetchJsonWithFallback<{ prices?: Record<string, number | null> }>([
+          `/api/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`,
+          `/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`,
+        ]);
+        if (!res.ok) return;
         if (!active || !json?.prices) return;
         setTrades((prev) =>
           prev.map((t) => {
@@ -297,12 +324,13 @@ export default function TradesScreen() {
   }, [trades]);
 
   const closeTrade = useCallback(
-    async (trade: TradeItem, options?: { silent?: boolean }) => {
+    async (trade: TradeItem, options?: { silent?: boolean; closeReason?: 'tp' | 'sl' | 'manual'; closeTriggerPct?: number | null }) => {
       const orderId = trade.id;
       if (!orderId) return;
+      let resolvedUserId = '';
       try {
         setClosingId(orderId);
-        const resolvedUserId = await getOrCreateLocalUserId();
+        resolvedUserId = await getOrCreateLocalUserId();
         if (!resolvedUserId) throw new Error('User id not found');
         const walletAddress = await getOrCreateTradingWalletAddress();
         if (!walletAddress) throw new Error('Embedded wallet address not found');
@@ -311,12 +339,15 @@ export default function TradesScreen() {
         let buildJson: { error?: string; swapTransaction?: string } | null = null;
         let lastBuildError: string | null = null;
         for (const slippageBps of closeBuildSlippageBps) {
-          const buildRes = await fetch(`${API_BASE}/api/trades/close/build`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress, slippageBps }),
-          });
-          buildJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(buildRes);
+          const { response: buildRes, json } = await fetchJsonWithFallback<{ error?: string; swapTransaction?: string }>(
+            ['/api/trades/close/build', '/trades/close/build'],
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress, slippageBps }),
+            }
+          );
+          buildJson = json;
           if (buildRes.ok && buildJson?.swapTransaction) break;
           lastBuildError = buildJson?.error || `Failed to build close transaction (slippage ${slippageBps})`;
           buildJson = null;
@@ -354,12 +385,44 @@ export default function TradesScreen() {
         });
         await connection.confirmTransaction(signature, 'confirmed');
 
-        const res = await fetch(`${API_BASE}/api/orders/${encodeURIComponent(orderId)}/close`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: resolvedUserId, closeTxSignature: signature }),
+        const closeReason = options?.closeReason ?? 'manual';
+        const closeTriggerPct =
+          options?.closeTriggerPct ??
+          (closeReason === 'tp'
+            ? trade.tpRoi
+            : closeReason === 'sl' && trade.stopLossPct !== null
+              ? -Math.abs(trade.stopLossPct)
+              : null);
+        const closePnlPct =
+          trade.entryPriceUsd && trade.livePriceUsd
+            ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
+            : null;
+        const closePnlUsd = closePnlPct !== null ? (trade.displayAmountUsd * closePnlPct) / 100 : null;
+        console.log('[TRADES] finalize close payload', {
+          orderId,
+          closeReason,
+          closeTriggerPct,
+          closePriceUsd: trade.livePriceUsd ?? null,
+          closePnlPct,
+          closePnlUsd,
         });
-        const json = await parseApiJson<{ error?: string }>(res);
+        const { response: res, json, url } = await fetchJsonWithFallback<{ error?: string; success?: boolean; byId?: boolean; skipped?: boolean }>(
+          [`/api/orders/${encodeURIComponent(orderId)}/close`, `/orders/${encodeURIComponent(orderId)}/close`],
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: resolvedUserId,
+              closeTxSignature: signature,
+              closeReason,
+              closeTriggerPct,
+              closePriceUsd: trade.livePriceUsd ?? null,
+              closePnlPct,
+              closePnlUsd,
+            }),
+          }
+        );
+        console.log('[TRADES] finalize close response', { orderId, url, status: res.status, body: json });
         if (!res.ok) throw new Error(json?.error || 'Failed to finalize close');
         const closeTxSignature = signature;
 
@@ -391,12 +454,72 @@ export default function TradesScreen() {
         }
       } catch (err: any) {
         const message = err?.message || 'Failed to close trade';
-        setError(message);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
-        if (options?.silent) {
-          autoCloseRetryAfterRef.current[orderId] = Date.now() + 30_000;
-        } else {
-          Alert.alert('Close Trade Failed', message);
+        try {
+          if (!resolvedUserId) {
+            resolvedUserId = await getOrCreateLocalUserId();
+          }
+          const pnlPct = getRealtimePnlPct(trade);
+          const pnlUsd = pnlPct !== null ? (trade.displayAmountUsd * pnlPct) / 100 : null;
+          const fallbackReason = options?.closeReason ?? 'manual';
+          console.log('[TRADES] fallback close payload', {
+            orderId,
+            closeReason: fallbackReason,
+            closeTriggerPct: options?.closeTriggerPct ?? null,
+            closePriceUsd: trade.livePriceUsd ?? null,
+            closePnlPct: pnlPct,
+            closePnlUsd: pnlUsd,
+          });
+          const { response: fallbackRes, json: fallbackJson, url } = await fetchJsonWithFallback<{
+            error?: string;
+            success?: boolean;
+            byId?: boolean;
+            skipped?: boolean;
+          }>(
+            [`/api/orders/${encodeURIComponent(orderId)}/close`, `/orders/${encodeURIComponent(orderId)}/close`],
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                userId: resolvedUserId,
+                closeReason: fallbackReason,
+                closeTriggerPct: options?.closeTriggerPct ?? null,
+                closePriceUsd: trade.livePriceUsd ?? null,
+                closePnlPct: pnlPct,
+                closePnlUsd: pnlUsd,
+              }),
+            }
+          );
+          console.log('[TRADES] fallback close response', {
+            orderId,
+            url,
+            status: fallbackRes.status,
+            body: fallbackJson,
+          });
+          if (!fallbackRes.ok) throw new Error(fallbackJson?.error || 'Failed to close order');
+          setTrades((prev) =>
+            prev.map((t) =>
+              t.id === orderId
+                ? {
+                    ...t,
+                    status: 'closed',
+                    closeReason: fallbackReason,
+                    closeTriggerPct: options?.closeTriggerPct ?? t.closeTriggerPct,
+                    closePriceUsd: trade.livePriceUsd ?? t.closePriceUsd,
+                    closePnlPct: pnlPct ?? t.closePnlPct,
+                    closePnlUsd: pnlUsd ?? t.closePnlUsd,
+                  }
+                : t
+            )
+          );
+          if (pnlUsd !== null) await addBalance(pnlUsd);
+          if (!options?.silent) Alert.alert('Trade Closed', `${trade.symbol.toUpperCase()} closed successfully.`);
+        } catch (fallbackErr: any) {
+          if (options?.silent) {
+            autoCloseRetryAfterRef.current[orderId] = Date.now() + 30_000;
+          } else {
+            Alert.alert('Close Trade Failed', fallbackErr?.message || message);
+          }
         }
       } finally {
         setClosingId(null);
@@ -408,19 +531,55 @@ export default function TradesScreen() {
   useEffect(() => {
     if (!twitterProfile || closingId) return;
     const now = Date.now();
-    const targets = trades.filter((trade) => {
-      if (trade.status !== 'open') return false;
-      const retryAfter = autoCloseRetryAfterRef.current[trade.id] || 0;
-      if (retryAfter > now) return false;
-      const pnlPct = getRealtimePnlPct(trade);
-      if (pnlPct === null) return false;
-      const tpHit = Number.isFinite(trade.tpRoi) && pnlPct >= trade.tpRoi;
-      const slHit =
-        trade.stopLossPct !== null && Number.isFinite(trade.stopLossPct) && pnlPct <= -Math.abs(trade.stopLossPct);
-      return tpHit || slHit;
-    });
-    if (!targets.length) return;
-    void closeTrade(targets[0], { silent: true });
+    const findTargets = (source: TradeItem[]) =>
+      source
+        .map((trade) => {
+          if (trade.status !== 'open') return null;
+          const retryAfter = autoCloseRetryAfterRef.current[trade.id] || 0;
+          if (retryAfter > now) return null;
+          const pnlPct = getRealtimePnlPct(trade);
+          if (pnlPct === null) return null;
+          const tpHit = Number.isFinite(trade.tpRoi) && pnlPct >= trade.tpRoi;
+          const slHit =
+            trade.stopLossPct !== null && Number.isFinite(trade.stopLossPct) && pnlPct <= -Math.abs(trade.stopLossPct);
+          if (!tpHit && !slHit) return null;
+          return {
+            trade,
+            closeReason: (tpHit ? 'tp' : 'sl') as 'tp' | 'sl',
+            closeTriggerPct: tpHit ? trade.tpRoi : -Math.abs(trade.stopLossPct || 0),
+          };
+        })
+        .filter((item): item is { trade: TradeItem; closeReason: 'tp' | 'sl'; closeTriggerPct: number } => Boolean(item));
+
+    const targets = findTargets(trades);
+    if (targets.length) {
+      const target = targets[0];
+      void closeTrade(target.trade, { silent: true, closeReason: target.closeReason, closeTriggerPct: target.closeTriggerPct });
+      return;
+    }
+
+    // If live prices are missing, refresh them on-demand so TP/SL can trigger reliably.
+    const openAddresses = Array.from(new Set(trades.filter((t) => t.status === 'open' && t.tokenAddress).map((t) => t.tokenAddress)));
+    if (!openAddresses.length) return;
+    if (now - lastAutoClosePriceFetchRef.current < 10_000) return;
+    lastAutoClosePriceFetchRef.current = now;
+    void (async () => {
+      try {
+        const { response: res, json } = await fetchJsonWithFallback<{ prices?: Record<string, number | null> }>([
+          `/api/token-prices?addresses=${encodeURIComponent(openAddresses.join(','))}`,
+          `/token-prices?addresses=${encodeURIComponent(openAddresses.join(','))}`,
+        ]);
+        if (!res.ok || !json?.prices) return;
+        setTrades((prev) =>
+          prev.map((t) => {
+            const live = Number(json.prices?.[t.tokenAddress]);
+            return Number.isFinite(live) && live > 0 ? { ...t, livePriceUsd: live } : t;
+          })
+        );
+      } catch {
+        // ignore and retry on next interval/effect run
+      }
+    })();
   }, [closeTrade, closingId, trades, twitterProfile]);
 
   const filtered = useMemo(() => {
