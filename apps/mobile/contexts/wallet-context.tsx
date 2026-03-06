@@ -117,19 +117,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const privyUserId = typeof (user as any)?.id === "string" ? ((user as any).id as string) : null;
     const existing = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
 
-    // Prefer stable mapping by Privy user id to avoid wallet changes across reinstalls.
+    // Keep a stable local id per Privy account, but never inherit another user's id.
     if (privyUserId) {
       const mapKey = `${USER_ID_MAP_PREFIX}${privyUserId}`;
       const mapped = await AsyncStorage.getItem(mapKey);
       if (mapped && UUID_RE.test(mapped)) {
         if (existing !== mapped) await AsyncStorage.setItem(LOCAL_USER_ID_KEY, mapped);
         return mapped;
-      }
-
-      // Migrate legacy local id to Privy mapping when available.
-      if (existing && UUID_RE.test(existing)) {
-        await AsyncStorage.setItem(mapKey, existing);
-        return existing;
       }
 
       const stable = createUuidV4();

@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { BlurView } from 'expo-blur';
 import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
@@ -215,6 +215,26 @@ const ShimmerCard = memo(function ShimmerCard() {
             />
           </Animated.View>
         </View>
+      </BlurView>
+    </View>
+  );
+});
+
+const DeckStatusCard = memo(function DeckStatusCard({
+  title,
+  subtitle,
+  loading = false,
+}: {
+  title: string;
+  subtitle: string;
+  loading?: boolean;
+}) {
+  return (
+    <View style={styles.emptyStateWrap}>
+      <BlurView intensity={24} tint="dark" style={styles.emptyState}>
+        {loading ? <ActivityIndicator size="small" color="#9bc2ff" style={styles.emptySpinner} /> : null}
+        <Text style={styles.emptyTitle}>{title}</Text>
+        <Text style={styles.emptySub}>{subtitle}</Text>
       </BlurView>
     </View>
   );
@@ -477,6 +497,8 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
     transform: [{ translateY: interpolate(buyBadge.value, [0, 1], [-6, 0], Extrapolation.CLAMP) }],
   }));
 
+  const showLoadingState = isLoading || (!currentToken && /loading/i.test(emptyTitle));
+
   if (isLoading) {
     return (
       <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
@@ -529,10 +551,11 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
           </Animated.View>
         </GestureDetector>
       ) : (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>{emptyTitle}</Text>
-          <Text style={styles.emptySub}>{emptySubtitle}</Text>
-        </View>
+        <DeckStatusCard
+          title={showLoadingState ? 'Loading Tokens...' : emptyTitle}
+          subtitle={showLoadingState ? 'Fetching live token data for this feed.' : emptySubtitle}
+          loading={showLoadingState}
+        />
       )}
     </ExpoLinearGradient>
   );
@@ -864,6 +887,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
+  emptyStateWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
   emptyState: {
     width: SCREEN_WIDTH * 0.85,
     backgroundColor: 'rgba(255,255,255,0.06)',
@@ -873,15 +902,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
   },
+  emptySpinner: {
+    marginBottom: 10,
+  },
   emptyTitle: {
     color: '#fff',
     fontSize: 22,
     fontWeight: '800',
+    textAlign: 'center',
   },
   emptySub: {
     marginTop: 8,
     color: '#9ca6c2',
     fontSize: 14,
+    textAlign: 'center',
   },
   skeleton: {
     flex: 1,

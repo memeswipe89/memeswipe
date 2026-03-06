@@ -17,6 +17,7 @@ const HIDDEN_TOKENS_KEY = "@memeswipe:hidden-tokens:v1";
 const LAST_AMOUNT_KEY = "@memeswipe:lastAmount";
 const LAST_ROI_KEY = "@memeswipe:lastROI";
 const BONUS_2000_APPLIED_KEY = "@memeswipe:bonus2000:applied";
+const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
 
 const getSolBalance = async (address: string): Promise<number> => {
   const response = await fetch(MAINNET_RPC_URL, {
@@ -78,6 +79,7 @@ export default function WalletScreen() {
       LAST_AMOUNT_KEY,
       LAST_ROI_KEY,
       BONUS_2000_APPLIED_KEY,
+      LOCAL_USER_ID_KEY,
     ]);
   };
 
