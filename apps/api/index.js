@@ -159,6 +159,8 @@ const ensureOrdersTable = async () => {
       await pool.query(`alter table orders add column if not exists close_price_usd numeric`);
       await pool.query(`alter table orders add column if not exists close_pnl_usd numeric`);
       await pool.query(`alter table orders add column if not exists close_pnl_pct numeric`);
+      await pool.query(`alter table orders add column if not exists close_reason text`);
+      await pool.query(`alter table orders add column if not exists close_trigger_pct numeric`);
     })();
   }
 
@@ -545,7 +547,15 @@ const getRawTokenBalance = async (connection, ownerPubkey, mint) => {
   }, 0n);
 };
 
-const closeOrderRow = async (orderId, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct) => {
+const closeOrderRow = async (
+  orderId,
+  closeTxSignature,
+  closePriceUsd,
+  closePnlUsd,
+  closePnlPct,
+  closeReason = null,
+  closeTriggerPct = null
+) => {
   const statusOptions = ["closed", "filled", "cancelled"];
   let lastError = null;
   for (const status of statusOptions) {
@@ -558,12 +568,14 @@ const closeOrderRow = async (orderId, closeTxSignature, closePriceUsd, closePnlU
             close_tx_signature = $3,
             close_price_usd = $4,
             close_pnl_usd = $5,
-            close_pnl_pct = $6
+            close_pnl_pct = $6,
+            close_reason = coalesce($7, close_reason),
+            close_trigger_pct = coalesce($8, close_trigger_pct)
         where id = $1
           and status not in ('closed', 'cancelled')
         returning *
         `,
-        [orderId, status, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct]
+        [orderId, status, closeTxSignature, closePriceUsd, closePnlUsd, closePnlPct, closeReason, closeTriggerPct]
       );
       if (r.rows.length) return r.rows[0];
     } catch (error) {
@@ -601,15 +613,23 @@ const processAutoClose = async () => {
         const tokenAddress = String(order.token_address || "").trim();
         const entryPriceUsd = Number(order.price_usd);
         const tpRoi = Number(order.tp_roi);
+        const stopLoss = Number(order.stop_loss);
         const amountUsd = Number(order.amount_usd);
         if (!tokenAddress || !Number.isFinite(entryPriceUsd) || entryPriceUsd <= 0) continue;
-        if (!Number.isFinite(tpRoi) || tpRoi <= 0) continue;
+        const hasTp = Number.isFinite(tpRoi) && tpRoi > 0;
+        const hasSl = Number.isFinite(stopLoss) && stopLoss > 0;
+        if (!hasTp && !hasSl) continue;
 
         const livePriceUsd = await getTokenPriceUsd(tokenAddress);
         if (!Number.isFinite(livePriceUsd) || livePriceUsd <= 0) continue;
 
         const pnlPct = ((livePriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
-        if (!Number.isFinite(pnlPct) || pnlPct < tpRoi) continue;
+        if (!Number.isFinite(pnlPct)) continue;
+        const tpHit = hasTp && pnlPct >= tpRoi;
+        const slHit = hasSl && pnlPct <= -Math.abs(stopLoss);
+        if (!tpHit && !slHit) continue;
+        const closeReason = tpHit ? "tp" : "sl";
+        const closeTriggerPct = tpHit ? tpRoi : -Math.abs(stopLoss);
 
         const ownerWallet = await getTradingWalletKeypair(order.user_id);
         if (!ownerWallet) continue;
@@ -682,13 +702,17 @@ const processAutoClose = async () => {
           closeSig,
           livePriceUsd,
           Number.isFinite(realizedPnlUsd) ? realizedPnlUsd : null,
-          pnlPct
+          pnlPct,
+          closeReason,
+          closeTriggerPct
         );
         console.log("[AUTO_CLOSE] order closed", {
           orderId: order.id,
           tokenAddress,
           closeSig,
           pnlPct,
+          closeReason,
+          closeTriggerPct,
         });
       } catch (error) {
         console.warn("[AUTO_CLOSE] order processing error", {
@@ -1533,6 +1557,16 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
       typeof req.body?.closeTxSignature === "string" && req.body.closeTxSignature.trim()
         ? req.body.closeTxSignature.trim()
         : null;
+    const closeReasonRaw = typeof req.body?.closeReason === "string" ? req.body.closeReason.trim().toLowerCase() : "";
+    const closeReason = ["tp", "sl", "manual"].includes(closeReasonRaw) ? closeReasonRaw : null;
+    const closeTriggerPctRaw = Number(req.body?.closeTriggerPct);
+    const closeTriggerPct = Number.isFinite(closeTriggerPctRaw) ? closeTriggerPctRaw : null;
+    const closePriceUsdRaw = Number(req.body?.closePriceUsd);
+    const closePriceUsd = Number.isFinite(closePriceUsdRaw) && closePriceUsdRaw > 0 ? closePriceUsdRaw : null;
+    const closePnlPctRaw = Number(req.body?.closePnlPct);
+    const closePnlPct = Number.isFinite(closePnlPctRaw) ? closePnlPctRaw : null;
+    const closePnlUsdRaw = Number(req.body?.closePnlUsd);
+    const closePnlUsd = Number.isFinite(closePnlUsdRaw) ? closePnlUsdRaw : null;
 
     // If an on-chain close signature is supplied, allow backfilling it even when the
     // order is already in a terminal status from earlier fallback logic.
@@ -1541,11 +1575,16 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
         `
         update orders
         set close_tx_signature = coalesce(close_tx_signature, $3),
+            close_reason = coalesce($4, close_reason),
+            close_trigger_pct = coalesce($5, close_trigger_pct),
+            close_price_usd = coalesce($6, close_price_usd),
+            close_pnl_pct = coalesce($7, close_pnl_pct),
+            close_pnl_usd = coalesce($8, close_pnl_usd),
             closed_at = coalesce(closed_at, now())
         where id = $1 and user_id = $2
         returning *
         `,
-        [orderId, userId, closeTxSignature]
+        [orderId, userId, closeTxSignature, closeReason, closeTriggerPct, closePriceUsd, closePnlPct, closePnlUsd]
       );
       if (scoped.rows.length) {
         return res.json({ success: true, order: scoped.rows[0] });
@@ -1555,11 +1594,16 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
         `
         update orders
         set close_tx_signature = coalesce(close_tx_signature, $2),
+            close_reason = coalesce($3, close_reason),
+            close_trigger_pct = coalesce($4, close_trigger_pct),
+            close_price_usd = coalesce($5, close_price_usd),
+            close_pnl_pct = coalesce($6, close_pnl_pct),
+            close_pnl_usd = coalesce($7, close_pnl_usd),
             closed_at = coalesce(closed_at, now())
         where id = $1
         returning *
         `,
-        [orderId, closeTxSignature]
+        [orderId, closeTxSignature, closeReason, closeTriggerPct, closePriceUsd, closePnlPct, closePnlUsd]
       );
       if (byId.rows.length) {
         return res.json({ success: true, order: byId.rows[0] });
@@ -1577,13 +1621,18 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
           update orders
           set status = $3,
               closed_at = now(),
-              close_tx_signature = coalesce($4, close_tx_signature)
+              close_tx_signature = coalesce($4, close_tx_signature),
+              close_reason = coalesce($5, close_reason),
+              close_trigger_pct = coalesce($6, close_trigger_pct),
+              close_price_usd = coalesce($7, close_price_usd),
+              close_pnl_pct = coalesce($8, close_pnl_pct),
+              close_pnl_usd = coalesce($9, close_pnl_usd)
           where id = $1
             and user_id = $2
             and status not in ('closed', 'cancelled', 'filled')
           returning *
           `,
-          [orderId, userId, nextStatus, closeTxSignature]
+          [orderId, userId, nextStatus, closeTxSignature, closeReason, closeTriggerPct, closePriceUsd, closePnlPct, closePnlUsd]
         );
 
         if (result.rows.length) {
@@ -1597,12 +1646,17 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
           update orders
           set status = $2,
               closed_at = now(),
-              close_tx_signature = coalesce($3, close_tx_signature)
+              close_tx_signature = coalesce($3, close_tx_signature),
+              close_reason = coalesce($4, close_reason),
+              close_trigger_pct = coalesce($5, close_trigger_pct),
+              close_price_usd = coalesce($6, close_price_usd),
+              close_pnl_pct = coalesce($7, close_pnl_pct),
+              close_pnl_usd = coalesce($8, close_pnl_usd)
           where id = $1
             and status not in ('closed', 'cancelled', 'filled')
           returning *
           `,
-          [orderId, nextStatus, closeTxSignature]
+          [orderId, nextStatus, closeTxSignature, closeReason, closeTriggerPct, closePriceUsd, closePnlPct, closePnlUsd]
         );
         if (fallback.rows.length) {
           updated = fallback.rows[0];
@@ -1618,7 +1672,22 @@ app.patch("/api/orders/:orderId/close", async (req, res) => {
         if (!existing.rows.length) {
           return res.status(404).json({ error: "Order not found" });
         }
-        updated = existing.rows[0];
+        const backfill = await pool.query(
+          `
+          update orders
+          set close_reason = coalesce($3, close_reason),
+              close_trigger_pct = coalesce($4, close_trigger_pct),
+              close_price_usd = coalesce($5, close_price_usd),
+              close_pnl_pct = coalesce($6, close_pnl_pct),
+              close_pnl_usd = coalesce($7, close_pnl_usd),
+              close_tx_signature = coalesce($8, close_tx_signature),
+              closed_at = coalesce(closed_at, now())
+          where id = $1 and user_id = $2
+          returning *
+          `,
+          [orderId, userId, closeReason, closeTriggerPct, closePriceUsd, closePnlPct, closePnlUsd, closeTxSignature]
+        );
+        updated = backfill.rows[0] || existing.rows[0];
         break;
       } catch (error) {
         lastError = error;
