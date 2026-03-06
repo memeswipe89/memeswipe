@@ -106,7 +106,6 @@ export default function TradesScreen() {
   const [error, setError] = useState<string | null>(null);
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [closingId, setClosingId] = useState<string | null>(null);
-  const [bulkClosing, setBulkClosing] = useState(false);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const autoCloseRetryAfterRef = useRef<Record<string, number>>({});
   const pageSize = 20;
@@ -406,25 +405,8 @@ export default function TradesScreen() {
     [getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress]
   );
 
-  const closeAllOpenTrades = useCallback(async () => {
-    const openTrades = trades.filter((t) => t.status === 'open');
-    if (!openTrades.length) {
-      Alert.alert('Close All', 'No open trades to close.');
-      return;
-    }
-    try {
-      setBulkClosing(true);
-      for (const trade of openTrades) {
-        await closeTrade(trade);
-      }
-      await loadTrades();
-    } finally {
-      setBulkClosing(false);
-    }
-  }, [closeTrade, loadTrades, trades]);
-
   useEffect(() => {
-    if (!twitterProfile || closingId || bulkClosing) return;
+    if (!twitterProfile || closingId) return;
     const now = Date.now();
     const targets = trades.filter((trade) => {
       if (trade.status !== 'open') return false;
@@ -439,7 +421,7 @@ export default function TradesScreen() {
     });
     if (!targets.length) return;
     void closeTrade(targets[0], { silent: true });
-  }, [bulkClosing, closeTrade, closingId, trades, twitterProfile]);
+  }, [closeTrade, closingId, trades, twitterProfile]);
 
   const filtered = useMemo(() => {
     return trades.filter((trade) => {
@@ -478,13 +460,6 @@ export default function TradesScreen() {
       <View style={styles.headerRow}>
         <Text style={styles.title}>Trades</Text>
         <View style={styles.headerActions}>
-          <Pressable
-            onPress={() => void closeAllOpenTrades()}
-            disabled={loading || bulkClosing || Boolean(closingId)}
-            style={[styles.closeAllBtn, (loading || bulkClosing || closingId) && { opacity: 0.65 }]}
-          >
-            <Text style={styles.closeAllBtnText}>{bulkClosing ? 'Closing All...' : 'Close All Open'}</Text>
-          </Pressable>
           <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
             <Text style={styles.refreshText}>Refresh</Text>
           </Pressable>
@@ -586,18 +561,14 @@ export default function TradesScreen() {
                   <Text style={styles.linkBtnText}>View Close Tx</Text>
                 </Pressable>
               ) : null}
-              {item.status === 'open' || (item.status === 'closed' && !item.closeTxSignature) ? (
+              {item.status === 'open' ? (
                 <Pressable
                   onPress={() => void closeTrade(item)}
                   disabled={closingId === item.id}
                   style={[styles.closeBtn, closingId === item.id && { opacity: 0.6 }]}
                 >
                   <Text style={styles.closeBtnText}>
-                    {closingId === item.id
-                      ? 'Closing...'
-                      : item.status === 'open'
-                        ? 'Close Trade'
-                        : 'Settle Close On-Chain'}
+                    {closingId === item.id ? 'Closing...' : 'Close Trade'}
                   </Text>
                 </Pressable>
               ) : null}
@@ -623,15 +594,6 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: '#fff', fontSize: 24, fontWeight: '800' },
-  closeAllBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,120,120,0.55)',
-    backgroundColor: 'rgba(255,70,70,0.16)',
-  },
-  closeAllBtnText: { color: '#ffd0d0', fontWeight: '700', fontSize: 11 },
   refreshBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,
