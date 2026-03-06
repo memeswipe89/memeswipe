@@ -86,11 +86,7 @@ const getRealtimePnlPct = (trade: TradeItem) => {
 };
 
 const getDisplayedPnl = (trade: TradeItem) => {
-  const hasReliableClosedSnapshot =
-    trade.status === 'closed' &&
-    trade.closePnlPct !== null &&
-    (trade.closePnlPct !== 0 || trade.closePnlUsd !== null || trade.closePriceUsd !== null);
-  if (hasReliableClosedSnapshot) {
+  if (trade.status === 'closed' && trade.closePnlPct !== null) {
     return {
       pnlPct: trade.closePnlPct,
       pnlUsd: trade.closePnlUsd ?? (trade.displayAmountUsd * trade.closePnlPct) / 100,
@@ -110,10 +106,8 @@ export default function TradesScreen() {
   const [error, setError] = useState<string | null>(null);
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [closingId, setClosingId] = useState<string | null>(null);
-  const [bulkClosing, setBulkClosing] = useState(false);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
-  const autoCloseCooldownRef = useRef<Record<string, number>>({});
-  const settleCooldownRef = useRef<Record<string, number>>({});
+  const autoCloseRetryAfterRef = useRef<Record<string, number>>({});
   const pageSize = 20;
 
   const loadTrades = useCallback(async () => {
@@ -303,11 +297,7 @@ export default function TradesScreen() {
   }, [trades]);
 
   const closeTrade = useCallback(
-    async (
-      trade: TradeItem,
-      source: 'manual' | 'auto' = 'manual',
-      closeMeta?: { reason?: 'tp' | 'sl' | 'manual'; triggerPct?: number | null }
-    ) => {
+    async (trade: TradeItem, options?: { silent?: boolean }) => {
       const orderId = trade.id;
       if (!orderId) return;
       try {
@@ -317,189 +307,77 @@ export default function TradesScreen() {
         const walletAddress = await getOrCreateTradingWalletAddress();
         if (!walletAddress) throw new Error('Embedded wallet address not found');
 
-        const closeBuildSlippageBps = [300, 800, 1200, 2000, 3000, 5000];
-        let buildJson: { error?: string; swapTransaction?: string } | null = null;
-        let lastBuildError: string | null = null;
-        let closeTxSignature: string | null = null;
-        let skipOnChainClose = false;
-        for (const slippageBps of closeBuildSlippageBps) {
-          try {
-            const buildRes = await fetch(`${API_BASE}/api/trades/close/build`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress, slippageBps }),
-            });
-            buildJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(buildRes);
-            if (buildRes.ok && buildJson?.swapTransaction) break;
-            lastBuildError = buildJson?.error || `Failed to build close transaction (slippage ${slippageBps})`;
-            buildJson = null;
-          } catch (buildErr: any) {
-            const buildMessage = String(buildErr?.message || '');
-            if (buildMessage.includes('Server returned HTML (404)')) {
-              skipOnChainClose = true;
-              break;
-            }
-            lastBuildError = buildMessage || `Failed to build close transaction (slippage ${slippageBps})`;
-          }
+        const buildRes = await fetch(`${API_BASE}/api/trades/close/build`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress }),
+        });
+        const buildJson = await parseApiJson<{ error?: string; swapTransaction?: string }>(buildRes);
+        if (!buildRes.ok || !buildJson?.swapTransaction) {
+          throw new Error(buildJson?.error || 'Failed to build close transaction');
         }
-        if (!skipOnChainClose) {
-          if (!buildJson?.swapTransaction) {
-            if (source === 'auto') {
-              skipOnChainClose = true;
-            } else {
-              throw new Error(lastBuildError || 'Failed to build close transaction');
-            }
+
+        const provider = await getEmbeddedSolanaProvider();
+        const unsignedTx = VersionedTransaction.deserialize(Uint8Array.from(Buffer.from(buildJson.swapTransaction, 'base64')));
+        let signedTx: VersionedTransaction | null = null;
+
+        if (provider && typeof provider.signTransaction === 'function') {
+          const signed = await provider.signTransaction({ transaction: unsignedTx });
+          if (signed?.signedTransaction?.serialize) {
+            signedTx = signed.signedTransaction as VersionedTransaction;
           }
-        }
-        if (!skipOnChainClose && buildJson?.swapTransaction) {
-          try {
-            const provider = await getEmbeddedSolanaProvider();
-            const unsignedTx = VersionedTransaction.deserialize(Uint8Array.from(Buffer.from(buildJson.swapTransaction, 'base64')));
-            let signedTx: VersionedTransaction | null = null;
-
-            if (provider && typeof provider.signTransaction === 'function') {
-              const signed = await provider.signTransaction({ transaction: unsignedTx });
-              if (signed?.signedTransaction?.serialize) {
-                signedTx = signed.signedTransaction as VersionedTransaction;
-              }
-            } else if (provider && typeof provider.request === 'function') {
-              const signed = await provider.request({
-                method: 'signTransaction',
-                params: { transaction: unsignedTx },
-              });
-              if (signed?.signedTransaction?.serialize) {
-                signedTx = signed.signedTransaction as VersionedTransaction;
-              }
-            }
-
-            if (!signedTx) {
-              throw new Error('Embedded wallet could not sign close transaction.');
-            }
-            const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
-            const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-              skipPreflight: false,
-              maxRetries: 3,
-            });
-            await connection.confirmTransaction(signature, 'confirmed');
-            closeTxSignature = signature;
-          } catch (onChainErr: any) {
-            if (source === 'auto') {
-              skipOnChainClose = true;
-            } else {
-              throw onChainErr;
-            }
+        } else if (provider && typeof provider.request === 'function') {
+          const signed = await provider.request({
+            method: 'signTransaction',
+            params: { transaction: unsignedTx },
+          });
+          if (signed?.signedTransaction?.serialize) {
+            signedTx = signed.signedTransaction as VersionedTransaction;
           }
         }
 
-        if (!closeTxSignature && !skipOnChainClose && source !== 'auto') {
-          throw new Error(lastBuildError || 'Failed to settle close transaction');
+        if (!signedTx) {
+          throw new Error('Embedded wallet could not sign close transaction.');
         }
-        const liveSnapshotPnlPct =
-          trade.entryPriceUsd && trade.livePriceUsd
-            ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
-            : null;
-        const closePriceSnapshot =
-          trade.livePriceUsd && Number.isFinite(trade.livePriceUsd) && trade.livePriceUsd > 0
-            ? trade.livePriceUsd
-            : trade.closePriceUsd;
-        const closePnlPctSnapshot =
-          liveSnapshotPnlPct !== null && Number.isFinite(liveSnapshotPnlPct)
-            ? liveSnapshotPnlPct
-            : trade.closePnlPct;
-        const closePnlUsdSnapshot =
-          closePnlPctSnapshot !== null && Number.isFinite(closePnlPctSnapshot)
-            ? (trade.displayAmountUsd * closePnlPctSnapshot) / 100
-            : trade.closePnlUsd;
+        const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
+        const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
+        await connection.confirmTransaction(signature, 'confirmed');
 
         const res = await fetch(`${API_BASE}/api/orders/${encodeURIComponent(orderId)}/close`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: resolvedUserId,
-            closeTxSignature,
-            closeReason: closeMeta?.reason ?? (source === 'manual' && trade.status === 'open' ? 'manual' : undefined),
-            closeTriggerPct:
-              Number.isFinite(closeMeta?.triggerPct || Number.NaN) ? Number(closeMeta?.triggerPct) : undefined,
-            closePriceUsd: closePriceSnapshot,
-            closePnlPct: closePnlPctSnapshot,
-            closePnlUsd: closePnlUsdSnapshot,
-          }),
+          body: JSON.stringify({ userId: resolvedUserId, closeTxSignature: signature }),
         });
-        const json = await parseApiJson<{
-          error?: string;
-          order?: {
-            close_reason?: string | null;
-            close_trigger_pct?: number | string | null;
-            close_price_usd?: number | string | null;
-            close_pnl_pct?: number | string | null;
-            close_pnl_usd?: number | string | null;
-            close_tx_signature?: string | null;
-            status?: string | null;
-          };
-        }>(res);
+        const json = await parseApiJson<{ error?: string }>(res);
         if (!res.ok) throw new Error(json?.error || 'Failed to finalize close');
-        const serverCloseReasonRaw = String(json?.order?.close_reason || '').trim().toLowerCase();
-        const serverCloseReason =
-          serverCloseReasonRaw === 'tp' || serverCloseReasonRaw === 'sl' || serverCloseReasonRaw === 'manual'
-            ? serverCloseReasonRaw
-            : null;
-        const serverCloseTriggerPct = (() => {
-          const v = toNumber(json?.order?.close_trigger_pct, Number.NaN);
-          return Number.isFinite(v) ? v : null;
-        })();
-        const serverClosePriceUsd = (() => {
-          const v = toNumber(json?.order?.close_price_usd, Number.NaN);
-          return Number.isFinite(v) && v > 0 ? v : null;
-        })();
-        const serverClosePnlPct = (() => {
-          const v = toNumber(json?.order?.close_pnl_pct, Number.NaN);
-          return Number.isFinite(v) ? v : null;
-        })();
-        const serverClosePnlUsd = (() => {
-          const v = toNumber(json?.order?.close_pnl_usd, Number.NaN);
-          return Number.isFinite(v) ? v : null;
-        })();
-        const serverCloseTxSignature =
-          typeof json?.order?.close_tx_signature === 'string' && json.order.close_tx_signature.trim()
-            ? json.order.close_tx_signature.trim()
-            : null;
-        const effectiveCloseTxSignature = serverCloseTxSignature || closeTxSignature || null;
+        const closeTxSignature = signature;
 
         setTrades((prev) =>
           prev.map((t) =>
             t.id === orderId
               ? {
                   ...t,
-                  status: normalizeTradeStatus(json?.order?.status || 'closed'),
-                  closeReason:
-                    serverCloseReason ||
-                    closeMeta?.reason ||
-                    (source === 'manual' && trade.status === 'open' ? t.closeReason || 'manual' : t.closeReason || null),
-                  closeTriggerPct:
-                    serverCloseTriggerPct ??
-                    (Number.isFinite(closeMeta?.triggerPct || Number.NaN) ? Number(closeMeta?.triggerPct) : t.closeTriggerPct),
-                  closePriceUsd: serverClosePriceUsd ?? t.closePriceUsd,
-                  closePnlPct: serverClosePnlPct ?? t.closePnlPct,
-                  closePnlUsd: serverClosePnlUsd ?? t.closePnlUsd,
-                  closeTxSignature: effectiveCloseTxSignature || t.closeTxSignature,
+                  status: 'closed',
+                  closeTxSignature: closeTxSignature || t.closeTxSignature,
                 }
               : t
           )
         );
+        delete autoCloseRetryAfterRef.current[orderId];
 
-        // Credit/debit balance only after on-chain close has a tx signature.
-        if (effectiveCloseTxSignature) {
-          const settledPnlUsd =
-            serverClosePnlUsd ?? (serverClosePnlPct !== null ? (trade.displayAmountUsd * serverClosePnlPct) / 100 : null);
-          const { livePnlUsd } = getLivePnl(trade);
-          const realizedPnlUsd = settledPnlUsd ?? livePnlUsd;
-          await addBalance(realizedPnlUsd);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
-          const notified = await notifyTradeClosed({ symbol: trade.symbol, pnlUsd: realizedPnlUsd });
+        // Credit/debit realized PnL into app balance after confirmed on-chain close.
+        const { livePnlUsd } = getLivePnl(trade);
+        await addBalance(livePnlUsd);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+        if (!options?.silent) {
+          const notified = await notifyTradeClosed({ symbol: trade.symbol, pnlUsd: livePnlUsd });
           if (!notified) {
             Alert.alert(
               'Trade Closed',
-              `${trade.symbol.toUpperCase()} closed ${realizedPnlUsd >= 0 ? 'in profit' : 'in loss'} (${realizedPnlUsd >= 0 ? '+' : ''}$${realizedPnlUsd.toFixed(4)}).`
+              `${trade.symbol.toUpperCase()} closed ${livePnlUsd >= 0 ? 'in profit' : 'in loss'} (${livePnlUsd >= 0 ? '+' : ''}$${livePnlUsd.toFixed(4)}).`
             );
           }
         }
@@ -507,7 +385,9 @@ export default function TradesScreen() {
         const message = err?.message || 'Failed to close trade';
         setError(message);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
-        if (source === 'manual') {
+        if (options?.silent) {
+          autoCloseRetryAfterRef.current[orderId] = Date.now() + 30_000;
+        } else {
           Alert.alert('Close Trade Failed', message);
         }
       } finally {
@@ -517,70 +397,23 @@ export default function TradesScreen() {
     [getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress]
   );
 
-  const closeAllOpenTrades = useCallback(async () => {
-    const openTrades = trades.filter((t) => t.status === 'open');
-    if (!openTrades.length) {
-      Alert.alert('Close All', 'No open trades to close.');
-      return;
-    }
-    try {
-      setBulkClosing(true);
-      for (const trade of openTrades) {
-        await closeTrade(trade);
-      }
-    } finally {
-      setBulkClosing(false);
-    }
-  }, [closeTrade, trades]);
-
   useEffect(() => {
-    if (!twitterProfile || closingId || bulkClosing) return;
+    if (!twitterProfile || closingId) return;
     const now = Date.now();
-    const cooldownMs = 60_000;
-    const targets = trades
-      .map((trade) => {
+    const targets = trades.filter((trade) => {
       if (trade.status !== 'open') return false;
-      const lastAttemptAt = autoCloseCooldownRef.current[trade.id] || 0;
-      if (now - lastAttemptAt < cooldownMs) return false;
+      const retryAfter = autoCloseRetryAfterRef.current[trade.id] || 0;
+      if (retryAfter > now) return false;
       const pnlPct = getRealtimePnlPct(trade);
       if (pnlPct === null) return false;
       const tpHit = Number.isFinite(trade.tpRoi) && pnlPct >= trade.tpRoi;
       const slHit =
         trade.stopLossPct !== null && Number.isFinite(trade.stopLossPct) && pnlPct <= -Math.abs(trade.stopLossPct);
-      if (!tpHit && !slHit) return false;
-      return {
-        trade,
-        reason: (tpHit ? 'tp' : 'sl') as 'tp' | 'sl',
-        triggerPct: tpHit ? trade.tpRoi : -(Math.abs(trade.stopLossPct || 0)),
-      };
-    })
-      .filter((item): item is { trade: TradeItem; reason: 'tp' | 'sl'; triggerPct: number } => Boolean(item));
+      return tpHit || slHit;
+    });
     if (!targets.length) return;
-    const target = targets[0];
-    autoCloseCooldownRef.current[target.trade.id] = now;
-    void closeTrade(target.trade, 'auto', { reason: target.reason, triggerPct: target.triggerPct });
-  }, [bulkClosing, closeTrade, closingId, trades, twitterProfile]);
-
-  useEffect(() => {
-    if (!twitterProfile || closingId || bulkClosing) return;
-    const now = Date.now();
-    const cooldownMs = 60_000;
-    const target = trades.find((trade) => {
-      if (trade.status !== 'closed') return false;
-      if (trade.closeTxSignature) return false;
-      const lastAttemptAt = settleCooldownRef.current[trade.id] || 0;
-      return now - lastAttemptAt >= cooldownMs;
-    });
-    if (!target) return;
-    settleCooldownRef.current[target.id] = now;
-    void closeTrade(target, 'auto', {
-      reason:
-        target.closeReason === 'tp' || target.closeReason === 'sl' || target.closeReason === 'manual'
-          ? target.closeReason
-          : undefined,
-      triggerPct: target.closeTriggerPct,
-    });
-  }, [bulkClosing, closeTrade, closingId, trades, twitterProfile]);
+    void closeTrade(targets[0], { silent: true });
+  }, [closeTrade, closingId, trades, twitterProfile]);
 
   const filtered = useMemo(() => {
     return trades.filter((trade) => {
@@ -618,18 +451,9 @@ export default function TradesScreen() {
     <SafeAreaView style={styles.root}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Trades</Text>
-        <View style={styles.headerActions}>
-          <Pressable
-            onPress={() => void closeAllOpenTrades()}
-            disabled={loading || bulkClosing || Boolean(closingId)}
-            style={[styles.closeAllBtn, (loading || bulkClosing || closingId) && { opacity: 0.65 }]}
-          >
-            <Text style={styles.closeAllBtnText}>{bulkClosing ? 'Closing All...' : 'Close All Open'}</Text>
-          </Pressable>
-          <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
-            <Text style={styles.refreshText}>Refresh</Text>
-          </Pressable>
-        </View>
+        <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
+          <Text style={styles.refreshText}>Refresh</Text>
+        </Pressable>
       </View>
 
       <TextInput
@@ -709,9 +533,9 @@ export default function TradesScreen() {
               <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
                 PnL SOL: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
               </Text>
-              {item.status === 'closed' ? (
+              {item.status === 'closed' && item.closeReason ? (
                 <Text style={styles.meta}>
-                  Closed by {(item.closeReason || 'UNKNOWN').toUpperCase()}
+                  Closed by {item.closeReason.toUpperCase()}
                   {Number.isFinite(item.closeTriggerPct || Number.NaN)
                     ? ` (${(item.closeTriggerPct as number) > 0 ? '+' : ''}${(item.closeTriggerPct as number).toFixed(2)}%)`
                     : ''}
@@ -729,21 +553,7 @@ export default function TradesScreen() {
               ) : null}
               {item.status === 'open' || (item.status === 'closed' && !item.closeTxSignature) ? (
                 <Pressable
-                  onPress={() =>
-                    void closeTrade(
-                      item,
-                      'manual',
-                      item.status === 'closed'
-                        ? {
-                            reason:
-                              item.closeReason === 'tp' || item.closeReason === 'sl' || item.closeReason === 'manual'
-                                ? item.closeReason
-                                : undefined,
-                            triggerPct: item.closeTriggerPct,
-                          }
-                        : undefined
-                    )
-                  }
+                  onPress={() => void closeTrade(item)}
                   disabled={closingId === item.id}
                   style={[styles.closeBtn, closingId === item.id && { opacity: 0.6 }]}
                 >
@@ -776,17 +586,7 @@ export default function TradesScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#05070f', padding: 16 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: '#fff', fontSize: 24, fontWeight: '800' },
-  closeAllBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,120,120,0.55)',
-    backgroundColor: 'rgba(255,70,70,0.16)',
-  },
-  closeAllBtnText: { color: '#ffd0d0', fontWeight: '700', fontSize: 11 },
   refreshBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,
