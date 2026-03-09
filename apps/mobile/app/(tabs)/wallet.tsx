@@ -1,30 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-  useWindowDimensions,
-} from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
-import { usePrivy } from "@privy-io/expo";
-
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
-const API_BASE =
-  process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
-
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
 const FAVORITES_KEY = "@memeswipe:favorites:v1";
 const HIDDEN_TOKENS_KEY = "@memeswipe:hidden-tokens:v1";
@@ -54,51 +40,11 @@ const truncateMiddle = (value: string, keep = 6) => {
   if (value.length <= keep * 2 + 3) return value;
   return `${value.slice(0, keep)}...${value.slice(-keep)}`;
 };
-
 const formatSol = (value: number) => `${value.toFixed(9)} SOL`;
-
-const getTwitterAccountFromPrivyUser = (
-  user: any
-): { id: string; username: string } | null => {
-  const linkedAccounts = Array.isArray(user?.linkedAccounts)
-    ? user.linkedAccounts
-    : [];
-
-  const twitterAccount = linkedAccounts.find((account: any) => {
-    const type = String(account?.type || "").toLowerCase();
-    const provider = String(account?.provider || "").toLowerCase();
-
-    return (
-      type === "twitter_oauth" ||
-      provider === "twitter" ||
-      (type === "oauth" && provider === "twitter")
-    );
-  });
-
-  if (!twitterAccount) return null;
-
-  return {
-    id: String(
-      twitterAccount?.subject ||
-        twitterAccount?.id ||
-        twitterAccount?.userId ||
-        twitterAccount?.username ||
-        ""
-    ),
-    username: String(
-      twitterAccount?.username ||
-        twitterAccount?.name ||
-        twitterAccount?.handle ||
-        "twitter"
-    ),
-  };
-};
 
 export default function WalletScreen() {
   const router = useRouter();
-  const { user, isReady } = usePrivy();
   const { width, height } = useWindowDimensions();
-
   const qrSize = useMemo(() => {
     const byWidth = width * 0.56;
     const byHeight = height * 0.24;
@@ -115,9 +61,7 @@ export default function WalletScreen() {
     getOrCreateTradingWalletAddress,
     withdrawFromTradingWallet,
   } = useWalletContext();
-
   const { logout } = useAuth();
-
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -126,25 +70,6 @@ export default function WalletScreen() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-
-  const privyTwitterProfile = useMemo(() => {
-    return getTwitterAccountFromPrivyUser(user);
-  }, [user]);
-
-  const effectiveTwitterProfile = twitterProfile || privyTwitterProfile;
-  const isTwitterConnected = Boolean(effectiveTwitterProfile);
-  const hasWallet = Boolean(tradingWalletAddress);
-
-  useEffect(() => {
-    if (!effectiveTwitterProfile) return;
-    if (
-      twitterProfile?.id === effectiveTwitterProfile.id &&
-      twitterProfile?.username === effectiveTwitterProfile.username
-    ) {
-      return;
-    }
-    setTwitterProfile(effectiveTwitterProfile);
-  }, [effectiveTwitterProfile, setTwitterProfile, twitterProfile]);
 
   const clearLocalAppData = async () => {
     await AsyncStorage.multiRemove([
@@ -184,17 +109,11 @@ export default function WalletScreen() {
 
   const handleCreateWallet = async () => {
     let applicationId = "unknown";
-
     try {
+      // Avoid hard dependency crashes if expo-application is not installed in this environment.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Application = require("expo-application") as {
-        applicationId?: string;
-      };
-
-      if (
-        typeof Application?.applicationId === "string" &&
-        Application.applicationId.length > 0
-      ) {
+      const Application = require("expo-application") as { applicationId?: string };
+      if (typeof Application?.applicationId === "string" && Application.applicationId.length > 0) {
         applicationId = Application.applicationId;
       }
     } catch {
@@ -204,18 +123,12 @@ export default function WalletScreen() {
     try {
       console.log("[WALLET] Create Wallet clicked");
       console.log("[APP]", Platform.OS, "applicationId:", applicationId);
-
       const address = await getOrCreateTradingWalletAddress();
       console.log("[WALLET] Embedded wallet address:", address);
-
-      Alert.alert(
-        "Wallet Ready",
-        "Wallet created.\nYou can now deposit SOL to this address."
-      );
+      Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
     } catch (error: any) {
       const message = String(error?.message || error || "");
       console.log("[WALLET] Create wallet failed:", message);
-
       if (message.toLowerCase().includes("allowed app identifier")) {
         Alert.alert(
           "Privy Setup Required",
@@ -223,17 +136,14 @@ export default function WalletScreen() {
         );
         return;
       }
-
-      Alert.alert("Wallet", message || "Could not create a wallet address right now.");
+      Alert.alert("Wallet", "Could not create a wallet address right now.");
     }
   };
 
   const openPhantom = async () => {
     if (!tradingWalletAddress) return;
 
-    const transferLink = `phantom://v1/transfer?recipient=${encodeURIComponent(
-      tradingWalletAddress
-    )}&network=mainnet-beta`;
+    const transferLink = `phantom://v1/transfer?recipient=${encodeURIComponent(tradingWalletAddress)}&network=mainnet-beta`;
     const appBaseLink = "phantom://";
 
     try {
@@ -249,39 +159,27 @@ export default function WalletScreen() {
       }
 
       await Linking.openURL("https://phantom.app/");
-      Alert.alert(
-        "Phantom not found",
-        "Copy the address and send SOL from any Solana wallet."
-      );
+      Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
     } catch {
-      Alert.alert(
-        "Phantom not found",
-        "Copy the address and send SOL from any Solana wallet."
-      );
+      Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
     }
   };
 
   const handleWithdraw = async () => {
     try {
       const amount = Number(withdrawAmount);
-
       if (!Number.isFinite(amount) || amount <= 0) {
         Alert.alert("Withdraw", "Enter valid SOL amount.");
         return;
       }
-
       const destination = withdrawToAddress.trim();
-
       if (!destination) {
         Alert.alert("Withdraw", "Set a destination address first.");
         return;
       }
-
       setWithdrawing(true);
       const result = await withdrawFromTradingWallet(amount, destination);
-
       Alert.alert("Withdraw Success", `Tx: ${result.txSignature}`);
-
       if (tradingWalletAddress) {
         await loadBalance(tradingWalletAddress);
       }
@@ -295,28 +193,18 @@ export default function WalletScreen() {
   const disconnectTwitter = async () => {
     try {
       setDisconnectingTwitter(true);
-
       const userId = await getOrCreateLocalUserId();
-      const res = await fetch(
-        `${API_BASE}/api/twitter/connection/${encodeURIComponent(userId)}`,
-        {
-          method: "DELETE",
-        }
-      );
-
+      const res = await fetch(`${API_BASE}/api/twitter/connection/${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+      });
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || "Failed to disconnect Twitter");
       }
-
       setTwitterProfile(null);
       await clearLocalAppData();
       router.replace("/(tabs)");
-
-      Alert.alert(
-        "Twitter Disconnected",
-        "Your Twitter account has been disconnected."
-      );
+      Alert.alert("Twitter Disconnected", "Your Twitter account has been disconnected.");
     } catch (error: any) {
       Alert.alert("Twitter", error?.message || "Failed to disconnect Twitter.");
     } finally {
@@ -325,18 +213,10 @@ export default function WalletScreen() {
   };
 
   const handleDisconnectTwitter = () => {
-    Alert.alert(
-      "Disconnect Twitter",
-      "Are you sure you want to disconnect this Twitter account?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Disconnect",
-          style: "destructive",
-          onPress: () => void disconnectTwitter(),
-        },
-      ]
-    );
+    Alert.alert("Disconnect Twitter", "Are you sure you want to disconnect this Twitter account?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Disconnect", style: "destructive", onPress: () => void disconnectTwitter() },
+    ]);
   };
 
   const handleLogout = () => {
@@ -366,409 +246,253 @@ export default function WalletScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#07111f" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
       <ScrollView
-        contentContainerStyle={{
-          paddingHorizontal: 18,
-          paddingTop: 18,
-          paddingBottom: 40,
-        }}
+        contentContainerStyle={{ paddingBottom: 18 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
-        <Text
-          style={{
-            color: "#f8fbff",
-            fontSize: 28,
-            fontWeight: "800",
-            marginBottom: 16,
-          }}
-        >
-          Wallet
-        </Text>
-
-        {isTwitterConnected ? (
-          <View
-            style={{
-              backgroundColor: "#0d1b2e",
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: "#173357",
-              padding: 16,
-              marginBottom: 16,
-            }}
-          >
-            <Text
-              style={{
-                color: "#8ab4ff",
-                fontSize: 12,
-                fontWeight: "700",
-                marginBottom: 8,
-                textTransform: "uppercase",
-                letterSpacing: 0.8,
-              }}
-            >
-              User Profile
-            </Text>
-
-            <Text style={{ color: "#f8fbff", fontSize: 18, fontWeight: "700" }}>
-              @{effectiveTwitterProfile?.username}
-            </Text>
-
-            <Text style={{ color: "#7f97b8", marginTop: 6 }}>
-              ID: {effectiveTwitterProfile?.id}
-            </Text>
-
-            <Pressable
-              onPress={handleDisconnectTwitter}
-              disabled={disconnectingTwitter}
-              style={{
-                marginTop: 14,
-                alignSelf: "flex-start",
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                borderRadius: 10,
-                backgroundColor: "#2a1530",
-                borderWidth: 1,
-                borderColor: "#63407a",
-                opacity: disconnectingTwitter ? 0.7 : 1,
-              }}
-            >
-              <Text style={{ color: "#ffd9ff", fontWeight: "700" }}>
-                {disconnectingTwitter ? "Disconnecting..." : "Disconnect Twitter"}
-              </Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View
-            style={{
-              backgroundColor: "#0d1b2e",
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: "#173357",
-              padding: 16,
-              marginBottom: 16,
-            }}
-          >
-            <Text style={{ color: "#f8fbff", fontSize: 16, fontWeight: "700" }}>
-              Twitter not connected
-            </Text>
-            <Text style={{ color: "#7f97b8", marginTop: 8, lineHeight: 20 }}>
-              Connect Twitter from the Home screen first. Once Privy restores your
-              session, this wallet screen will use the same account automatically.
-            </Text>
-          </View>
-        )}
-
+      {twitterProfile ? (
         <View
           style={{
-            backgroundColor: "#0d1b2e",
-            borderRadius: 16,
+            marginTop: 6,
+            borderRadius: 10,
+            paddingVertical: 8,
+            paddingHorizontal: 10,
             borderWidth: 1,
-            borderColor: "#173357",
-            padding: 16,
-            marginBottom: 16,
+            borderColor: "#254d78",
+            backgroundColor: "#0a1a33",
           }}
         >
-          <Text
+          <Text style={{ color: "#7fddff", fontWeight: "700" }}>User Profile</Text>
+          <Text style={{ color: "#fff", marginTop: 2 }}>@{twitterProfile.username}</Text>
+          <Text style={{ color: "#8f9ab7", marginTop: 2, fontSize: 11 }} numberOfLines={1}>
+            ID: {twitterProfile.id}
+          </Text>
+          <Pressable
+            onPress={handleDisconnectTwitter}
+            disabled={disconnectingTwitter || loggingOut}
             style={{
-              color: "#8ab4ff",
-              fontSize: 12,
-              fontWeight: "700",
-              marginBottom: 10,
-              textTransform: "uppercase",
-              letterSpacing: 0.8,
+              marginTop: 10,
+              borderRadius: 8,
+              paddingVertical: 9,
+              backgroundColor: "#3b0f16",
+              borderWidth: 1,
+              borderColor: "#8a2335",
+              opacity: disconnectingTwitter || loggingOut ? 0.7 : 1,
             }}
           >
-            Your Privy Embedded Wallet Address
-          </Text>
-
-          {!isReady ? (
-            <View style={{ paddingVertical: 18 }}>
-              <ActivityIndicator color="#8ab4ff" />
-              <Text style={{ color: "#7f97b8", marginTop: 10 }}>
-                Restoring wallet session...
-              </Text>
-            </View>
-          ) : walletLoading ? (
-            <View style={{ paddingVertical: 18 }}>
-              <ActivityIndicator color="#8ab4ff" />
-              <Text style={{ color: "#7f97b8", marginTop: 10 }}>
-                Loading wallet address...
-              </Text>
-            </View>
-          ) : hasWallet ? (
-            <>
-              <Text
-                style={{
-                  color: "#f8fbff",
-                  fontSize: 22,
-                  fontWeight: "800",
-                  marginBottom: 8,
-                }}
-              >
-                {truncateMiddle(tradingWalletAddress!)}
-              </Text>
-
-              <Text
-                selectable
-                style={{
-                  color: "#7f97b8",
-                  fontSize: 13,
-                  lineHeight: 20,
-                  marginBottom: 14,
-                }}
-              >
-                {tradingWalletAddress}
-              </Text>
-
-              <View
-                style={{
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: "#ffffff",
-                  borderRadius: 18,
-                  padding: 16,
-                  alignSelf: "center",
-                  marginBottom: 16,
-                }}
-              >
-                <QRCode value={tradingWalletAddress!} size={qrSize} />
-              </View>
-
-              <View style={{ gap: 10 }}>
-                <Pressable
-                  onPress={copyAddress}
-                  style={{
-                    backgroundColor: "#163150",
-                    borderRadius: 10,
-                    paddingVertical: 12,
-                    alignItems: "center",
-                    borderWidth: 1,
-                    borderColor: "#28517f",
-                  }}
-                >
-                  <Text style={{ color: "#f8fbff", fontWeight: "700" }}>
-                    Copy Address
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={openPhantom}
-                  style={{
-                    backgroundColor: "#10233f",
-                    borderRadius: 10,
-                    paddingVertical: 12,
-                    alignItems: "center",
-                    borderWidth: 1,
-                    borderColor: "#254d78",
-                  }}
-                >
-                  <Text style={{ color: "#f8fbff", fontWeight: "700" }}>
-                    Send from Phantom
-                  </Text>
-                </Pressable>
-              </View>
-
-              <Text
-                style={{
-                  color: "#7f97b8",
-                  marginTop: 12,
-                  lineHeight: 20,
-                }}
-              >
-                Send SOL from Phantom or any Solana wallet to this address.
-              </Text>
-            </>
-          ) : (
-            <>
-              <Text style={{ color: "#7f97b8", lineHeight: 20 }}>
-                {!isTwitterConnected
-                  ? "Connect Twitter on Home first, then create your wallet."
-                  : walletError || "No wallet address found yet."}
-              </Text>
-
-              {isTwitterConnected ? (
-                <Pressable
-                  onPress={() => void handleCreateWallet()}
-                  style={{
-                    marginTop: 14,
-                    backgroundColor: "#1a4d9b",
-                    borderRadius: 10,
-                    paddingVertical: 12,
-                    alignItems: "center",
-                  }}
-                >
-                  <Text style={{ color: "#ffffff", fontWeight: "800" }}>
-                    Create Privy Wallet
-                  </Text>
-                </Pressable>
-              ) : null}
-            </>
-          )}
+            <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
+              {disconnectingTwitter ? "Disconnecting..." : "Disconnect Twitter"}
+            </Text>
+          </Pressable>
         </View>
+      ) : null}
+      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
 
-        {hasWallet ? (
-          <>
-            <View
+      {!twitterProfile ? (
+        <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
+          <Text style={{ color: "#aaa" }}>
+            Connect Twitter on Home first, then create/use your wallet.
+          </Text>
+        </View>
+      ) : walletLoading ? (
+        <View style={{ marginTop: 12 }}>
+          <ActivityIndicator />
+          <Text style={{ color: "#999", marginTop: 6 }}>Loading wallet address...</Text>
+        </View>
+      ) : tradingWalletAddress ? (
+        <View style={{ flex: 1 }}>
+          <View
+            style={{
+              marginTop: 8,
+              borderRadius: 10,
+              padding: 10,
+              borderWidth: 1,
+              borderColor: "#2a2a2a",
+              backgroundColor: "#111",
+            }}
+          >
+            <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13 }}>
+              {truncateMiddle(tradingWalletAddress)}
+            </Text>
+            <Text selectable numberOfLines={1} style={{ color: "#666", fontFamily: "Courier", marginTop: 5, fontSize: 10 }}>
+              {tradingWalletAddress}
+            </Text>
+          </View>
+
+          <Pressable
+            onPress={copyAddress}
+            style={{ marginTop: 8, backgroundColor: "#e9f3ff", borderRadius: 10, paddingVertical: 10 }}
+          >
+            <Text style={{ color: "#0a1a33", textAlign: "center", fontWeight: "700" }}>Copy Address</Text>
+          </Pressable>
+
+          <View style={{ marginTop: 10, marginBottom: 10, alignItems: "center", justifyContent: "center" }}>
+            <View style={{ backgroundColor: "#fff", padding: 10, borderRadius: 12 }}>
+              <QRCode value={tradingWalletAddress} size={qrSize} />
+            </View>
+          </View>
+
+          <View style={{ marginTop: "auto", paddingBottom: 6 }}>
+            <Text style={{ color: "#bbb", fontWeight: "600" }}>Send from Phantom</Text>
+            <Pressable
+              onPress={openPhantom}
               style={{
-                backgroundColor: "#0d1b2e",
-                borderRadius: 16,
+                marginTop: 6,
+                backgroundColor: "#10233f",
+                borderRadius: 10,
+                paddingVertical: 10,
                 borderWidth: 1,
-                borderColor: "#173357",
-                padding: 16,
-                marginBottom: 16,
+                borderColor: "#254d78",
               }}
             >
-              <Text
-                style={{
-                  color: "#8ab4ff",
-                  fontSize: 12,
-                  fontWeight: "700",
-                  marginBottom: 10,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.8,
-                }}
-              >
-                SOL Balance
+              <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Open Phantom</Text>
+            </Pressable>
+              <Text style={{ color: "#8f9ab7", marginTop: 6, fontSize: 12 }}>
+                Send SOL from Phantom or any Solana wallet to this address.
               </Text>
 
+            <View
+              style={{
+                marginTop: 8,
+                borderRadius: 10,
+                paddingVertical: 8,
+                paddingHorizontal: 10,
+                borderWidth: 1,
+                borderColor: "#2a2a2a",
+                backgroundColor: "#111",
+              }}
+            >
+              <Text style={{ color: "#bbb", fontSize: 12 }}>SOL Balance</Text>
               {balanceLoading ? (
-                <ActivityIndicator color="#8ab4ff" />
+                <View style={{ marginTop: 6 }}>
+                  <ActivityIndicator />
+                </View>
               ) : (
-                <Text
-                  style={{
-                    color: "#f8fbff",
-                    fontSize: 22,
-                    fontWeight: "800",
-                  }}
-                >
+                <Text style={{ color: "#fff", marginTop: 4, fontSize: 18, fontWeight: "700" }}>
                   {solBalance === null ? "--" : formatSol(solBalance)}
                 </Text>
               )}
-
-              {balanceError ? (
-                <Text style={{ color: "#ff8d8d", marginTop: 8 }}>{balanceError}</Text>
-              ) : null}
-
-              <Pressable
-                onPress={() =>
-                  tradingWalletAddress
-                    ? void loadBalance(tradingWalletAddress)
-                    : undefined
-                }
-                style={{
-                  marginTop: 10,
-                  backgroundColor: "#10233f",
-                  borderRadius: 10,
-                  paddingVertical: 10,
-                  borderWidth: 1,
-                  borderColor: "#254d78",
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#f8fbff", fontWeight: "700" }}>
-                  Refresh Balance
-                </Text>
-              </Pressable>
+              {balanceError ? <Text style={{ color: "#ff8a8a", marginTop: 6, fontSize: 11 }}>{balanceError}</Text> : null}
             </View>
+
+            <Pressable
+              onPress={() => (tradingWalletAddress ? void loadBalance(tradingWalletAddress) : undefined)}
+              style={{
+                marginTop: 6,
+                backgroundColor: "#10233f",
+                borderRadius: 10,
+                paddingVertical: 10,
+                borderWidth: 1,
+                borderColor: "#254d78",
+              }}
+            >
+              <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Refresh Balance</Text>
+            </Pressable>
 
             <View
               style={{
-                backgroundColor: "#0d1b2e",
-                borderRadius: 16,
+                marginTop: 10,
+                borderRadius: 10,
+                padding: 10,
                 borderWidth: 1,
-                borderColor: "#173357",
-                padding: 16,
-                marginBottom: 16,
+                borderColor: "#2a2a2a",
+                backgroundColor: "#0f131a",
               }}
             >
-              <Text
-                style={{
-                  color: "#8ab4ff",
-                  fontSize: 12,
-                  fontWeight: "700",
-                  marginBottom: 10,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.8,
-                }}
-              >
-                Send SOL to Phantom / external wallet
-              </Text>
-
+              <Text style={{ color: "#bbb", fontWeight: "600" }}>Send SOL to Phantom / external wallet</Text>
               <TextInput
                 value={withdrawToAddress}
                 onChangeText={setWithdrawToAddress}
-                placeholder="Destination Solana address"
-                placeholderTextColor="#6f86a6"
+                placeholder="Destination wallet address"
+                placeholderTextColor="#68738a"
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={{
-                  color: "#f8fbff",
-                  backgroundColor: "#091423",
-                  borderRadius: 10,
-                  paddingHorizontal: 12,
-                  paddingVertical: 12,
+                  marginTop: 8,
                   borderWidth: 1,
-                  borderColor: "#1f3a60",
-                  marginBottom: 10,
+                  borderColor: "#2a2a2a",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  paddingVertical: 8,
+                  color: "#fff",
+                  fontSize: 12,
                 }}
               />
-
               <TextInput
                 value={withdrawAmount}
                 onChangeText={setWithdrawAmount}
-                placeholder="Amount in SOL"
-                placeholderTextColor="#6f86a6"
+                placeholder="SOL amount (e.g. 0.01)"
+                placeholderTextColor="#68738a"
                 keyboardType="decimal-pad"
                 style={{
-                  color: "#f8fbff",
-                  backgroundColor: "#091423",
-                  borderRadius: 10,
-                  paddingHorizontal: 12,
-                  paddingVertical: 12,
+                  marginTop: 8,
                   borderWidth: 1,
-                  borderColor: "#1f3a60",
+                  borderColor: "#2a2a2a",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  paddingVertical: 8,
+                  color: "#fff",
+                  fontSize: 12,
                 }}
               />
-
               <Pressable
                 onPress={() => void handleWithdraw()}
                 disabled={withdrawing}
                 style={{
-                  marginTop: 12,
+                  marginTop: 8,
                   backgroundColor: "#2a1530",
-                  borderRadius: 10,
-                  paddingVertical: 12,
-                  alignItems: "center",
+                  borderRadius: 8,
+                  paddingVertical: 10,
                   borderWidth: 1,
                   borderColor: "#63407a",
                   opacity: withdrawing ? 0.7 : 1,
                 }}
               >
-                <Text style={{ color: "#ffd9ff", fontWeight: "800" }}>
+                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
                   {withdrawing ? "Sending..." : "Send SOL"}
                 </Text>
               </Pressable>
             </View>
-          </>
-        ) : null}
 
-        <Pressable
-          onPress={handleLogout}
-          disabled={loggingOut}
-          style={{
-            backgroundColor: "#2a1530",
-            borderRadius: 12,
-            paddingVertical: 14,
-            alignItems: "center",
-            borderWidth: 1,
-            borderColor: "#63407a",
-            opacity: loggingOut ? 0.7 : 1,
-          }}
-        >
-          <Text style={{ color: "#ffd9ff", fontWeight: "800" }}>
-            {loggingOut ? "Logging out..." : "Logout"}
+            <Pressable
+              onPress={handleLogout}
+              disabled={loggingOut || disconnectingTwitter}
+              style={{
+                marginTop: 12,
+                borderRadius: 10,
+                paddingVertical: 10,
+                borderWidth: 1,
+                borderColor: "#5f2128",
+                backgroundColor: "#2b1115",
+                opacity: loggingOut || disconnectingTwitter ? 0.7 : 1,
+              }}
+            >
+              <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
+                {loggingOut ? "Logging out..." : "Logout"}
+              </Text>
+            </Pressable>
+
+          </View>
+        </View>
+      ) : (
+        <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
+          <Text style={{ color: "#aaa" }}>
+            {!twitterProfile
+              ? "Connect Twitter on Home first, then create your wallet."
+              : walletError || "No wallet address found yet."}
           </Text>
-        </Pressable>
+          {twitterProfile ? (
+            <Pressable
+              onPress={handleCreateWallet}
+              style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
+            >
+              <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Privy Wallet</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
       </ScrollView>
     </SafeAreaView>
   );

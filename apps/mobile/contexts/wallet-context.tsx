@@ -110,39 +110,6 @@ const createUuidV4 = () =>
     return value.toString(16);
   });
 
-const getTwitterAccountFromPrivyUser = (user: any): TwitterProfile | null => {
-  const linkedAccounts = Array.isArray(user?.linkedAccounts) ? user.linkedAccounts : [];
-
-  const twitterAccount = linkedAccounts.find((account: any) => {
-    const type = String(account?.type || "").toLowerCase();
-    const provider = String(account?.provider || "").toLowerCase();
-
-    return (
-      type === "twitter_oauth" ||
-      provider === "twitter" ||
-      (type === "oauth" && provider === "twitter")
-    );
-  });
-
-  if (!twitterAccount) return null;
-
-  return {
-    id: String(
-      twitterAccount?.subject ||
-        twitterAccount?.id ||
-        twitterAccount?.userId ||
-        twitterAccount?.username ||
-        ""
-    ),
-    username: String(
-      twitterAccount?.username ||
-        twitterAccount?.name ||
-        twitterAccount?.handle ||
-        "twitter"
-    ),
-  };
-};
-
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const { user, isReady } = usePrivy();
   const solanaWallet = useEmbeddedSolanaWallet();
@@ -169,20 +136,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     solanaRef.current = solanaWallet;
   }, [solanaWallet]);
 
-  // Sync Twitter profile from real Privy session.
-  useEffect(() => {
-    if (!isReady) return;
-
-    if (!user) {
-      setTwitterProfile(null);
-      return;
-    }
-
-    const profile = getTwitterAccountFromPrivyUser(user);
-    setTwitterProfile(profile);
-  }, [isReady, user]);
-
-  // Hydrate wallet from Privy.
+  // Hydrate wallet address from Privy session when available.
   useEffect(() => {
     if (!isReady) return;
 
@@ -195,7 +149,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Do not clear while a Privy user exists and wallet state may still be hydrating.
+    // Important:
+    // Do NOT clear wallet immediately while Privy is hydrating or wallet state
+    // hasn't propagated yet. Only clear if Privy is ready and there is no user.
     if (!user) {
       setWalletAddress(null);
       setTradingWalletAddress(null);
@@ -279,6 +235,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         address = getAddressFromProvider(provider);
       }
 
+      // Give Privy time to propagate wallet state.
       for (let i = 0; !address && i < 15; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 200));
         address = getAddressFromState(solanaRef.current);
@@ -346,7 +303,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       typeof solanaRef.current.create === "function"
     ) {
       const provider = await solanaRef.current.create();
-      if (provider) return provider;
+      if (provider) {
+        return provider;
+      }
     }
 
     throw new Error("Privy Solana provider unavailable");
