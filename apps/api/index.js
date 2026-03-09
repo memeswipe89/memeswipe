@@ -17,18 +17,20 @@ CONFIG
 
 const MORALIS_API_KEY = process.env.MORALIS_API_KEY || "";
 
-// Moralis: Pump.fun graduated tokens
 const MORALIS_GRADUATED_URL =
   "https://solana-gateway.moralis.io/token/mainnet/exchange/pumpfun/graduated";
 
-// Dexscreener: multiple token addresses at once (up to 30)
 const DEXSCREENER_MULTI_TOKEN_URL =
   "https://api.dexscreener.com/tokens/v1/solana";
 
-// Filters for Memeswipe feed
-const MIN_LIQUIDITY_USD = 20000;
-const MIN_VOLUME_24H_USD = 10000;
-const MAX_RESULTS = 50;
+// Make filters less strict so you get more than 2-4 tokens
+const MIN_LIQUIDITY_USD = 8000;
+const MIN_VOLUME_24H_USD = 2000;
+
+// How many tokens the mobile app asks for per page
+const DEFAULT_PAGE_LIMIT = 50;
+
+// Cache
 const CACHE_TIME_MS = 20 * 1000;
 
 let graduatedCache = null;
@@ -67,19 +69,16 @@ function formatPair(pair) {
     address: pair.baseToken?.address || "",
 
     priceUsd: pair.priceUsd ? Number(pair.priceUsd) : null,
-    price: pair.priceUsd ? Number(pair.priceUsd) : null,
-
     liquidityUsd: pair.liquidity?.usd || 0,
-    liquidity: pair.liquidity?.usd || 0,
+    volume24hUsd: pair.volume?.h24 || 0,
+    marketCapUsd: pair.marketCap || null,
+    change24hPct: 0,
 
-    volume24h: pair.volume?.h24 || 0,
-    volume: pair.volume?.h24 || 0,
-
-    marketCap: pair.marketCap || null,
-    mcap: pair.marketCap || null,
-
-    fdv: pair.fdv || null,
-    createdAt: pair.pairCreatedAt || null,
+    chartData: [],
+    graduatedAt: pair.pairCreatedAt || null,
+    graduationTime: pair.pairCreatedAt
+      ? new Date(pair.pairCreatedAt).toLocaleString()
+      : "Live now",
 
     image: pair.info?.imageUrl || null,
     imageUrl: pair.info?.imageUrl || null,
@@ -136,46 +135,64 @@ function printTokenNamesToTerminal(tokens, label = "TOKENS") {
 
 /*
 ==============================
-MORALIS: GET GRADUATED TOKENS
+MORALIS
 ==============================
 */
 
-async function fetchGraduatedTokenAddresses() {
+async function fetchGraduatedTokenAddresses(limitWanted = 120) {
   if (!MORALIS_API_KEY) {
     throw new Error("Missing MORALIS_API_KEY");
   }
 
-  const response = await fetch(MORALIS_GRADUATED_URL, {
-    method: "GET",
-    headers: {
-      "X-Api-Key": MORALIS_API_KEY,
-      Accept: "application/json",
-    },
-  });
+  let cursor = null;
+  const addresses = [];
+  let safety = 0;
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Moralis graduated API failed: ${response.status} ${text}`);
+  while (addresses.length < limitWanted && safety < 10) {
+    const url = new URL(MORALIS_GRADUATED_URL);
+    url.searchParams.set("limit", "100");
+    if (cursor) {
+      url.searchParams.set("cursor", cursor);
+    }
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        "X-Api-Key": MORALIS_API_KEY,
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Moralis graduated API failed: ${response.status} ${text}`);
+    }
+
+    const data = await response.json();
+
+    const rawItems = Array.isArray(data)
+      ? data
+      : Array.isArray(data.result)
+      ? data.result
+      : Array.isArray(data.tokens)
+      ? data.tokens
+      : [];
+
+    const pageAddresses = rawItems.map(normalizeAddress).filter(Boolean);
+    addresses.push(...pageAddresses);
+
+    cursor = data.cursor || null;
+    if (!cursor) break;
+
+    safety += 1;
   }
 
-  const data = await response.json();
-
-  const rawItems = Array.isArray(data)
-    ? data
-    : Array.isArray(data.result)
-    ? data.result
-    : Array.isArray(data.tokens)
-    ? data.tokens
-    : [];
-
-  const addresses = rawItems.map(normalizeAddress).filter(Boolean);
-
-  return [...new Set(addresses)];
+  return [...new Set(addresses)].slice(0, limitWanted);
 }
 
 /*
 ==============================
-DEXSCREENER: ENRICH TOKENS
+DEXSCREENER
 ==============================
 */
 
@@ -206,8 +223,8 @@ async function fetchDexscreenerPairsForAddresses(addresses) {
   return allPairs;
 }
 
-async function getGraduatedMemeswipeFeed() {
-  const tokenAddresses = await fetchGraduatedTokenAddresses();
+async function buildGraduatedFeed() {
+  const tokenAddresses = await fetchGraduatedTokenAddresses(180);
 
   if (!tokenAddresses.length) {
     return [];
@@ -238,12 +255,13 @@ async function getGraduatedMemeswipeFeed() {
   }
 
   feed.sort((a, b) => {
-    const createdDiff = (b.createdAt || 0) - (a.createdAt || 0);
-    if (createdDiff !== 0) return createdDiff;
-    return (b.volume24h || 0) - (a.volume24h || 0);
+    const createdA = new Date(a.graduatedAt || 0).getTime() || 0;
+    const createdB = new Date(b.graduatedAt || 0).getTime() || 0;
+    if (createdB !== createdA) return createdB - createdA;
+    return (b.volume24hUsd || 0) - (a.volume24hUsd || 0);
   });
 
-  return feed.slice(0, MAX_RESULTS);
+  return feed;
 }
 
 async function getCachedGraduatedFeed() {
@@ -253,7 +271,7 @@ async function getCachedGraduatedFeed() {
     return graduatedCache;
   }
 
-  const feed = await getGraduatedMemeswipeFeed();
+  const feed = await buildGraduatedFeed();
   graduatedCache = feed;
   graduatedCacheTime = now;
 
@@ -274,16 +292,45 @@ app.get("/health", (req, res) => {
   });
 });
 
-/*
-Direct test route
-*/
+app.get("/api/feed/solana/graduated", async (req, res) => {
+  try {
+    console.log("Route hit: /api/feed/solana/graduated");
+
+    const limit = Math.max(
+      1,
+      Math.min(Number(req.query.limit) || DEFAULT_PAGE_LIMIT, 100)
+    );
+    const cursor = req.query.cursor ? Number(req.query.cursor) : 0;
+
+    const fullFeed = await getCachedGraduatedFeed();
+    const start = Number.isFinite(cursor) ? cursor : 0;
+    const end = start + limit;
+
+    const pageTokens = fullFeed.slice(start, end);
+    const nextCursor = end < fullFeed.length ? String(end) : null;
+
+    printTokenNamesToTerminal(pageTokens, "MOBILE GRADUATED FEED PAGE");
+
+    return res.json({
+      tokens: pageTokens,
+      cursor: nextCursor,
+    });
+  } catch (error) {
+    console.error("GET /api/feed/solana/graduated error:", error.message);
+
+    return res.status(500).json({
+      tokens: [],
+      cursor: null,
+      error: "Failed to fetch graduated tokens",
+      details: error.message,
+    });
+  }
+});
+
 app.get("/tokens/graduated", async (req, res) => {
   try {
-    console.log("Route hit: /tokens/graduated");
-
     const feed = await getCachedGraduatedFeed();
     printTokenNamesToTerminal(feed, "DIRECT GRADUATED FEED");
-
     return res.json(feed);
   } catch (error) {
     console.error("GET /tokens/graduated error:", error.message);
@@ -293,118 +340,6 @@ app.get("/tokens/graduated", async (req, res) => {
     });
   }
 });
-
-/*
-Mobile app route
-This should match what mobile is calling
-*/
-app.get("/api/feed/solana/graduated", async (req, res) => {
-  try {
-    console.log("Route hit: /api/feed/solana/graduated");
-
-    const feed = await getCachedGraduatedFeed();
-    printTokenNamesToTerminal(feed, "MOBILE GRADUATED FEED");
-
-    return res.json({
-      tokens: feed,
-      nextCursor: null,
-      hasMore: false,
-      source: "graduated",
-      chain: "solana",
-    });
-  } catch (error) {
-    console.error("GET /api/feed/solana/graduated error:", error.message);
-
-    return res.status(500).json({
-      tokens: [],
-      nextCursor: null,
-      hasMore: false,
-      error: "Failed to fetch graduated tokens",
-      details: error.message,
-    });
-  }
-});
-
-/*
-Optional fallback so other app segments don't crash
-*/
-app.get("/api/feed/:chain/:segment", async (req, res) => {
-  const { chain, segment } = req.params;
-
-  console.log(`Route hit: /api/feed/${chain}/${segment}`);
-
-  if (chain === "solana" && segment === "graduated") {
-    try {
-      const feed = await getCachedGraduatedFeed();
-      printTokenNamesToTerminal(feed, "FALLBACK GRADUATED FEED");
-
-      return res.json({
-        tokens: feed,
-        nextCursor: null,
-        hasMore: false,
-        source: "graduated",
-        chain: "solana",
-      });
-    } catch (error) {
-      return res.status(500).json({
-        tokens: [],
-        nextCursor: null,
-        hasMore: false,
-        error: "Failed to fetch graduated tokens",
-        details: error.message,
-      });
-    }
-  }
-
-  return res.json({
-    tokens: [],
-    nextCursor: null,
-    hasMore: false,
-    source: segment,
-    chain,
-  });
-});
-
-app.get("/token/:address", async (req, res) => {
-  try {
-    const { address } = req.params;
-
-    const url = `${DEXSCREENER_MULTI_TOKEN_URL}/${address}`;
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      const text = await response.text();
-      return res.status(500).json({
-        error: "Failed to fetch token from Dexscreener",
-        details: text,
-      });
-    }
-
-    const data = await response.json();
-    const pairs = Array.isArray(data) ? data : data.pairs || [];
-    const bestPair = pickBestPairForToken(pairs);
-
-    if (!bestPair) {
-      return res.status(404).json({
-        error: "No Solana pair found for this token",
-      });
-    }
-
-    return res.json(formatPair(bestPair));
-  } catch (error) {
-    console.error("GET /token/:address error:", error.message);
-    return res.status(500).json({
-      error: "Failed to fetch token",
-      details: error.message,
-    });
-  }
-});
-
-/*
-==============================
-START SERVER
-==============================
-*/
 
 app.listen(PORT, () => {
   console.log(`🚀 Memeswipe API running on port ${PORT}`);
