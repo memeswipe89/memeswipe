@@ -37,7 +37,7 @@ const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const PAGE_LIMIT = 50;
-const LOW_DECK_THRESHOLD = 12;
+const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
 const MIN_TRADE_AMOUNT_USD = 0.0001;
 const MAX_TRADE_AMOUNT_USD = 500;
@@ -341,7 +341,7 @@ export default function HomeScreen() {
   const canFetchFeed = useCallback(() => {
     const now = Date.now();
     if (now < blockedUntilRef.current) return false;
-    if (now - lastFeedFetchRef.current < 1000) return false;
+    if (now - lastFeedFetchRef.current < 5000) return false;
     lastFeedFetchRef.current = now;
     return true;
   }, []);
