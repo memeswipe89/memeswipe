@@ -1,16 +1,34 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   EmbeddedSolanaWalletState,
-  useCreateGuestAccount,
   useEmbeddedSolanaWallet,
   usePrivy,
 } from "@privy-io/expo";
-import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
 
 export type TwitterProfile = {
   id: string;
   username: string;
+};
+
+type WithdrawResult = {
+  txSignature: string;
+  withdrawnSol: number;
+  remainingSol: number;
 };
 
 type WalletContextValue = {
@@ -25,21 +43,26 @@ type WalletContextValue = {
   getEmbeddedSolanaProvider: () => Promise<any>;
   refreshWalletAddress: () => Promise<string | null>;
   getOrCreateTradingWalletAddress: () => Promise<string>;
-  withdrawFromTradingWallet: (amountSol: number, toAddress?: string) => Promise<{
-    txSignature: string;
-    withdrawnSol: number;
-    remainingSol: number;
-  }>;
+  withdrawFromTradingWallet: (
+    amountSol: number,
+    toAddress?: string
+  ) => Promise<WithdrawResult>;
 };
 
 const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
 const USER_ID_MAP_PREFIX = "@memeswipe:userId:privy:";
 const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const WalletContext = createContext<WalletContextValue | null>(null);
 
-const getAddressFromState = (state: EmbeddedSolanaWalletState): string | null => {
+const getAddressFromState = (
+  state: EmbeddedSolanaWalletState | null | undefined
+): string | null => {
+  if (!state) return null;
+
   if ("wallets" in state && Array.isArray(state.wallets) && state.wallets.length > 0) {
     return state.wallets[0]?.address || null;
   }
@@ -53,7 +76,11 @@ const getAddressFromState = (state: EmbeddedSolanaWalletState): string | null =>
 
 const getAddressFromProvider = (provider: unknown): string | null => {
   if (!provider || typeof provider !== "object") return null;
-  const candidate = provider as { address?: string; publicKey?: unknown };
+
+  const candidate = provider as {
+    address?: string;
+    publicKey?: unknown;
+  };
 
   if (typeof candidate.address === "string" && candidate.address.length > 0) {
     return candidate.address;
@@ -67,16 +94,24 @@ const getAddressFromProvider = (provider: unknown): string | null => {
     const asStringFn = (candidate.publicKey as { toString?: () => string }).toString;
     if (typeof asStringFn === "function") {
       const value = asStringFn.call(candidate.publicKey);
-      if (typeof value === "string" && value.length > 0) return value;
+      if (typeof value === "string" && value.length > 0) {
+        return value;
+      }
     }
   }
 
   return null;
 };
 
+const createUuidV4 = () =>
+  "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
+    const rand = Math.floor(Math.random() * 16);
+    const value = ch === "x" ? rand : (rand & 0x3) | 0x8;
+    return value.toString(16);
+  });
+
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const { user, isReady } = usePrivy();
-  const { create: createGuestAccount } = useCreateGuestAccount();
   const solanaWallet = useEmbeddedSolanaWallet();
 
   const [twitterProfile, setTwitterProfile] = useState<TwitterProfile | null>(null);
@@ -86,6 +121,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [walletError, setWalletError] = useState<string | null>(null);
 
   const readyRef = useRef(isReady);
+  const userRef = useRef(user);
   const solanaRef = useRef(solanaWallet);
 
   useEffect(() => {
@@ -93,36 +129,70 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, [isReady]);
 
   useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
     solanaRef.current = solanaWallet;
+  }, [solanaWallet]);
+
+  // Hydrate wallet address from Privy session when available.
+  useEffect(() => {
+    if (!isReady) return;
+
     const address = getAddressFromState(solanaWallet);
+
     if (address) {
       setWalletAddress(address);
       setTradingWalletAddress(address);
       setWalletError(null);
       return;
     }
-    // No active embedded wallet in current Privy session; clear stale local state.
-    setWalletAddress(null);
-    setTradingWalletAddress(null);
-  }, [solanaWallet]);
 
-  const createUuidV4 = () =>
-    "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
-      const rand = Math.floor(Math.random() * 16);
-      const value = ch === "x" ? rand : (rand & 0x3) | 0x8;
-      return value.toString(16);
-    });
+    // Important:
+    // Do NOT clear wallet immediately while Privy is hydrating or wallet state
+    // hasn't propagated yet. Only clear if Privy is ready and there is no user.
+    if (!user) {
+      setWalletAddress(null);
+      setTradingWalletAddress(null);
+      setWalletError(null);
+    }
+  }, [isReady, user, solanaWallet]);
 
-  const getOrCreateLocalUserId = useCallback(async () => {
-    const privyUserId = typeof (user as any)?.id === "string" ? ((user as any).id as string) : null;
+  const waitForPrivyReady = useCallback(async () => {
+    const startedAt = Date.now();
+
+    while (!readyRef.current && Date.now() - startedAt < 10000) {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+
+    if (!readyRef.current) {
+      throw new Error("Privy SDK is still loading. Please try again.");
+    }
+  }, []);
+
+  const requirePrivyUser = useCallback(async () => {
+    await waitForPrivyReady();
+
+    if (!userRef.current) {
+      throw new Error("Please connect your Twitter account first.");
+    }
+  }, [waitForPrivyReady]);
+
+  const getOrCreateLocalUserId = useCallback(async (): Promise<string> => {
+    const privyUserId =
+      typeof (user as any)?.id === "string" ? ((user as any).id as string) : null;
+
     const existing = await AsyncStorage.getItem(LOCAL_USER_ID_KEY);
 
-    // Keep a stable local id per Privy account, but never inherit another user's id.
     if (privyUserId) {
       const mapKey = `${USER_ID_MAP_PREFIX}${privyUserId}`;
       const mapped = await AsyncStorage.getItem(mapKey);
+
       if (mapped && UUID_RE.test(mapped)) {
-        if (existing !== mapped) await AsyncStorage.setItem(LOCAL_USER_ID_KEY, mapped);
+        if (existing !== mapped) {
+          await AsyncStorage.setItem(LOCAL_USER_ID_KEY, mapped);
+        }
         return mapped;
       }
 
@@ -132,122 +202,42 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       return stable;
     }
 
-    if (existing && UUID_RE.test(existing)) return existing;
+    if (existing && UUID_RE.test(existing)) {
+      return existing;
+    }
+
     const next = createUuidV4();
     await AsyncStorage.setItem(LOCAL_USER_ID_KEY, next);
     return next;
   }, [user]);
 
-  const getOrCreateTradingWalletAddress = async (): Promise<string> => {
-    const embeddedWalletAddress = await getOrCreateEmbeddedWalletAddress();
-    setTradingWalletAddress(embeddedWalletAddress);
-    return embeddedWalletAddress;
-  };
-
-  const withdrawFromTradingWallet = async (amountSol: number, toAddress?: string) => {
-    const destination = String(toAddress || "").trim();
-    if (!destination) throw new Error("Destination wallet address is required");
-    const lamports = Math.floor(Number(amountSol) * 1_000_000_000);
-    if (!Number.isFinite(lamports) || lamports <= 0) throw new Error("Invalid withdraw amount");
-
-    const fromAddress = await getOrCreateEmbeddedWalletAddress();
-    if (!fromAddress) throw new Error("Embedded wallet not found");
-
-    const connection = new Connection(SOLANA_MAINNET_RPC, "confirmed");
-    const provider = await getEmbeddedSolanaProvider();
-    const fromPubkey = new PublicKey(fromAddress);
-    const toPubkey = new PublicKey(destination);
-
-    const { blockhash } = await connection.getLatestBlockhash("finalized");
-    const tx = new Transaction({
-      feePayer: fromPubkey,
-      recentBlockhash: blockhash,
-    }).add(
-      SystemProgram.transfer({
-        fromPubkey,
-        toPubkey,
-        lamports,
-      })
-    );
-
-    let signedTx: Transaction | null = null;
-
-    if (provider && typeof provider.signTransaction === "function") {
-      const signed = await provider.signTransaction({ transaction: tx });
-      if (signed?.signedTransaction?.serialize) {
-        signedTx = signed.signedTransaction as Transaction;
-      }
-    } else if (provider && typeof provider.request === "function") {
-      const signed = await provider.request({
-        method: "signTransaction",
-        params: { transaction: tx },
-      });
-      if (signed?.signedTransaction?.serialize) {
-        signedTx = signed.signedTransaction as Transaction;
-      }
-    }
-
-    if (!signedTx) throw new Error("Embedded wallet could not sign withdraw transaction");
-    const txSignature = await connection.sendRawTransaction(signedTx.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
-    await connection.confirmTransaction(txSignature, "confirmed");
-    const remainingLamports = await connection.getBalance(fromPubkey, "confirmed");
-
-    return {
-      txSignature,
-      withdrawnSol: Number(amountSol),
-      remainingSol: Number(remainingLamports / 1_000_000_000),
-    };
-  };
-
-  const waitForPrivyReady = async () => {
-    const startedAt = Date.now();
-    while (!readyRef.current && Date.now() - startedAt < 10000) {
-      await new Promise((resolve) => setTimeout(resolve, 120));
-    }
-    if (!readyRef.current) {
-      throw new Error("Privy SDK is still loading. Please try again.");
-    }
-  };
-
-  const ensurePrivyUser = async () => {
-    if (user) return;
-    try {
-      await createGuestAccount();
-    } catch (error: any) {
-      const message = String(error?.message || '').toLowerCase();
-      // Privy can throw this if session exists but local hook state is briefly stale.
-      if (message.includes('already logged in') && message.includes('guest account')) {
-        return;
-      }
-      throw error;
-    }
-  };
-
-  const getOrCreateEmbeddedWalletAddress = async (): Promise<string> => {
+  const getOrCreateEmbeddedWalletAddress = useCallback(async (): Promise<string> => {
     try {
       setWalletLoading(true);
       setWalletError(null);
 
-      await waitForPrivyReady();
-      await ensurePrivyUser();
+      await requirePrivyUser();
 
       let address = getAddressFromState(solanaRef.current);
+
       if (address) {
         setWalletAddress(address);
+        setTradingWalletAddress(address);
         return address;
       }
 
-      if ("create" in solanaRef.current && typeof solanaRef.current.create === "function") {
+      if (
+        solanaRef.current &&
+        "create" in solanaRef.current &&
+        typeof solanaRef.current.create === "function"
+      ) {
         const provider = await solanaRef.current.create();
         address = getAddressFromProvider(provider);
       }
 
-      // Give state propagation a moment for wallets[] to update.
-      for (let i = 0; !address && i < 10; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 150));
+      // Give Privy time to propagate wallet state.
+      for (let i = 0; !address && i < 15; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
         address = getAddressFromState(solanaRef.current);
       }
 
@@ -256,6 +246,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       }
 
       setWalletAddress(address);
+      setTradingWalletAddress(address);
+      setWalletError(null);
+
       return address;
     } catch (error: any) {
       const message = error?.message || "Failed to load wallet";
@@ -264,36 +257,134 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setWalletLoading(false);
     }
-  };
+  }, [requirePrivyUser]);
 
-  const refreshWalletAddress = async () => {
+  const refreshWalletAddress = useCallback(async (): Promise<string | null> => {
     try {
       return await getOrCreateEmbeddedWalletAddress();
     } catch {
       return null;
     }
-  };
+  }, [getOrCreateEmbeddedWalletAddress]);
 
-  const getEmbeddedSolanaProvider = async () => {
-    await waitForPrivyReady();
-    await ensurePrivyUser();
+  const getOrCreateTradingWalletAddress = useCallback(async (): Promise<string> => {
+    const embeddedWalletAddress = await getOrCreateEmbeddedWalletAddress();
+    setTradingWalletAddress(embeddedWalletAddress);
+    return embeddedWalletAddress;
+  }, [getOrCreateEmbeddedWalletAddress]);
 
-    const wallets = "wallets" in solanaRef.current ? solanaRef.current.wallets : null;
-    if (Array.isArray(wallets) && wallets.length > 0 && typeof wallets[0]?.getProvider === "function") {
+  const getEmbeddedSolanaProvider = useCallback(async (): Promise<any> => {
+    await requirePrivyUser();
+
+    const wallets =
+      solanaRef.current && "wallets" in solanaRef.current
+        ? solanaRef.current.wallets
+        : null;
+
+    if (
+      Array.isArray(wallets) &&
+      wallets.length > 0 &&
+      typeof wallets[0]?.getProvider === "function"
+    ) {
       return wallets[0].getProvider();
     }
 
-    if ("getProvider" in solanaRef.current && typeof solanaRef.current.getProvider === "function") {
+    if (
+      solanaRef.current &&
+      "getProvider" in solanaRef.current &&
+      typeof solanaRef.current.getProvider === "function"
+    ) {
       return solanaRef.current.getProvider();
     }
 
-    if ("create" in solanaRef.current && typeof solanaRef.current.create === "function") {
+    if (
+      solanaRef.current &&
+      "create" in solanaRef.current &&
+      typeof solanaRef.current.create === "function"
+    ) {
       const provider = await solanaRef.current.create();
-      if (provider) return provider;
+      if (provider) {
+        return provider;
+      }
     }
 
     throw new Error("Privy Solana provider unavailable");
-  };
+  }, [requirePrivyUser]);
+
+  const withdrawFromTradingWallet = useCallback(
+    async (amountSol: number, toAddress?: string): Promise<WithdrawResult> => {
+      const destination = String(toAddress || "").trim();
+      if (!destination) {
+        throw new Error("Destination wallet address is required");
+      }
+
+      const lamports = Math.floor(Number(amountSol) * 1_000_000_000);
+      if (!Number.isFinite(lamports) || lamports <= 0) {
+        throw new Error("Invalid withdraw amount");
+      }
+
+      const fromAddress = await getOrCreateEmbeddedWalletAddress();
+      if (!fromAddress) {
+        throw new Error("Embedded wallet not found");
+      }
+
+      const connection = new Connection(SOLANA_MAINNET_RPC, "confirmed");
+      const provider = await getEmbeddedSolanaProvider();
+
+      const fromPubkey = new PublicKey(fromAddress);
+      const toPubkey = new PublicKey(destination);
+
+      const { blockhash } = await connection.getLatestBlockhash("finalized");
+
+      const tx = new Transaction({
+        feePayer: fromPubkey,
+        recentBlockhash: blockhash,
+      }).add(
+        SystemProgram.transfer({
+          fromPubkey,
+          toPubkey,
+          lamports,
+        })
+      );
+
+      let signedTx: Transaction | null = null;
+
+      if (provider && typeof provider.signTransaction === "function") {
+        const signed = await provider.signTransaction({ transaction: tx });
+        if (signed?.signedTransaction?.serialize) {
+          signedTx = signed.signedTransaction as Transaction;
+        }
+      } else if (provider && typeof provider.request === "function") {
+        const signed = await provider.request({
+          method: "signTransaction",
+          params: { transaction: tx },
+        });
+        if (signed?.signedTransaction?.serialize) {
+          signedTx = signed.signedTransaction as Transaction;
+        }
+      }
+
+      if (!signedTx) {
+        throw new Error("Embedded wallet could not sign withdraw transaction");
+      }
+
+      const txSignature = await connection.sendRawTransaction(signedTx.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+
+      await connection.confirmTransaction(txSignature, "confirmed");
+
+      const remainingLamports = await connection.getBalance(fromPubkey, "confirmed");
+
+      return {
+        txSignature,
+        withdrawnSol: Number(amountSol),
+        remainingSol: Number(remainingLamports / 1_000_000_000),
+      };
+    },
+    [getEmbeddedSolanaProvider, getOrCreateEmbeddedWalletAddress]
+  );
 
   const value = useMemo<WalletContextValue>(
     () => ({
@@ -310,7 +401,19 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       getOrCreateTradingWalletAddress,
       withdrawFromTradingWallet,
     }),
-    [twitterProfile, walletAddress, tradingWalletAddress, walletLoading, walletError]
+    [
+      twitterProfile,
+      walletAddress,
+      tradingWalletAddress,
+      walletLoading,
+      walletError,
+      getOrCreateLocalUserId,
+      getOrCreateEmbeddedWalletAddress,
+      getEmbeddedSolanaProvider,
+      refreshWalletAddress,
+      getOrCreateTradingWalletAddress,
+      withdrawFromTradingWallet,
+    ]
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
@@ -318,8 +421,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
 export function useWalletContext() {
   const context = useContext(WalletContext);
+
   if (!context) {
     throw new Error("useWalletContext must be used inside WalletProvider");
   }
+
   return context;
 }
