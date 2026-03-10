@@ -843,7 +843,9 @@ export default function TradesScreen() {
                 </Text>
               ) : null}
               {item.closeError ? (
-                <Text style={[styles.meta, styles.red]}>Close failed: {item.closeError}</Text>
+                <Text style={[styles.meta, styles.red]}>
+                  Close failed. Try again later or mark as uncloseable.
+                </Text>
               ) : null}
               {item.txSignature ? (
                 <Pressable onPress={() => void openSolscanTx(item.txSignature as string)} style={styles.linkBtn}>
