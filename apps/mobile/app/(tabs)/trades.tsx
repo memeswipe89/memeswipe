@@ -162,7 +162,7 @@ type TradeItem = {
   outAmountRaw: string | null;
   txSignature: string | null;
   closeTxSignature: string | null;
-  closeReason: 'tp' | 'sl' | 'manual' | 'unknown' | null;
+  closeReason: 'tp' | 'sl' | 'manual' | 'unknown' | 'failed' | null;
   closeTriggerPct: number | null;
   entryPriceUsd: number | null;
   closePriceUsd: number | null;
@@ -306,7 +306,10 @@ export default function TradesScreen() {
           txSignature: typeof order.tx_signature === 'string' ? order.tx_signature : null,
           closeTxSignature: typeof order.close_tx_signature === 'string' ? order.close_tx_signature : null,
           closeReason:
-            order.close_reason === 'tp' || order.close_reason === 'sl' || order.close_reason === 'manual'
+            order.close_reason === 'tp' ||
+            order.close_reason === 'sl' ||
+            order.close_reason === 'manual' ||
+            order.close_reason === 'failed'
               ? order.close_reason
               : order.close_reason
                 ? 'unknown'
@@ -612,6 +615,43 @@ export default function TradesScreen() {
     [getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress]
   );
 
+  const markUncloseable = useCallback(
+    async (trade: TradeItem) => {
+      const orderId = trade.id;
+      if (!orderId) return;
+      try {
+        const resolvedUserId = await getOrCreateLocalUserId();
+        if (!resolvedUserId) throw new Error('User id not found');
+        const { response: res, json } = await fetchJsonWithFallback<{ error?: string; success?: boolean }>(
+          [`/api/orders/${encodeURIComponent(orderId)}/close`, `/orders/${encodeURIComponent(orderId)}/close`],
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: resolvedUserId,
+              closeReason: 'failed',
+              closeError: trade.closeError || 'Marked uncloseable by user',
+            }),
+          }
+        );
+        if (!res.ok) throw new Error(json?.error || 'Failed to update order');
+        setTrades((prev) =>
+          prev.map((t) =>
+            t.id === orderId
+              ? {
+                  ...t,
+                  closeReason: 'failed',
+                }
+              : t
+          )
+        );
+      } catch (err: any) {
+        Alert.alert('Update Failed', err?.message || 'Failed to mark as uncloseable');
+      }
+    },
+    [getOrCreateLocalUserId]
+  );
+
   useEffect(() => {
     if (!twitterProfile || closingId) return;
     const now = Date.now();
@@ -815,7 +855,7 @@ export default function TradesScreen() {
                   <Text style={styles.linkBtnText}>View Close Tx</Text>
                 </Pressable>
               ) : null}
-              {item.status === 'open' && !item.closeTxSignature ? (
+              {item.status === 'open' && !item.closeTxSignature && item.closeReason !== 'failed' ? (
                 <Pressable
                   onPress={() => void closeTrade(item)}
                   disabled={closingId === item.id}
@@ -824,6 +864,11 @@ export default function TradesScreen() {
                   <Text style={styles.closeBtnText}>
                     {closingId === item.id ? 'Closing...' : item.closeError ? 'Retry Close' : 'Close Trade'}
                   </Text>
+                </Pressable>
+              ) : null}
+              {item.status === 'open' && !item.closeTxSignature && item.closeError && item.closeReason !== 'failed' ? (
+                <Pressable onPress={() => void markUncloseable(item)} style={styles.closeBtnSecondary}>
+                  <Text style={styles.closeBtnSecondaryText}>Mark Uncloseable</Text>
                 </Pressable>
               ) : null}
                   </>
@@ -906,6 +951,20 @@ const styles = StyleSheet.create({
   },
   closeBtnText: {
     color: '#ffd0d0',
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  closeBtnSecondary: {
+    marginTop: 8,
+    borderRadius: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,120,120,0.6)',
+    backgroundColor: 'transparent',
+  },
+  closeBtnSecondaryText: {
+    color: '#ffb3b3',
     textAlign: 'center',
     fontSize: 12,
     fontWeight: '700',
