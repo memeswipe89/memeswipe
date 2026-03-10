@@ -303,6 +303,23 @@ async function getCachedGraduatedFeed() {
   return feed;
 }
 
+async function fetchSolPriceUsd() {
+  const response = await fetch(
+    "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+    { method: "GET" }
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`SOL price fetch failed: ${response.status} ${text}`);
+  }
+  const json = await response.json();
+  const price = Number(json?.solana?.usd || 0);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("Invalid SOL price response");
+  }
+  return price;
+}
+
 /*
 ==============================
 ROUTES
@@ -349,6 +366,88 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
       error: "Failed to fetch graduated tokens",
       details: error.message,
     });
+  }
+});
+
+app.get("/api/solana/price-usd", async (req, res) => {
+  try {
+    const priceUsd = await fetchSolPriceUsd();
+    return res.json({ priceUsd });
+  } catch (error) {
+    console.error("GET /api/solana/price-usd error:", error.message);
+    return res.status(500).json({ error: "Failed to fetch SOL price", details: error.message });
+  }
+});
+
+app.post("/api/jupiter/swap", async (req, res) => {
+  try {
+    const {
+      inputMint,
+      outputMint,
+      userPublicKey,
+      amountUsd,
+      slippageBps = 100,
+    } = req.body || {};
+
+    if (!inputMint || !outputMint || !userPublicKey) {
+      return res.status(400).json({ error: "Missing swap parameters" });
+    }
+
+    const usdAmount = Number(amountUsd || 0);
+    if (!Number.isFinite(usdAmount) || usdAmount <= 0) {
+      return res.status(400).json({ error: "Invalid amountUsd" });
+    }
+
+    const solPriceUsd = await fetchSolPriceUsd();
+    const amountSol = usdAmount / solPriceUsd;
+    const amountLamports = Math.max(1, Math.floor(amountSol * 1_000_000_000));
+
+    const quoteUrl = new URL("https://quote-api.jup.ag/v6/quote");
+    quoteUrl.searchParams.set("inputMint", inputMint);
+    quoteUrl.searchParams.set("outputMint", outputMint);
+    quoteUrl.searchParams.set("amount", String(amountLamports));
+    quoteUrl.searchParams.set("slippageBps", String(slippageBps));
+
+    const quoteRes = await fetch(quoteUrl.toString(), { method: "GET" });
+    const quoteJson = await quoteRes.json();
+    if (!quoteRes.ok || !quoteJson) {
+      return res.status(500).json({
+        error: "Jupiter quote failed",
+        details: quoteJson?.error || "Unknown error",
+      });
+    }
+
+    const swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        quoteResponse: quoteJson,
+        userPublicKey,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: "auto",
+      }),
+    });
+    const swapJson = await swapRes.json();
+    if (!swapRes.ok || !swapJson?.swapTransaction) {
+      return res.status(500).json({
+        error: "Jupiter swap failed",
+        details: swapJson?.error || "Missing swap transaction",
+      });
+    }
+
+    return res.json({
+      swapTransaction: swapJson.swapTransaction,
+      quote: {
+        inAmount: quoteJson?.inAmount,
+        outAmount: quoteJson?.outAmount,
+        inputMint: quoteJson?.inputMint,
+        outputMint: quoteJson?.outputMint,
+      },
+    });
+  } catch (error) {
+    console.error("POST /api/jupiter/swap error:", error.message);
+    return res.status(500).json({ error: "Failed to build swap", details: error.message });
   }
 });
 
