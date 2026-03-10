@@ -126,7 +126,7 @@ export default function Home() {
       <footer className="py-4 px-4 text-center relative z-10">
         <p className="text-gray-400 mb-4">Coming soon...</p>
         <a
-          href="https://twitter.com/MemeSwipe"
+          href="https://twitter.com/memeswipe89"
           target="_blank"
           rel="noopener noreferrer"
           className="text-blue-400 hover:text-blue-300 transition-colors"
