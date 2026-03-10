@@ -387,6 +387,23 @@ async function fetchCoinGeckoSolPrice() {
   return price;
 }
 
+async function fetchCoinbaseSolPrice() {
+  const response = await fetch("https://api.coinbase.com/v2/prices/SOL-USD/spot", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Coinbase price fetch failed: ${response.status} ${text}`);
+  }
+  const json = JSON.parse(text);
+  const price = Number(json?.data?.amount || 0);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("Invalid Coinbase price response");
+  }
+  return price;
+}
+
 async function fetchSolPriceUsd() {
   const now = Date.now();
   if (solPriceCache && now - solPriceCacheTime < SOL_PRICE_CACHE_TTL_MS) {
@@ -412,6 +429,10 @@ async function fetchSolPriceUsd() {
       solPriceCacheTime = now;
       return { price: quoteResult.price, source: "jupiter-quote" };
     }
+    const coinbasePrice = await fetchCoinbaseSolPrice();
+    solPriceCache = coinbasePrice;
+    solPriceCacheTime = now;
+    return { price: coinbasePrice, source: "coinbase" };
     const price = await fetchCoinGeckoSolPrice();
     solPriceCache = price;
     solPriceCacheTime = now;
@@ -497,6 +518,11 @@ app.get("/api/solana/price-usd", async (req, res) => {
       return res.json({ priceUsd: quoteResult.price, source: "jupiter-quote" });
     }
 
+    const coinbasePrice = await fetchCoinbaseSolPrice();
+    solPriceCache = coinbasePrice;
+    solPriceCacheTime = now;
+    return res.json({ priceUsd: coinbasePrice, source: "coinbase" });
+
     const price = await fetchCoinGeckoSolPrice();
     solPriceCache = price;
     solPriceCacheTime = now;
@@ -506,6 +532,7 @@ app.get("/api/solana/price-usd", async (req, res) => {
       debug: {
         jupiter: { ok: false, error: jupResult.error, status: jupResult.status || null },
         jupiterQuote: { ok: false, error: quoteResult.error, status: quoteResult.status || null },
+        coinbase: { ok: false, error: "unreachable" },
         hasJupKey: Boolean(jupApiKey),
       },
     });
