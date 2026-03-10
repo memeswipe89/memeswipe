@@ -12,6 +12,7 @@ import { Buffer } from 'buffer';
 
 import { API_BASE } from '@/lib/api-base';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
   try {
@@ -24,6 +25,80 @@ const parseApiJson = async <T,>(response: Response): Promise<T> => {
     }
     throw new Error(`Invalid server response (${response.status}): ${preview || 'empty body'}`);
   }
+};
+
+const fetchDexscreenerPrices = async (addresses: string[]) => {
+  if (!addresses.length) return {};
+  const url = `https://api.dexscreener.com/tokens/v1/solana/${addresses.join(',')}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Dexscreener failed: ${res.status} ${text}`);
+  }
+  const data = (await res.json()) as any[];
+  const byToken = new Map<string, any[]>();
+  for (const pair of data || []) {
+    const addr = pair?.baseToken?.address;
+    if (!addr) continue;
+    if (!byToken.has(addr)) byToken.set(addr, []);
+    byToken.get(addr)!.push(pair);
+  }
+  const prices: Record<string, number | null> = {};
+  byToken.forEach((pairs, addr) => {
+    pairs.sort((a, b) => (b?.liquidity?.usd || 0) - (a?.liquidity?.usd || 0));
+    const best = pairs[0];
+    const price = Number(best?.priceUsd || 0);
+    prices[addr] = Number.isFinite(price) && price > 0 ? price : null;
+  });
+  return prices;
+};
+
+const buildJupiterSwapTx = async (params: {
+  inputMint: string;
+  outputMint: string;
+  amountRaw: string;
+  userPublicKey: string;
+  slippageBps: number;
+}) => {
+  const quoteUrl = new URL('https://quote-api.jup.ag/v6/quote');
+  quoteUrl.searchParams.set('inputMint', params.inputMint);
+  quoteUrl.searchParams.set('outputMint', params.outputMint);
+  quoteUrl.searchParams.set('amount', params.amountRaw);
+  quoteUrl.searchParams.set('slippageBps', String(params.slippageBps));
+  const quoteRes = await fetch(quoteUrl.toString());
+  const quoteText = await quoteRes.text();
+  let quoteJson: any = null;
+  try {
+    quoteJson = JSON.parse(quoteText);
+  } catch {
+    quoteJson = null;
+  }
+  if (!quoteRes.ok || !quoteJson || quoteJson?.error) {
+    throw new Error(quoteJson?.error || quoteText || 'Jupiter quote failed');
+  }
+
+  const swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      quoteResponse: quoteJson,
+      userPublicKey: params.userPublicKey,
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: 'auto',
+    }),
+  });
+  const swapText = await swapRes.text();
+  let swapJson: any = null;
+  try {
+    swapJson = JSON.parse(swapText);
+  } catch {
+    swapJson = null;
+  }
+  if (!swapRes.ok || !swapJson?.swapTransaction) {
+    throw new Error(swapJson?.error || swapText || 'Jupiter swap failed');
+  }
+  return { swapTransaction: swapJson.swapTransaction, quote: quoteJson };
 };
 const joinApiUrl = (base: string, path: string) => `${base.replace(/\/+$/, '')}${path}`;
 const fetchJsonWithFallback = async <T,>(
@@ -299,15 +374,21 @@ export default function TradesScreen() {
           )
         );
         if (!addresses.length) return;
-        const { response: res, json } = await fetchJsonWithFallback<{ prices?: Record<string, number | null> }>([
-          `/api/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`,
-          `/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`,
-        ]);
-        if (!res.ok) return;
-        if (!active || !json?.prices) return;
+        let prices: Record<string, number | null> | null = null;
+        try {
+          prices = await fetchDexscreenerPrices(addresses);
+        } catch {
+          const { response: res, json } = await fetchJsonWithFallback<{ prices?: Record<string, number | null> }>([
+            `/api/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`,
+            `/token-prices?addresses=${encodeURIComponent(addresses.join(','))}`,
+          ]);
+          if (!res.ok || !json?.prices) return;
+          prices = json.prices || null;
+        }
+        if (!active || !prices) return;
         setTrades((prev) =>
           prev.map((t) => {
-            const live = Number(json.prices?.[t.tokenAddress]);
+            const live = Number(prices?.[t.tokenAddress]);
             return Number.isFinite(live) && live > 0 ? { ...t, livePriceUsd: live } : t;
           })
         );
@@ -336,21 +417,28 @@ export default function TradesScreen() {
         if (!walletAddress) throw new Error('Embedded wallet address not found');
 
         const closeBuildSlippageBps = [300, 800, 1200, 2000, 3000, 5000];
-        let buildJson: { error?: string; swapTransaction?: string } | null = null;
+        const amountRaw = trade.outAmountRaw;
+        if (!amountRaw) {
+          throw new Error('Missing token amount for close. Reopen the app to refresh order data.');
+        }
+        let buildJson: { swapTransaction?: string } | null = null;
         let lastBuildError: string | null = null;
         for (const slippageBps of closeBuildSlippageBps) {
-          const { response: buildRes, json } = await fetchJsonWithFallback<{ error?: string; swapTransaction?: string }>(
-            ['/api/trades/close/build', '/trades/close/build'],
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: resolvedUserId, orderId, walletAddress, slippageBps }),
-            }
-          );
-          buildJson = json;
-          if (buildRes.ok && buildJson?.swapTransaction) break;
-          lastBuildError = buildJson?.error || `Failed to build close transaction (slippage ${slippageBps})`;
-          buildJson = null;
+          try {
+            const inputMint = trade.tokenAddress;
+            if (!inputMint) throw new Error('Missing token address for close transaction.');
+            const result = await buildJupiterSwapTx({
+              inputMint,
+              outputMint: SOL_MINT,
+              amountRaw,
+              userPublicKey: walletAddress,
+              slippageBps,
+            });
+            buildJson = result;
+            break;
+          } catch (err: any) {
+            lastBuildError = err?.message || `Failed to build close transaction (slippage ${slippageBps})`;
+          }
         }
         if (!buildJson?.swapTransaction) {
           throw new Error(lastBuildError || 'Failed to build close transaction');
@@ -565,14 +653,21 @@ export default function TradesScreen() {
     lastAutoClosePriceFetchRef.current = now;
     void (async () => {
       try {
-        const { response: res, json } = await fetchJsonWithFallback<{ prices?: Record<string, number | null> }>([
-          `/api/token-prices?addresses=${encodeURIComponent(openAddresses.join(','))}`,
-          `/token-prices?addresses=${encodeURIComponent(openAddresses.join(','))}`,
-        ]);
-        if (!res.ok || !json?.prices) return;
+        let prices: Record<string, number | null> | null = null;
+        try {
+          prices = await fetchDexscreenerPrices(openAddresses);
+        } catch {
+          const { response: res, json } = await fetchJsonWithFallback<{ prices?: Record<string, number | null> }>([
+            `/api/token-prices?addresses=${encodeURIComponent(openAddresses.join(','))}`,
+            `/token-prices?addresses=${encodeURIComponent(openAddresses.join(','))}`,
+          ]);
+          if (!res.ok || !json?.prices) return;
+          prices = json.prices || null;
+        }
+        if (!prices) return;
         setTrades((prev) =>
           prev.map((t) => {
-            const live = Number(json.prices?.[t.tokenAddress]);
+            const live = Number(prices?.[t.tokenAddress]);
             return Number.isFinite(live) && live > 0 ? { ...t, livePriceUsd: live } : t;
           })
         );

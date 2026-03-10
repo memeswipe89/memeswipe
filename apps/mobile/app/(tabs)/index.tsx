@@ -954,29 +954,48 @@ export default function HomeScreen() {
 
       for (const slippageBps of SWAP_SLIPPAGE_RETRY_BPS) {
         try {
-          const swapRes = await fetch(`${API_BASE}/api/jupiter/swap`, {
+          const amountUsd = Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD);
+          const amountSol = amountUsd / liveSolPriceUsd;
+          const amountLamports = Math.max(1, Math.floor(amountSol * 1_000_000_000));
+
+          const quoteUrl = new URL('https://quote-api.jup.ag/v6/quote');
+          quoteUrl.searchParams.set('inputMint', SOL_MINT);
+          quoteUrl.searchParams.set('outputMint', token.address);
+          quoteUrl.searchParams.set('amount', String(amountLamports));
+          quoteUrl.searchParams.set('slippageBps', String(slippageBps));
+
+          const quoteRes = await fetch(quoteUrl.toString());
+          const quoteText = await quoteRes.text();
+          let quoteJson: any = null;
+          try {
+            quoteJson = JSON.parse(quoteText);
+          } catch {
+            quoteJson = null;
+          }
+          if (!quoteRes.ok || !quoteJson || quoteJson?.error) {
+            throw new Error(quoteJson?.error || quoteText || 'Jupiter quote failed');
+          }
+
+          const swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              inputMint: SOL_MINT,
-              outputMint: token.address,
+              quoteResponse: quoteJson,
               userPublicKey: resolvedWalletAddress,
-              amountUsd: Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD),
-              slippageBps,
+              wrapAndUnwrapSol: true,
+              dynamicComputeUnitLimit: true,
+              prioritizationFeeLamports: 'auto',
             }),
           });
-          const swapJson = await parseApiJson<{
-            error?: string;
-            swapTransaction?: string;
-            quote?: { inAmount?: string; outAmount?: string; inputMint?: string; outputMint?: string };
-          }>(swapRes);
+          const swapText = await swapRes.text();
+          let swapJson: any = null;
+          try {
+            swapJson = JSON.parse(swapText);
+          } catch {
+            swapJson = null;
+          }
           if (!swapRes.ok || !swapJson?.swapTransaction) {
-            const details = (swapJson as any)?.details;
-            const status = (swapJson as any)?.status;
-            const message = details
-              ? `${swapJson?.error || 'Jupiter swap failed'}: ${details}`
-              : swapJson?.error || 'Failed to build Jupiter swap transaction';
-            throw new Error(status ? `${message} (status ${status})` : message);
+            throw new Error(swapJson?.error || swapText || 'Jupiter swap failed');
           }
 
           const provider = await getEmbeddedSolanaProvider();
@@ -1011,18 +1030,18 @@ export default function HomeScreen() {
           console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
             signature,
             slippageBps,
-            inputMint: swapJson.quote?.inputMint || SOL_MINT,
-            outputMint: swapJson.quote?.outputMint || token.address,
-            inAmount: swapJson.quote?.inAmount,
-            outAmount: swapJson.quote?.outAmount,
+            inputMint: quoteJson?.inputMint || SOL_MINT,
+            outputMint: quoteJson?.outputMint || token.address,
+            inAmount: quoteJson?.inAmount,
+            outAmount: quoteJson?.outAmount,
           });
 
           return {
             signature,
-            inputMint: swapJson.quote?.inputMint || SOL_MINT,
-            outputMint: swapJson.quote?.outputMint || token.address,
-            inAmountRaw: String(swapJson.quote?.inAmount || ''),
-            outAmountRaw: String(swapJson.quote?.outAmount || ''),
+            inputMint: quoteJson?.inputMint || SOL_MINT,
+            outputMint: quoteJson?.outputMint || token.address,
+            inAmountRaw: String(quoteJson?.inAmount || ''),
+            outAmountRaw: String(quoteJson?.outAmount || ''),
           };
         } catch (error: any) {
           lastError = error;

@@ -37,6 +37,32 @@ let graduatedCache = null;
 let graduatedCacheTime = 0;
 let graduatedLastGoodFeed = null;
 
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const SUPABASE_SERVICE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || "";
+
+async function supabaseRequest(path, options = {}) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    throw new Error("Supabase credentials missing");
+  }
+  const url = `${SUPABASE_URL.replace(/\/$/, "")}/rest/v1/${path.replace(/^\//, "")}`;
+  const headers = {
+    apikey: SUPABASE_SERVICE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+    "Content-Type": "application/json",
+    ...options.headers,
+  };
+  const res = await fetch(url, { ...options, headers });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  return { res, json, text };
+}
+
 const SOL_PRICE_CACHE_TTL_MS = 30 * 1000;
 let solPriceCache = null;
 let solPriceCacheTime = 0;
@@ -919,6 +945,104 @@ app.get("/api/twitter/auth/callback", async (req, res) => {
     twitterAuthStates.delete(state);
     return res.redirect(redirectUrl);
   }
+});
+
+app.get("/api/orders", async (req, res) => {
+  try {
+    const userId = String(req.query.userId || "").trim();
+    const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 500));
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    const { res: sbRes, json, text } = await supabaseRequest(
+      `orders?user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc&limit=${limit}`,
+      { method: "GET" }
+    );
+    if (!sbRes.ok) {
+      return res.status(500).json({ error: "Failed to load orders", details: text });
+    }
+    return res.json({ orders: Array.isArray(json) ? json : [] });
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to load orders", details: error.message });
+  }
+});
+
+app.post("/api/orders", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const userId = String(body.userId || "").trim();
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    const payload = {
+      user_id: userId,
+      chain: body.chain || "solana",
+      token_address: body.tokenAddress || null,
+      token_name: body.tokenName || null,
+      token_symbol: body.tokenSymbol || null,
+      amount_usd: body.amountUsd || 0,
+      tp_roi: body.tpRoi || 0,
+      stop_loss: body.stopLoss ?? null,
+      price_usd: body.priceUsd ?? null,
+      liquidity_usd: body.liquidityUsd ?? null,
+      volume_24h_usd: body.volume24hUsd ?? null,
+      market_cap_usd: body.marketCapUsd ?? null,
+      change_24h_pct: body.change24hPct ?? null,
+      graduation_time: body.graduationTime ?? null,
+      chart_data: Array.isArray(body.chartData) ? JSON.stringify(body.chartData) : body.chartData ?? null,
+      tx_signature: body.txSignature ?? null,
+      input_mint: body.inputMint ?? null,
+      output_mint: body.outputMint ?? null,
+      in_amount_raw: body.inAmountRaw ?? null,
+      out_amount_raw: body.outAmountRaw ?? null,
+      status: "filled",
+    };
+    const { res: sbRes, json, text } = await supabaseRequest("orders", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(payload),
+    });
+    if (!sbRes.ok) {
+      return res.status(500).json({ error: "Failed to create order", details: text });
+    }
+    return res.json({ order: Array.isArray(json) ? json[0] : json });
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to create order", details: error.message });
+  }
+});
+
+app.patch("/api/orders/:id/close", async (req, res) => {
+  try {
+    const orderId = String(req.params.id || "").trim();
+    const body = req.body || {};
+    const userId = String(body.userId || "").trim();
+    if (!orderId) return res.status(400).json({ error: "Missing order id" });
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    const update = {
+      status: "closed",
+      close_reason: body.closeReason ?? null,
+      close_trigger_pct: body.closeTriggerPct ?? null,
+      close_price_usd: body.closePriceUsd ?? null,
+      close_pnl_pct: body.closePnlPct ?? null,
+      close_pnl_usd: body.closePnlUsd ?? null,
+      close_tx_signature: body.closeTxSignature ?? null,
+      closed_at: new Date().toISOString(),
+    };
+    const { res: sbRes, json, text } = await supabaseRequest(
+      `orders?id=eq.${encodeURIComponent(orderId)}&user_id=eq.${encodeURIComponent(userId)}`,
+      {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(update),
+      }
+    );
+    if (!sbRes.ok) {
+      return res.status(500).json({ error: "Failed to close order", details: text });
+    }
+    return res.json({ success: true, order: Array.isArray(json) ? json[0] : json });
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to close order", details: error.message });
+  }
+});
+
+app.post("/api/favorites", (req, res) => {
+  return res.json({ ok: true });
 });
 
 app.get("/tokens/graduated", async (req, res) => {
