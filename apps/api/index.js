@@ -336,6 +336,40 @@ async function fetchJupiterSolPrice(jupApiKey) {
   }
 }
 
+async function fetchJupiterQuoteSolPrice() {
+  const solMint = "So11111111111111111111111111111111111111112";
+  const usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const amountLamports = 1_000_000_000; // 1 SOL
+
+  try {
+    const quoteUrl = new URL("https://quote-api.jup.ag/v6/quote");
+    quoteUrl.searchParams.set("inputMint", solMint);
+    quoteUrl.searchParams.set("outputMint", usdcMint);
+    quoteUrl.searchParams.set("amount", String(amountLamports));
+    quoteUrl.searchParams.set("slippageBps", "50");
+
+    const quoteRes = await fetch(quoteUrl.toString(), { method: "GET" });
+    const quoteJson = await quoteRes.json();
+    const outAmountRaw = Number(quoteJson?.outAmount || 0);
+    if (!quoteRes.ok || !Number.isFinite(outAmountRaw) || outAmountRaw <= 0) {
+      return {
+        ok: false,
+        error: quoteJson?.error || "quote_failed",
+        status: quoteRes.status,
+      };
+    }
+
+    const price = outAmountRaw / 1_000_000; // USDC has 6 decimals
+    if (!Number.isFinite(price) || price <= 0) {
+      return { ok: false, error: "invalid_quote_price" };
+    }
+
+    return { ok: true, price };
+  } catch (error) {
+    return { ok: false, error: error.message || "quote_fetch_failed" };
+  }
+}
+
 async function fetchCoinGeckoSolPrice() {
   const response = await fetch(
     "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
@@ -371,6 +405,12 @@ async function fetchSolPriceUsd() {
       solPriceCache = jupResult.price;
       solPriceCacheTime = now;
       return { price: jupResult.price, source: "jupiter" };
+    }
+    const quoteResult = await fetchJupiterQuoteSolPrice();
+    if (quoteResult.ok) {
+      solPriceCache = quoteResult.price;
+      solPriceCacheTime = now;
+      return { price: quoteResult.price, source: "jupiter-quote" };
     }
     const price = await fetchCoinGeckoSolPrice();
     solPriceCache = price;
@@ -450,6 +490,13 @@ app.get("/api/solana/price-usd", async (req, res) => {
       return res.json({ priceUsd: jupResult.price, source: "jupiter" });
     }
 
+    const quoteResult = await fetchJupiterQuoteSolPrice();
+    if (quoteResult.ok) {
+      solPriceCache = quoteResult.price;
+      solPriceCacheTime = now;
+      return res.json({ priceUsd: quoteResult.price, source: "jupiter-quote" });
+    }
+
     const price = await fetchCoinGeckoSolPrice();
     solPriceCache = price;
     solPriceCacheTime = now;
@@ -458,6 +505,7 @@ app.get("/api/solana/price-usd", async (req, res) => {
       source: "coingecko",
       debug: {
         jupiter: { ok: false, error: jupResult.error, status: jupResult.status || null },
+        jupiterQuote: { ok: false, error: quoteResult.error, status: quoteResult.status || null },
         hasJupKey: Boolean(jupApiKey),
       },
     });
