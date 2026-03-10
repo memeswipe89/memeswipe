@@ -36,6 +36,10 @@ const CACHE_TIME_MS = 20 * 1000;
 let graduatedCache = null;
 let graduatedCacheTime = 0;
 
+const SOL_PRICE_CACHE_TTL_MS = 30 * 1000;
+let solPriceCache = null;
+let solPriceCacheTime = 0;
+
 const crypto = require("crypto");
 
 // In-memory Twitter connection store and auth state (demo/dev).
@@ -304,20 +308,59 @@ async function getCachedGraduatedFeed() {
 }
 
 async function fetchSolPriceUsd() {
-  const response = await fetch(
-    "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
-    { method: "GET" }
-  );
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`SOL price fetch failed: ${response.status} ${text}`);
+  const now = Date.now();
+  if (solPriceCache && now - solPriceCacheTime < SOL_PRICE_CACHE_TTL_MS) {
+    return solPriceCache;
   }
-  const json = await response.json();
-  const price = Number(json?.solana?.usd || 0);
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error("Invalid SOL price response");
+
+  const jupApiKey = process.env.JUP_API_KEY || process.env.JUPITER_API_KEY || "";
+  const solMint = "So11111111111111111111111111111111111111112";
+
+  try {
+    if (jupApiKey) {
+      const jupRes = await fetch(`https://api.jup.ag/price/v3?ids=${solMint}`, {
+        method: "GET",
+        headers: { "x-api-key": jupApiKey },
+      });
+      const jupJson = await jupRes.json();
+      const price =
+        Number(jupJson?.data?.[solMint]?.price) ||
+        Number(jupJson?.[solMint]?.usdPrice) ||
+        Number(jupJson?.data?.[solMint]?.usdPrice) ||
+        0;
+      if (jupRes.ok && Number.isFinite(price) && price > 0) {
+        solPriceCache = price;
+        solPriceCacheTime = now;
+        return price;
+      }
+    }
+  } catch (error) {
+    console.error("Jupiter price fetch failed:", error.message);
   }
-  return price;
+
+  try {
+    const response = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+      { method: "GET" }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`SOL price fetch failed: ${response.status} ${text}`);
+    }
+    const json = await response.json();
+    const price = Number(json?.solana?.usd || 0);
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error("Invalid SOL price response");
+    }
+    solPriceCache = price;
+    solPriceCacheTime = now;
+    return price;
+  } catch (error) {
+    if (solPriceCache) {
+      return solPriceCache;
+    }
+    throw error;
+  }
 }
 
 /*
