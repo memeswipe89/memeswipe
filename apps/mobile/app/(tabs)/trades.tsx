@@ -565,17 +565,6 @@ export default function TradesScreen() {
           if (!resolvedUserId) {
             resolvedUserId = await getOrCreateLocalUserId();
           }
-          const pnlPct = getRealtimePnlPct(trade);
-          const pnlUsd = pnlPct !== null ? (trade.displayAmountUsd * pnlPct) / 100 : null;
-          const fallbackReason = options?.closeReason ?? 'manual';
-          console.log('[TRADES] fallback close payload', {
-            orderId,
-            closeReason: fallbackReason,
-            closeTriggerPct: options?.closeTriggerPct ?? null,
-            closePriceUsd: trade.livePriceUsd ?? null,
-            closePnlPct: pnlPct,
-            closePnlUsd: pnlUsd,
-          });
           const { response: fallbackRes, json: fallbackJson, url } = await fetchJsonWithFallback<{
             error?: string;
             success?: boolean;
@@ -588,44 +577,23 @@ export default function TradesScreen() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 userId: resolvedUserId,
-                closeReason: fallbackReason,
-                closeTriggerPct: options?.closeTriggerPct ?? null,
-                closePriceUsd: trade.livePriceUsd ?? null,
-                closePnlPct: pnlPct,
-                closePnlUsd: pnlUsd,
+                closeError: message,
               }),
             }
           );
-          console.log('[TRADES] fallback close response', {
+          console.log('[TRADES] close error saved', {
             orderId,
             url,
             status: fallbackRes.status,
             body: fallbackJson,
           });
-          if (!fallbackRes.ok) throw new Error(fallbackJson?.error || 'Failed to close order');
-          setTrades((prev) =>
-            prev.map((t) =>
-              t.id === orderId
-                ? {
-                    ...t,
-                    status: 'closed',
-                    closeReason: fallbackReason,
-                    closeTriggerPct: options?.closeTriggerPct ?? t.closeTriggerPct,
-                    closePriceUsd: trade.livePriceUsd ?? t.closePriceUsd,
-                    closePnlPct: pnlPct ?? t.closePnlPct,
-                    closePnlUsd: pnlUsd ?? t.closePnlUsd,
-                  }
-                : t
-            )
-          );
-          if (pnlUsd !== null) await addBalance(pnlUsd);
-          if (!options?.silent) Alert.alert('Trade Closed', `${trade.symbol.toUpperCase()} closed successfully.`);
-        } catch (fallbackErr: any) {
-          if (options?.silent) {
-            autoCloseRetryAfterRef.current[orderId] = Date.now() + 30_000;
-          } else {
-            Alert.alert('Close Trade Failed', fallbackErr?.message || message);
-          }
+        } catch {
+          // ignore close-error persistence
+        }
+        if (options?.silent) {
+          autoCloseRetryAfterRef.current[orderId] = Date.now() + 30_000;
+        } else {
+          Alert.alert('Close Trade Failed', message);
         }
       } finally {
         setClosingId(null);
@@ -833,7 +801,7 @@ export default function TradesScreen() {
                   <Text style={styles.linkBtnText}>View Close Tx</Text>
                 </Pressable>
               ) : null}
-              {item.status === 'open' ? (
+              {item.status === 'open' && !item.closeTxSignature ? (
                 <Pressable
                   onPress={() => void closeTrade(item)}
                   disabled={closingId === item.id}
