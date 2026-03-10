@@ -971,7 +971,12 @@ export default function HomeScreen() {
             quote?: { inAmount?: string; outAmount?: string; inputMint?: string; outputMint?: string };
           }>(swapRes);
           if (!swapRes.ok || !swapJson?.swapTransaction) {
-            throw new Error(swapJson?.error || 'Failed to build Jupiter swap transaction');
+            const details = (swapJson as any)?.details;
+            const status = (swapJson as any)?.status;
+            const message = details
+              ? `${swapJson?.error || 'Jupiter swap failed'}: ${details}`
+              : swapJson?.error || 'Failed to build Jupiter swap transaction';
+            throw new Error(status ? `${message} (status ${status})` : message);
           }
 
           const provider = await getEmbeddedSolanaProvider();
