@@ -437,7 +437,7 @@ export default function TradesScreen() {
         const walletAddress = await getOrCreateTradingWalletAddress();
         if (!walletAddress) throw new Error('Embedded wallet address not found');
 
-        const closeBuildSlippageBps = [300, 800, 1200, 2000, 3000, 5000];
+        const closeBuildSlippageBps = [300, 800, 1200, 2000, 3000, 5000, 8000, 12000];
         const amountRaw = trade.outAmountRaw;
         if (!amountRaw) {
           throw new Error('Missing token amount for close. Reopen the app to refresh order data.');
@@ -815,7 +815,7 @@ export default function TradesScreen() {
                   style={[styles.closeBtn, closingId === item.id && { opacity: 0.6 }]}
                 >
                   <Text style={styles.closeBtnText}>
-                    {closingId === item.id ? 'Closing...' : 'Close Trade'}
+                    {closingId === item.id ? 'Closing...' : item.closeError ? 'Retry Close' : 'Close Trade'}
                   </Text>
                 </Pressable>
               ) : null}
