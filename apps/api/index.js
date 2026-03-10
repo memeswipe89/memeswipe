@@ -307,6 +307,52 @@ async function getCachedGraduatedFeed() {
   return feed;
 }
 
+async function fetchJupiterSolPrice(jupApiKey) {
+  const solMint = "So11111111111111111111111111111111111111112";
+  if (!jupApiKey) {
+    return { ok: false, error: "missing_api_key" };
+  }
+  try {
+    const jupRes = await fetch(`https://api.jup.ag/price/v3?ids=${solMint}`, {
+      method: "GET",
+      headers: { "x-api-key": jupApiKey },
+    });
+    const jupJson = await jupRes.json();
+    const price =
+      Number(jupJson?.data?.[solMint]?.price) ||
+      Number(jupJson?.[solMint]?.usdPrice) ||
+      Number(jupJson?.data?.[solMint]?.usdPrice) ||
+      0;
+    if (jupRes.ok && Number.isFinite(price) && price > 0) {
+      return { ok: true, price };
+    }
+    return {
+      ok: false,
+      error: jupJson?.error || jupJson?.message || "invalid_response",
+      status: jupRes.status,
+    };
+  } catch (error) {
+    return { ok: false, error: error.message || "jupiter_fetch_failed" };
+  }
+}
+
+async function fetchCoinGeckoSolPrice() {
+  const response = await fetch(
+    "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+    { method: "GET" }
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`SOL price fetch failed: ${response.status} ${text}`);
+  }
+  const json = JSON.parse(text);
+  const price = Number(json?.solana?.usd || 0);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("Invalid SOL price response");
+  }
+  return price;
+}
+
 async function fetchSolPriceUsd() {
   const now = Date.now();
   if (solPriceCache && now - solPriceCacheTime < SOL_PRICE_CACHE_TTL_MS) {
@@ -319,44 +365,14 @@ async function fetchSolPriceUsd() {
     process.env.jup_api_key ||
     process.env.jupiter_api_key ||
     "";
-  const solMint = "So11111111111111111111111111111111111111112";
-
   try {
-    if (jupApiKey) {
-      const jupRes = await fetch(`https://api.jup.ag/price/v3?ids=${solMint}`, {
-        method: "GET",
-        headers: { "x-api-key": jupApiKey },
-      });
-      const jupJson = await jupRes.json();
-      const price =
-        Number(jupJson?.data?.[solMint]?.price) ||
-        Number(jupJson?.[solMint]?.usdPrice) ||
-        Number(jupJson?.data?.[solMint]?.usdPrice) ||
-        0;
-      if (jupRes.ok && Number.isFinite(price) && price > 0) {
-        solPriceCache = price;
-        solPriceCacheTime = now;
-        return { price, source: "jupiter" };
-      }
+    const jupResult = await fetchJupiterSolPrice(jupApiKey);
+    if (jupResult.ok) {
+      solPriceCache = jupResult.price;
+      solPriceCacheTime = now;
+      return { price: jupResult.price, source: "jupiter" };
     }
-  } catch (error) {
-    console.error("Jupiter price fetch failed:", error.message);
-  }
-
-  try {
-    const response = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
-      { method: "GET" }
-    );
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`SOL price fetch failed: ${response.status} ${text}`);
-    }
-    const json = await response.json();
-    const price = Number(json?.solana?.usd || 0);
-    if (!Number.isFinite(price) || price <= 0) {
-      throw new Error("Invalid SOL price response");
-    }
+    const price = await fetchCoinGeckoSolPrice();
     solPriceCache = price;
     solPriceCacheTime = now;
     return { price, source: "coingecko" };
@@ -419,11 +435,46 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
 
 app.get("/api/solana/price-usd", async (req, res) => {
   try {
-    const { price, source } = await fetchSolPriceUsd();
-    return res.json({ priceUsd: price, source });
+    const now = Date.now();
+    const jupApiKey =
+      process.env.JUP_API_KEY ||
+      process.env.JUPITER_API_KEY ||
+      process.env.jup_api_key ||
+      process.env.jupiter_api_key ||
+      "";
+
+    const jupResult = await fetchJupiterSolPrice(jupApiKey);
+    if (jupResult.ok) {
+      solPriceCache = jupResult.price;
+      solPriceCacheTime = now;
+      return res.json({ priceUsd: jupResult.price, source: "jupiter" });
+    }
+
+    const price = await fetchCoinGeckoSolPrice();
+    solPriceCache = price;
+    solPriceCacheTime = now;
+    return res.json({
+      priceUsd: price,
+      source: "coingecko",
+      debug: {
+        jupiter: { ok: false, error: jupResult.error, status: jupResult.status || null },
+        hasJupKey: Boolean(jupApiKey),
+      },
+    });
   } catch (error) {
     console.error("GET /api/solana/price-usd error:", error.message);
-    return res.status(500).json({ error: "Failed to fetch SOL price", details: error.message });
+    return res.status(500).json({
+      error: "Failed to fetch SOL price",
+      details: error.message,
+      debug: {
+        hasJupKey: Boolean(
+          process.env.JUP_API_KEY ||
+            process.env.JUPITER_API_KEY ||
+            process.env.jup_api_key ||
+            process.env.jupiter_api_key
+        ),
+      },
+    });
   }
 });
 
