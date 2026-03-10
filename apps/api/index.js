@@ -24,8 +24,8 @@ const DEXSCREENER_MULTI_TOKEN_URL =
   "https://api.dexscreener.com/tokens/v1/solana";
 
 // Make filters less strict so you get more than 2-4 tokens
-const MIN_LIQUIDITY_USD = 8000;
-const MIN_VOLUME_24H_USD = 2000;
+const MIN_LIQUIDITY_USD = 50000;
+const MIN_VOLUME_24H_USD = 10000;
 
 // How many tokens the mobile app asks for per page
 const DEFAULT_PAGE_LIMIT = 50;
