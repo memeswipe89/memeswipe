@@ -197,6 +197,17 @@ const fetchJupiterJson = async (path: string, init?: RequestInit) => {
   throw lastError instanceof Error ? lastError : new Error('Jupiter request failed');
 };
 
+const normalizeJupiterError = (error: unknown) => {
+  const raw = String((error as any)?.message || error || '');
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.message) return String(parsed.message);
+  } catch {
+    // ignore
+  }
+  return raw;
+};
+
 void WebBrowser.maybeCompleteAuthSession();
 
 export default function HomeScreen() {
@@ -1061,7 +1072,7 @@ export default function HomeScreen() {
           };
         } catch (error: any) {
           lastError = error;
-          const msg = String(error?.message || '');
+          const msg = normalizeJupiterError(error);
           const retryable =
             msg.includes('0x1788') ||
             msg.toLowerCase().includes('simulation failed') ||
@@ -1197,9 +1208,12 @@ export default function HomeScreen() {
           try {
             swapMeta = await executeJupiterSwap(token);
           } catch (error: any) {
-            const message = String(error?.message || '');
+            const message = normalizeJupiterError(error);
             const isNotTradable =
-              message.includes('TOKEN_NOT_TRADABLE') || message.toLowerCase().includes('not tradable');
+              message.includes('TOKEN_NOT_TRADABLE') ||
+              message.toLowerCase().includes('not tradable') ||
+              message.toLowerCase().includes('route not found') ||
+              message.toLowerCase().includes('no route');
             console.log('[TRADE][SWIPE_RIGHT] swap failed', {
               symbol: token.symbol,
               address: token.address,
