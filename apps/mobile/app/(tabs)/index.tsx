@@ -28,7 +28,7 @@ const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MIN_SOL_RESERVE_FOR_FEES = 0.01;
 const SWAP_SLIPPAGE_RETRY_BPS = [100, 300, 800, 1500, 3000, 5000];
-const JUPITER_BASE_URLS = ['https://quote-api.jup.ag', 'https://api.jup.ag'];
+const JUPITER_BASE_URLS = ['https://api.jup.ag/swap/v1', 'https://lite-api.jup.ag/swap/v1'];
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
 const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
@@ -994,12 +994,12 @@ export default function HomeScreen() {
             amount: String(amountLamports),
             slippageBps: String(slippageBps),
           });
-          const { json: quoteJson } = await fetchJupiterJson(`/v6/quote?${quoteParams.toString()}`);
+          const { json: quoteJson } = await fetchJupiterJson(`/quote?${quoteParams.toString()}`);
           if (!quoteJson || quoteJson?.error) {
             throw new Error(quoteJson?.error || 'Jupiter quote failed');
           }
 
-          const { json: swapJson } = await fetchJupiterJson('/v6/swap', {
+          const { json: swapJson } = await fetchJupiterJson('/swap', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

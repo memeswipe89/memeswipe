@@ -13,7 +13,7 @@ import { Buffer } from 'buffer';
 import { API_BASE, JUP_API_KEY } from '@/lib/api-base';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const JUPITER_BASE_URLS = ['https://quote-api.jup.ag', 'https://api.jup.ag'];
+const JUPITER_BASE_URLS = ['https://api.jup.ag/swap/v1', 'https://lite-api.jup.ag/swap/v1'];
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
   try {
@@ -96,12 +96,12 @@ const buildJupiterSwapTx = async (params: {
     amount: params.amountRaw,
     slippageBps: String(params.slippageBps),
   });
-  const { json: quoteJson } = await fetchJupiterJson(`/v6/quote?${quoteParams.toString()}`);
+  const { json: quoteJson } = await fetchJupiterJson(`/quote?${quoteParams.toString()}`);
   if (!quoteJson || quoteJson?.error) {
     throw new Error(quoteJson?.error || 'Jupiter quote failed');
   }
 
-  const { json: swapJson } = await fetchJupiterJson('/v6/swap', {
+  const { json: swapJson } = await fetchJupiterJson('/swap', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
