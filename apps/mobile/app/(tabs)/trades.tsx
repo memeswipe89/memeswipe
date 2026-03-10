@@ -175,7 +175,8 @@ const toNumber = (value: unknown, fallback = 0) => {
 
 const normalizeTradeStatus = (status: unknown): TradeStatus => {
   const s = String(status || '').trim().toLowerCase();
-  if (s === 'closed' || s === 'cancelled' || s === 'filled' || s === 'completed') return 'closed';
+  if (s === 'closed' || s === 'cancelled') return 'closed';
+  if (s === 'filled' || s === 'completed') return 'open';
   if (s === 'open' || s === 'queued' || s === 'pending' || s === 'processing') return 'open';
   return 'open';
 };
