@@ -28,6 +28,7 @@ const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MIN_SOL_RESERVE_FOR_FEES = 0.01;
 const SWAP_SLIPPAGE_RETRY_BPS = [100, 300, 800, 1500, 3000, 5000];
+const JUPITER_BASE_URLS = ['https://quote-api.jup.ag', 'https://api.jup.ag'];
 const FAVORITES_KEY = '@memeswipe:favorites:v1';
 const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
 const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
@@ -165,6 +166,31 @@ const endpointFor = (chain: 'solana' | 'base', segment: RemoteSegment) => {
   if (segment === 'bigcap') return `/api/feed/${chain}/bigcap`;
   if (segment === 'smart') return `/api/feed/${chain}/smart`;
   return `/api/feed/${chain}/graduated`;
+};
+
+const fetchJupiterJson = async (path: string, init?: RequestInit) => {
+  let lastError: unknown = null;
+  for (const base of JUPITER_BASE_URLS) {
+    try {
+      const res = await fetch(`${base}${path}`, init);
+      const text = await res.text();
+      let json: any = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = null;
+      }
+      if (!res.ok) {
+        lastError = new Error(json?.error || text || `Jupiter error ${res.status}`);
+        continue;
+      }
+      return { res, json, text };
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Jupiter request failed');
 };
 
 void WebBrowser.maybeCompleteAuthSession();
@@ -958,25 +984,18 @@ export default function HomeScreen() {
           const amountSol = amountUsd / liveSolPriceUsd;
           const amountLamports = Math.max(1, Math.floor(amountSol * 1_000_000_000));
 
-          const quoteUrl = new URL('https://quote-api.jup.ag/v6/quote');
-          quoteUrl.searchParams.set('inputMint', SOL_MINT);
-          quoteUrl.searchParams.set('outputMint', token.address);
-          quoteUrl.searchParams.set('amount', String(amountLamports));
-          quoteUrl.searchParams.set('slippageBps', String(slippageBps));
-
-          const quoteRes = await fetch(quoteUrl.toString());
-          const quoteText = await quoteRes.text();
-          let quoteJson: any = null;
-          try {
-            quoteJson = JSON.parse(quoteText);
-          } catch {
-            quoteJson = null;
-          }
-          if (!quoteRes.ok || !quoteJson || quoteJson?.error) {
-            throw new Error(quoteJson?.error || quoteText || 'Jupiter quote failed');
+          const quoteParams = new URLSearchParams({
+            inputMint: SOL_MINT,
+            outputMint: token.address,
+            amount: String(amountLamports),
+            slippageBps: String(slippageBps),
+          });
+          const { json: quoteJson } = await fetchJupiterJson(`/v6/quote?${quoteParams.toString()}`);
+          if (!quoteJson || quoteJson?.error) {
+            throw new Error(quoteJson?.error || 'Jupiter quote failed');
           }
 
-          const swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
+          const { json: swapJson } = await fetchJupiterJson('/v6/swap', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -987,15 +1006,8 @@ export default function HomeScreen() {
               prioritizationFeeLamports: 'auto',
             }),
           });
-          const swapText = await swapRes.text();
-          let swapJson: any = null;
-          try {
-            swapJson = JSON.parse(swapText);
-          } catch {
-            swapJson = null;
-          }
-          if (!swapRes.ok || !swapJson?.swapTransaction) {
-            throw new Error(swapJson?.error || swapText || 'Jupiter swap failed');
+          if (!swapJson?.swapTransaction) {
+            throw new Error(swapJson?.error || 'Jupiter swap failed');
           }
 
           const provider = await getEmbeddedSolanaProvider();

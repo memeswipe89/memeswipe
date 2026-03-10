@@ -13,6 +13,7 @@ import { Buffer } from 'buffer';
 import { API_BASE } from '@/lib/api-base';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const JUPITER_BASE_URLS = ['https://quote-api.jup.ag', 'https://api.jup.ag'];
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
   try {
@@ -53,6 +54,31 @@ const fetchDexscreenerPrices = async (addresses: string[]) => {
   return prices;
 };
 
+const fetchJupiterJson = async (path: string, init?: RequestInit) => {
+  let lastError: unknown = null;
+  for (const base of JUPITER_BASE_URLS) {
+    try {
+      const res = await fetch(`${base}${path}`, init);
+      const text = await res.text();
+      let json: any = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = null;
+      }
+      if (!res.ok) {
+        lastError = new Error(json?.error || text || `Jupiter error ${res.status}`);
+        continue;
+      }
+      return { res, json, text };
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Jupiter request failed');
+};
+
 const buildJupiterSwapTx = async (params: {
   inputMint: string;
   outputMint: string;
@@ -60,24 +86,18 @@ const buildJupiterSwapTx = async (params: {
   userPublicKey: string;
   slippageBps: number;
 }) => {
-  const quoteUrl = new URL('https://quote-api.jup.ag/v6/quote');
-  quoteUrl.searchParams.set('inputMint', params.inputMint);
-  quoteUrl.searchParams.set('outputMint', params.outputMint);
-  quoteUrl.searchParams.set('amount', params.amountRaw);
-  quoteUrl.searchParams.set('slippageBps', String(params.slippageBps));
-  const quoteRes = await fetch(quoteUrl.toString());
-  const quoteText = await quoteRes.text();
-  let quoteJson: any = null;
-  try {
-    quoteJson = JSON.parse(quoteText);
-  } catch {
-    quoteJson = null;
-  }
-  if (!quoteRes.ok || !quoteJson || quoteJson?.error) {
-    throw new Error(quoteJson?.error || quoteText || 'Jupiter quote failed');
+  const quoteParams = new URLSearchParams({
+    inputMint: params.inputMint,
+    outputMint: params.outputMint,
+    amount: params.amountRaw,
+    slippageBps: String(params.slippageBps),
+  });
+  const { json: quoteJson } = await fetchJupiterJson(`/v6/quote?${quoteParams.toString()}`);
+  if (!quoteJson || quoteJson?.error) {
+    throw new Error(quoteJson?.error || 'Jupiter quote failed');
   }
 
-  const swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
+  const { json: swapJson } = await fetchJupiterJson('/v6/swap', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -88,15 +108,8 @@ const buildJupiterSwapTx = async (params: {
       prioritizationFeeLamports: 'auto',
     }),
   });
-  const swapText = await swapRes.text();
-  let swapJson: any = null;
-  try {
-    swapJson = JSON.parse(swapText);
-  } catch {
-    swapJson = null;
-  }
-  if (!swapRes.ok || !swapJson?.swapTransaction) {
-    throw new Error(swapJson?.error || swapText || 'Jupiter swap failed');
+  if (!swapJson?.swapTransaction) {
+    throw new Error(swapJson?.error || 'Jupiter swap failed');
   }
   return { swapTransaction: swapJson.swapTransaction, quote: quoteJson };
 };
