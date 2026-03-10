@@ -521,9 +521,28 @@ app.get("/api/solana/price-usd", async (req, res) => {
             process.env.jup_api_key ||
             process.env.jupiter_api_key
         ),
+        note: "Use /api/solana/price-debug for upstream diagnostics.",
       },
     });
   }
+});
+
+app.get("/api/solana/price-debug", async (req, res) => {
+  const jupApiKey =
+    process.env.JUP_API_KEY ||
+    process.env.JUPITER_API_KEY ||
+    process.env.jup_api_key ||
+    process.env.jupiter_api_key ||
+    "";
+  const [jupiter, jupiterQuote] = await Promise.all([
+    fetchJupiterSolPrice(jupApiKey),
+    fetchJupiterQuoteSolPrice(),
+  ]);
+  return res.json({
+    hasJupKey: Boolean(jupApiKey),
+    jupiter,
+    jupiterQuote,
+  });
 });
 
 app.post("/api/jupiter/swap", async (req, res) => {
