@@ -310,10 +310,15 @@ async function getCachedGraduatedFeed() {
 async function fetchSolPriceUsd() {
   const now = Date.now();
   if (solPriceCache && now - solPriceCacheTime < SOL_PRICE_CACHE_TTL_MS) {
-    return solPriceCache;
+    return { price: solPriceCache, source: "cache" };
   }
 
-  const jupApiKey = process.env.JUP_API_KEY || process.env.JUPITER_API_KEY || "";
+  const jupApiKey =
+    process.env.JUP_API_KEY ||
+    process.env.JUPITER_API_KEY ||
+    process.env.jup_api_key ||
+    process.env.jupiter_api_key ||
+    "";
   const solMint = "So11111111111111111111111111111111111111112";
 
   try {
@@ -331,7 +336,7 @@ async function fetchSolPriceUsd() {
       if (jupRes.ok && Number.isFinite(price) && price > 0) {
         solPriceCache = price;
         solPriceCacheTime = now;
-        return price;
+        return { price, source: "jupiter" };
       }
     }
   } catch (error) {
@@ -354,10 +359,10 @@ async function fetchSolPriceUsd() {
     }
     solPriceCache = price;
     solPriceCacheTime = now;
-    return price;
+    return { price, source: "coingecko" };
   } catch (error) {
     if (solPriceCache) {
-      return solPriceCache;
+      return { price: solPriceCache, source: "cache" };
     }
     throw error;
   }
@@ -414,8 +419,8 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
 
 app.get("/api/solana/price-usd", async (req, res) => {
   try {
-    const priceUsd = await fetchSolPriceUsd();
-    return res.json({ priceUsd });
+    const { price, source } = await fetchSolPriceUsd();
+    return res.json({ priceUsd: price, source });
   } catch (error) {
     console.error("GET /api/solana/price-usd error:", error.message);
     return res.status(500).json({ error: "Failed to fetch SOL price", details: error.message });
@@ -441,7 +446,7 @@ app.post("/api/jupiter/swap", async (req, res) => {
       return res.status(400).json({ error: "Invalid amountUsd" });
     }
 
-    const solPriceUsd = await fetchSolPriceUsd();
+    const { price: solPriceUsd } = await fetchSolPriceUsd();
     const amountSol = usdAmount / solPriceUsd;
     const amountLamports = Math.max(1, Math.floor(amountSol * 1_000_000_000));
 
