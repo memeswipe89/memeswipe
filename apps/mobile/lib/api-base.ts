@@ -10,8 +10,11 @@ const normalizeApiBase = (value?: string) => {
   return `https://${trimmed}`;
 };
 
-const extraApiBase =
-  (Constants.expoConfig?.extra as { apiBase?: string } | undefined)?.apiBase ||
-  (Constants as any)?.manifest2?.extra?.expoClient?.extra?.apiBase;
+const extraConfig =
+  (Constants.expoConfig?.extra as { apiBase?: string; jupApiKey?: string } | undefined) ||
+  (Constants as any)?.manifest2?.extra?.expoClient?.extra ||
+  {};
+const extraApiBase = extraConfig?.apiBase;
 
 export const API_BASE = normalizeApiBase(process.env.EXPO_PUBLIC_API_BASE || extraApiBase);
+export const JUP_API_KEY = process.env.EXPO_PUBLIC_JUP_API_KEY || extraConfig?.jupApiKey || "";

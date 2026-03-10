@@ -10,7 +10,7 @@ import { useWalletContext } from '@/contexts/wallet-context';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
-import { API_BASE } from '@/lib/api-base';
+import { API_BASE, JUP_API_KEY } from '@/lib/api-base';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const JUPITER_BASE_URLS = ['https://quote-api.jup.ag', 'https://api.jup.ag'];
@@ -58,7 +58,11 @@ const fetchJupiterJson = async (path: string, init?: RequestInit) => {
   let lastError: unknown = null;
   for (const base of JUPITER_BASE_URLS) {
     try {
-      const res = await fetch(`${base}${path}`, init);
+      const headers = {
+        ...(init?.headers || {}),
+        ...(JUP_API_KEY ? { 'x-api-key': JUP_API_KEY } : {}),
+      };
+      const res = await fetch(`${base}${path}`, { ...init, headers });
       const text = await res.text();
       let json: any = null;
       try {

@@ -53,6 +53,7 @@
     },
     "extra": {
       "apiBase": "https://memeswipe.onrender.com",
+      "jupApiKey": "",
       "privyAppId": "cmlwc08q900bi0cjyokcd46cf",
       "privyClientId": "",
       "router": {},
