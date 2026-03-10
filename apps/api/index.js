@@ -634,8 +634,20 @@ app.post("/api/jupiter/swap", async (req, res) => {
     quoteUrl.searchParams.set("amount", String(amountLamports));
     quoteUrl.searchParams.set("slippageBps", String(slippageBps));
 
-    const quoteRes = await fetch(quoteUrl.toString(), { method: "GET" });
-    const quoteText = await quoteRes.text();
+    let quoteRes;
+    let quoteText = "";
+    try {
+      quoteRes = await fetch(quoteUrl.toString(), {
+        method: "GET",
+        headers: { "User-Agent": "memeswipe-api/1.0" },
+      });
+      quoteText = await quoteRes.text();
+    } catch (error) {
+      return res.status(500).json({
+        error: "Jupiter quote failed",
+        details: error?.message || "fetch_failed",
+      });
+    }
     let quoteJson = null;
     try {
       quoteJson = JSON.parse(quoteText);
@@ -650,18 +662,27 @@ app.post("/api/jupiter/swap", async (req, res) => {
       });
     }
 
-    const swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        quoteResponse: quoteJson,
-        userPublicKey,
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: "auto",
-      }),
-    });
-    const swapText = await swapRes.text();
+    let swapRes;
+    let swapText = "";
+    try {
+      swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": "memeswipe-api/1.0" },
+        body: JSON.stringify({
+          quoteResponse: quoteJson,
+          userPublicKey,
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+          prioritizationFeeLamports: "auto",
+        }),
+      });
+      swapText = await swapRes.text();
+    } catch (error) {
+      return res.status(500).json({
+        error: "Jupiter swap failed",
+        details: error?.message || "fetch_failed",
+      });
+    }
     let swapJson = null;
     try {
       swapJson = JSON.parse(swapText);
@@ -688,6 +709,28 @@ app.post("/api/jupiter/swap", async (req, res) => {
   } catch (error) {
     console.error("POST /api/jupiter/swap error:", error.message);
     return res.status(500).json({ error: "Failed to build swap", details: error.message });
+  }
+});
+
+app.get("/api/jupiter/health", async (req, res) => {
+  try {
+    const testUrl = new URL("https://quote-api.jup.ag/v6/quote");
+    testUrl.searchParams.set("inputMint", "So11111111111111111111111111111111111111112");
+    testUrl.searchParams.set("outputMint", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+    testUrl.searchParams.set("amount", "100000000");
+    testUrl.searchParams.set("slippageBps", "50");
+    const resp = await fetch(testUrl.toString(), {
+      method: "GET",
+      headers: { "User-Agent": "memeswipe-api/1.0" },
+    });
+    const text = await resp.text();
+    return res.status(resp.ok ? 200 : 502).json({
+      ok: resp.ok,
+      status: resp.status,
+      bodyPreview: text.slice(0, 200),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "fetch_failed" });
   }
 });
 
