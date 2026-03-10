@@ -635,11 +635,18 @@ app.post("/api/jupiter/swap", async (req, res) => {
     quoteUrl.searchParams.set("slippageBps", String(slippageBps));
 
     const quoteRes = await fetch(quoteUrl.toString(), { method: "GET" });
-    const quoteJson = await quoteRes.json();
-    if (!quoteRes.ok || !quoteJson) {
+    const quoteText = await quoteRes.text();
+    let quoteJson = null;
+    try {
+      quoteJson = JSON.parse(quoteText);
+    } catch {
+      quoteJson = null;
+    }
+    if (!quoteRes.ok || !quoteJson || quoteJson?.error) {
       return res.status(500).json({
         error: "Jupiter quote failed",
-        details: quoteJson?.error || "Unknown error",
+        details: quoteJson?.error || quoteText || "Unknown error",
+        status: quoteRes.status,
       });
     }
 
@@ -654,11 +661,18 @@ app.post("/api/jupiter/swap", async (req, res) => {
         prioritizationFeeLamports: "auto",
       }),
     });
-    const swapJson = await swapRes.json();
+    const swapText = await swapRes.text();
+    let swapJson = null;
+    try {
+      swapJson = JSON.parse(swapText);
+    } catch {
+      swapJson = null;
+    }
     if (!swapRes.ok || !swapJson?.swapTransaction) {
       return res.status(500).json({
         error: "Jupiter swap failed",
-        details: swapJson?.error || "Missing swap transaction",
+        details: swapJson?.error || swapText || "Missing swap transaction",
+        status: swapRes.status,
       });
     }
 
