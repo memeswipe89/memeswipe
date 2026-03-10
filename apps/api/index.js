@@ -1022,8 +1022,10 @@ app.patch("/api/orders/:id/close", async (req, res) => {
       close_pnl_usd: body.closePnlUsd ?? null,
       close_tx_signature: body.closeTxSignature ?? null,
       close_error: body.closeError ?? null,
-      closed_at: new Date().toISOString(),
     };
+    if (body.closeTxSignature) {
+      update.closed_at = new Date().toISOString();
+    }
     const { res: sbRes, json, text } = await supabaseRequest(
       `orders?id=eq.${encodeURIComponent(orderId)}&user_id=eq.${encodeURIComponent(userId)}`,
       {

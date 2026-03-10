@@ -161,6 +161,7 @@ type TradeItem = {
   closePriceUsd: number | null;
   closePnlPct: number | null;
   closePnlUsd: number | null;
+  closeError: string | null;
   livePriceUsd: number | null;
   tpRoi: number;
   stopLossPct: number | null;
@@ -261,6 +262,7 @@ export default function TradesScreen() {
           close_price_usd?: number | string | null;
           close_pnl_pct?: number | string | null;
           close_pnl_usd?: number | string | null;
+          close_error?: string | null;
           output_mint?: string | null;
         }[];
         error?: string;
@@ -327,6 +329,7 @@ export default function TradesScreen() {
             const v = toNumber(order.close_pnl_usd, Number.NaN);
             return Number.isFinite(v) ? v : null;
           })(),
+          closeError: typeof order.close_error === 'string' ? order.close_error : null,
           livePriceUsd: null,
           tokenAddress: order.token_address || order.output_mint || '',
         } as TradeItem;
@@ -609,6 +612,7 @@ export default function TradesScreen() {
       source
         .map((trade) => {
           if (trade.status !== 'open') return null;
+          if (trade.closeError) return null;
           const retryAfter = autoCloseRetryAfterRef.current[trade.id] || 0;
           if (retryAfter > now) return null;
           const pnlPct = getRealtimePnlPct(trade);
@@ -790,6 +794,9 @@ export default function TradesScreen() {
                     ? ` (${(item.closeTriggerPct as number) > 0 ? '+' : ''}${(item.closeTriggerPct as number).toFixed(2)}%)`
                     : ''}
                 </Text>
+              ) : null}
+              {item.closeError ? (
+                <Text style={[styles.meta, styles.red]}>Close failed: {item.closeError}</Text>
               ) : null}
               {item.txSignature ? (
                 <Pressable onPress={() => void openSolscanTx(item.txSignature as string)} style={styles.linkBtn}>
