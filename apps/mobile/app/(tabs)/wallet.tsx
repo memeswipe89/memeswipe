@@ -8,9 +8,9 @@ import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
+import { API_BASE } from "@/lib/api-base";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "https://memeswipe.onrender.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
 const FAVORITES_KEY = "@memeswipe:favorites:v1";
 const HIDDEN_TOKENS_KEY = "@memeswipe:hidden-tokens:v1";
@@ -197,7 +197,7 @@ export default function WalletScreen() {
       const res = await fetch(`${API_BASE}/api/twitter/connection/${encodeURIComponent(userId)}`, {
         method: "DELETE",
       });
-      if (!res.ok) {
+      if (!res.ok && res.status !== 404) {
         const text = await res.text();
         throw new Error(text || "Failed to disconnect Twitter");
       }

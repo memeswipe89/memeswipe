@@ -1,4 +1,4 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
+import { API_BASE } from './api-base';
 const fallbackHistory = [0.21, 0.22, 0.19, 0.25, 0.27, 0.24, 0.29];
 
 type ChartResponse = {

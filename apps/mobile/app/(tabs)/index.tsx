@@ -23,8 +23,7 @@ import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
-
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
+import { API_BASE } from '@/lib/api-base';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MIN_SOL_RESERVE_FOR_FEES = 0.01;
@@ -245,14 +244,14 @@ export default function HomeScreen() {
           signal: controller.signal,
         });
         if (!res.ok) {
+          if (options?.allowStale && twitterProfile) {
+            setShowTwitterPrompt(false);
+            return;
+          }
           if (res.status === 404) {
             setTwitterProfile(null);
             setShowTwitterPrompt(false);
             await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
-            return;
-          }
-          if (options?.allowStale && twitterProfile) {
-            setShowTwitterPrompt(false);
             return;
           }
           setShowTwitterPrompt(false);
@@ -485,6 +484,13 @@ export default function HomeScreen() {
         { signal: controller.signal }
       );
       clearTimeout(timeoutId);
+
+      const contentType = startRes.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        throw new Error(
+          `Twitter auth route missing on API. API_BASE=${API_BASE} (got HTML ${startRes.status}). Redeploy API with /api/twitter/auth/start.`
+        );
+      }
 
       const startJson = await parseApiJson<{ authUrl?: string; error?: string }>(startRes);
       if (!startRes.ok || !startJson?.authUrl) {

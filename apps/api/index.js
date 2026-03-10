@@ -36,6 +36,12 @@ const CACHE_TIME_MS = 20 * 1000;
 let graduatedCache = null;
 let graduatedCacheTime = 0;
 
+const crypto = require("crypto");
+
+// In-memory Twitter connection store and auth state (demo/dev).
+const twitterConnections = new Map();
+const twitterAuthStates = new Map();
+
 /*
 ==============================
 HELPERS
@@ -72,7 +78,7 @@ function formatPair(pair) {
     liquidityUsd: pair.liquidity?.usd || 0,
     volume24hUsd: pair.volume?.h24 || 0,
     marketCapUsd: pair.marketCap || null,
-    change24hPct: 0,
+    change24hPct: pair.priceChange?.h24 || 0,
 
     chartData: [],
     graduatedAt: pair.pairCreatedAt || null,
@@ -131,6 +137,25 @@ function printTokenNamesToTerminal(tokens, label = "TOKENS") {
   });
 
   console.log("====================================\n");
+}
+
+function base64UrlEncode(input) {
+  return input.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function sha256Base64Url(value) {
+  const hash = crypto.createHash("sha256").update(value).digest("base64");
+  return base64UrlEncode(hash);
+}
+
+function buildRedirectUrl(returnUrl, params) {
+  const url = new URL(returnUrl);
+  Object.entries(params).forEach(([key, value]) => {
+    if (typeof value === "string") {
+      url.searchParams.set(key, value);
+    }
+  });
+  return url.toString();
 }
 
 /*
@@ -324,6 +349,193 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
       error: "Failed to fetch graduated tokens",
       details: error.message,
     });
+  }
+});
+
+app.get("/api/twitter/connection/:userId", (req, res) => {
+  const userId = String(req.params.userId || "").trim();
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId" });
+  }
+
+  const profile = twitterConnections.get(userId);
+  if (!profile) {
+    return res.status(404).json({ connected: false });
+  }
+
+  return res.json({
+    connected: true,
+    twitterUsername: profile.twitterUsername,
+    twitterUserId: profile.twitterUserId,
+  });
+});
+
+app.delete("/api/twitter/connection/:userId", (req, res) => {
+  const userId = String(req.params.userId || "").trim();
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId" });
+  }
+
+  twitterConnections.delete(userId);
+  return res.json({ ok: true });
+});
+
+app.get("/api/twitter/auth/start", (req, res) => {
+  const userId = String(req.query.userId || "").trim();
+  const returnUrl = String(req.query.returnUrl || "").trim();
+  const clientId = process.env.TWITTER_CLIENT_ID || "";
+  const callbackUrl = process.env.TWITTER_CALLBACK_URL || "";
+
+  if (!clientId || !callbackUrl) {
+    return res.status(500).json({ error: "Twitter auth not configured on server" });
+  }
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId" });
+  }
+  if (!returnUrl) {
+    return res.status(400).json({ error: "Missing returnUrl" });
+  }
+
+  let parsedReturn;
+  try {
+    parsedReturn = new URL(returnUrl);
+  } catch {
+    return res.status(400).json({ error: "Invalid returnUrl" });
+  }
+
+  const state = crypto.randomBytes(16).toString("hex");
+  const codeVerifier = base64UrlEncode(crypto.randomBytes(32).toString("base64"));
+  const codeChallenge = sha256Base64Url(codeVerifier);
+
+  twitterAuthStates.set(state, {
+    userId,
+    returnUrl: parsedReturn.toString(),
+    codeVerifier,
+    createdAt: Date.now(),
+  });
+
+  const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("client_id", clientId);
+  authUrl.searchParams.set("redirect_uri", callbackUrl);
+  authUrl.searchParams.set("scope", "users.read tweet.read offline.access");
+  authUrl.searchParams.set("state", state);
+  authUrl.searchParams.set("code_challenge", codeChallenge);
+  authUrl.searchParams.set("code_challenge_method", "S256");
+
+  return res.json({ authUrl: authUrl.toString() });
+});
+
+app.get("/api/twitter/auth/callback", async (req, res) => {
+  const code = String(req.query.code || "");
+  const state = String(req.query.state || "");
+  const error = String(req.query.error || "");
+
+  const stored = twitterAuthStates.get(state);
+  if (!stored) {
+    return res.status(400).send("Invalid or expired OAuth state");
+  }
+
+  if (error) {
+    const redirectUrl = buildRedirectUrl(stored.returnUrl, {
+      status: "error",
+      error,
+    });
+    twitterAuthStates.delete(state);
+    return res.redirect(redirectUrl);
+  }
+
+  if (!code) {
+    const redirectUrl = buildRedirectUrl(stored.returnUrl, {
+      status: "error",
+      error: "missing_code",
+      reason: "Missing authorization code",
+    });
+    twitterAuthStates.delete(state);
+    return res.redirect(redirectUrl);
+  }
+
+  const clientId = process.env.TWITTER_CLIENT_ID || "";
+  const clientSecret = process.env.TWITTER_CLIENT_SECRET || "";
+  const callbackUrl = process.env.TWITTER_CALLBACK_URL || "";
+
+  if (!clientId || !clientSecret || !callbackUrl) {
+    const redirectUrl = buildRedirectUrl(stored.returnUrl, {
+      status: "error",
+      error: "server_not_configured",
+      reason: "Twitter auth not configured on server",
+    });
+    twitterAuthStates.delete(state);
+    return res.redirect(redirectUrl);
+  }
+
+  try {
+    const tokenRes = await fetch("https://api.twitter.com/2/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: clientId,
+        code,
+        redirect_uri: callbackUrl,
+        code_verifier: stored.codeVerifier,
+      }).toString(),
+    });
+
+    const tokenJson = await tokenRes.json();
+    if (!tokenRes.ok || !tokenJson?.access_token) {
+      const redirectUrl = buildRedirectUrl(stored.returnUrl, {
+        status: "error",
+        error: "token_exchange_failed",
+        reason: tokenJson?.error_description || "Failed to exchange token",
+      });
+      twitterAuthStates.delete(state);
+      return res.redirect(redirectUrl);
+    }
+
+    const meRes = await fetch("https://api.twitter.com/2/users/me", {
+      headers: {
+        Authorization: `Bearer ${tokenJson.access_token}`,
+      },
+    });
+    const meJson = await meRes.json();
+    if (!meRes.ok || !meJson?.data?.id || !meJson?.data?.username) {
+      const redirectUrl = buildRedirectUrl(stored.returnUrl, {
+        status: "error",
+        error: "profile_fetch_failed",
+        reason: "Unable to load Twitter profile",
+      });
+      twitterAuthStates.delete(state);
+      return res.redirect(redirectUrl);
+    }
+
+    const profile = {
+      connected: true,
+      twitterUsername: meJson.data.username,
+      twitterUserId: meJson.data.id,
+      connectedAt: new Date().toISOString(),
+    };
+    twitterConnections.set(stored.userId, profile);
+
+    const redirectUrl = buildRedirectUrl(stored.returnUrl, {
+      status: "success",
+      userId: stored.userId,
+      twitterUsername: profile.twitterUsername,
+      twitterUserId: profile.twitterUserId,
+    });
+    twitterAuthStates.delete(state);
+    return res.redirect(redirectUrl);
+  } catch (err) {
+    const redirectUrl = buildRedirectUrl(stored.returnUrl, {
+      status: "error",
+      error: "exception",
+      reason: "Unexpected server error",
+    });
+    twitterAuthStates.delete(state);
+    return res.redirect(redirectUrl);
   }
 });
 

@@ -10,7 +10,7 @@ import { useWalletContext } from '@/contexts/wallet-context';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://memeswipe.onrender.com';
+import { API_BASE } from '@/lib/api-base';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();

@@ -52,6 +52,7 @@
       "reactCompiler": true
     },
     "extra": {
+      "apiBase": "https://memeswipe.onrender.com",
       "privyAppId": "cmlwc08q900bi0cjyokcd46cf",
       "privyClientId": "",
       "router": {},
