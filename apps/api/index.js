@@ -35,6 +35,7 @@ const CACHE_TIME_MS = 20 * 1000;
 
 let graduatedCache = null;
 let graduatedCacheTime = 0;
+let graduatedLastGoodFeed = null;
 
 const SOL_PRICE_CACHE_TTL_MS = 30 * 1000;
 let solPriceCache = null;
@@ -259,7 +260,36 @@ async function buildGraduatedFeed() {
     return [];
   }
 
-  const pairs = await fetchDexscreenerPairsForAddresses(tokenAddresses);
+  let pairs;
+  try {
+    pairs = await fetchDexscreenerPairsForAddresses(tokenAddresses);
+  } catch (error) {
+    console.error("Dexscreener fetch failed, using fallback:", error.message);
+    if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
+      return graduatedLastGoodFeed;
+    }
+    return tokenAddresses.slice(0, 50).map((address) => ({
+      id: address,
+      name: `Token ${address.slice(0, 4)}`,
+      symbol: address.slice(0, 4).toUpperCase(),
+      address,
+      priceUsd: null,
+      liquidityUsd: 0,
+      volume24hUsd: 0,
+      marketCapUsd: null,
+      change24hPct: 0,
+      chartData: [],
+      graduatedAt: null,
+      graduationTime: "Unknown",
+      image: null,
+      imageUrl: null,
+      pairAddress: "",
+      dexId: "",
+      url: "",
+      chain: "solana",
+      source: "graduated-fallback",
+    }));
+  }
 
   const byToken = new Map();
 
@@ -290,6 +320,9 @@ async function buildGraduatedFeed() {
     return (b.volume24hUsd || 0) - (a.volume24hUsd || 0);
   });
 
+  if (feed.length > 0) {
+    graduatedLastGoodFeed = feed;
+  }
   return feed;
 }
 
