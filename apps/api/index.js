@@ -1015,7 +1015,6 @@ app.patch("/api/orders/:id/close", async (req, res) => {
     if (!orderId) return res.status(400).json({ error: "Missing order id" });
     if (!userId) return res.status(400).json({ error: "Missing userId" });
     const update = {
-      status: "closed",
       close_reason: body.closeReason ?? null,
       close_trigger_pct: body.closeTriggerPct ?? null,
       close_price_usd: body.closePriceUsd ?? null,
