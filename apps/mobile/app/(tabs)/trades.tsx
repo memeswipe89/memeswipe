@@ -108,8 +108,15 @@ const buildJupiterSwapTx = async (params: {
       quoteResponse: quoteJson,
       userPublicKey: params.userPublicKey,
       wrapAndUnwrapSol: true,
+      useSharedAccounts: false,
       dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: 'auto',
+      dynamicSlippage: true,
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: {
+          priorityLevel: 'veryHigh',
+          maxLamports: 1_000_000,
+        },
+      },
     }),
   });
   if (!swapJson?.swapTransaction) {

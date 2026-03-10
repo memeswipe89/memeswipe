@@ -1025,6 +1025,9 @@ app.patch("/api/orders/:id/close", async (req, res) => {
     };
     if (body.closeTxSignature) {
       update.closed_at = new Date().toISOString();
+      update.close_error = null;
+    } else if (body.closeError) {
+      update.closed_at = null;
     }
     const { res: sbRes, json, text } = await supabaseRequest(
       `orders?id=eq.${encodeURIComponent(orderId)}&user_id=eq.${encodeURIComponent(userId)}`,

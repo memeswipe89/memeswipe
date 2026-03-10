@@ -1017,8 +1017,15 @@ export default function HomeScreen() {
               quoteResponse: quoteJson,
               userPublicKey: resolvedWalletAddress,
               wrapAndUnwrapSol: true,
+              useSharedAccounts: false,
               dynamicComputeUnitLimit: true,
-              prioritizationFeeLamports: 'auto',
+              dynamicSlippage: true,
+              prioritizationFeeLamports: {
+                priorityLevelWithMaxLamports: {
+                  priorityLevel: 'veryHigh',
+                  maxLamports: 1_000_000,
+                },
+              },
             }),
           });
           if (!swapJson?.swapTransaction) {
@@ -1213,7 +1220,8 @@ export default function HomeScreen() {
               message.includes('TOKEN_NOT_TRADABLE') ||
               message.toLowerCase().includes('not tradable') ||
               message.toLowerCase().includes('route not found') ||
-              message.toLowerCase().includes('no route');
+              message.toLowerCase().includes('no route') ||
+              message.includes('0x1788');
             console.log('[TRADE][SWIPE_RIGHT] swap failed', {
               symbol: token.symbol,
               address: token.address,
