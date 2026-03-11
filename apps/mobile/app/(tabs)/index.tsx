@@ -1009,6 +1009,22 @@ export default function HomeScreen() {
           if (!quoteJson || quoteJson?.error) {
             throw new Error(quoteJson?.error || 'Jupiter quote failed');
           }
+          if (quoteJson?.outAmount) {
+            const sellParams = new URLSearchParams({
+              inputMint: token.address,
+              outputMint: SOL_MINT,
+              amount: String(quoteJson.outAmount),
+              slippageBps: String(slippageBps),
+            });
+            try {
+              const { json: sellQuote } = await fetchJupiterJson(`/quote?${sellParams.toString()}`);
+              if (!sellQuote || sellQuote?.error) {
+                throw new Error('No sell route');
+              }
+            } catch {
+              throw new Error('No sell route');
+            }
+          }
 
           const { json: swapJson } = await fetchJupiterJson('/swap', {
             method: 'POST',
@@ -1221,6 +1237,7 @@ export default function HomeScreen() {
               message.toLowerCase().includes('not tradable') ||
               message.toLowerCase().includes('route not found') ||
               message.toLowerCase().includes('no route') ||
+              message.toLowerCase().includes('no sell route') ||
               message.includes('0x1788');
             console.log('[TRADE][SWIPE_RIGHT] swap failed', {
               symbol: token.symbol,
