@@ -169,6 +169,7 @@ type TradeItem = {
   closePnlPct: number | null;
   closePnlUsd: number | null;
   closeError: string | null;
+  closedAt: string | null;
   livePriceUsd: number | null;
   tpRoi: number;
   stopLossPct: number | null;
@@ -270,6 +271,7 @@ export default function TradesScreen() {
           close_price_usd?: number | string | null;
           close_pnl_pct?: number | string | null;
           close_pnl_usd?: number | string | null;
+          closed_at?: string | null;
           close_error?: string | null;
           output_mint?: string | null;
         }[];
@@ -341,6 +343,7 @@ export default function TradesScreen() {
             return Number.isFinite(v) ? v : null;
           })(),
           closeError: typeof order.close_error === 'string' ? order.close_error : null,
+          closedAt: typeof order.closed_at === 'string' ? order.closed_at : null,
           livePriceUsd: null,
           tokenAddress: order.token_address || order.output_mint || '',
         } as TradeItem;
@@ -824,21 +827,35 @@ export default function TradesScreen() {
               <Text style={styles.meta}>
                 Live Price: {item.livePriceUsd ? `$${item.livePriceUsd.toFixed(9)}` : '--'}
               </Text>
-              {item.entryPriceUsd && item.livePriceUsd ? (
-                <Text style={[styles.meta, item.livePriceUsd >= item.entryPriceUsd ? styles.green : styles.red]}>
-                  Change: {(((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100).toFixed(2)}%
-                </Text>
-              ) : null}
-              <Text style={[styles.pnl, pnlUsd >= 0 ? styles.green : styles.red]}>
-                {pnlUsd >= 0 ? '+' : ''}
-                {pnlUsd.toFixed(6)} USDT
-              </Text>
-              <Text style={[styles.meta, pnlPct !== null ? (pnlPct >= 0 ? styles.green : styles.red) : null]}>
-                PnL %: {pnlPct === null ? '--' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(4)}%`}
-              </Text>
-              <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
-                PnL SOL: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
-              </Text>
+              {item.status === 'closed' ? (
+                <>
+                  {item.closedAt ? (
+                    <Text style={styles.meta}>Closed: {new Date(item.closedAt).toLocaleString()}</Text>
+                  ) : null}
+                  <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
+                    {item.closeReason === 'tp' ? 'Win SOL' : 'Loss SOL'}:{' '}
+                    {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  {item.entryPriceUsd && item.livePriceUsd ? (
+                    <Text style={[styles.meta, item.livePriceUsd >= item.entryPriceUsd ? styles.green : styles.red]}>
+                      Change: {(((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100).toFixed(2)}%
+                    </Text>
+                  ) : null}
+                  <Text style={[styles.pnl, pnlUsd >= 0 ? styles.green : styles.red]}>
+                    {pnlUsd >= 0 ? '+' : ''}
+                    {pnlUsd.toFixed(6)} USDT
+                  </Text>
+                  <Text style={[styles.meta, pnlPct !== null ? (pnlPct >= 0 ? styles.green : styles.red) : null]}>
+                    PnL %: {pnlPct === null ? '--' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(4)}%`}
+                  </Text>
+                  <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
+                    PnL SOL: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
+                  </Text>
+                </>
+              )}
               {item.status === 'closed' && item.closeReason ? (
                 <Text style={styles.meta}>
                   Closed by {item.closeReason.toUpperCase()}
