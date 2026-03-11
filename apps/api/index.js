@@ -1014,6 +1014,18 @@ app.patch("/api/orders/:id/close", async (req, res) => {
     const userId = String(body.userId || "").trim();
     if (!orderId) return res.status(400).json({ error: "Missing order id" });
     if (!userId) return res.status(400).json({ error: "Missing userId" });
+    if (!body.closeTxSignature && body.closeError) {
+      const { res: existingRes, json: existingJson, text: existingText } = await supabaseRequest(
+        `orders?id=eq.${encodeURIComponent(orderId)}&user_id=eq.${encodeURIComponent(userId)}&select=close_tx_signature`,
+        { method: "GET" }
+      );
+      if (existingRes.ok && Array.isArray(existingJson) && existingJson[0]?.close_tx_signature) {
+        return res.json({ success: true, order: existingJson[0] });
+      }
+      if (!existingRes.ok) {
+        return res.status(500).json({ error: "Failed to load order", details: existingText });
+      }
+    }
     const update = {
       close_reason: body.closeReason ?? null,
       close_trigger_pct: body.closeTriggerPct ?? null,
