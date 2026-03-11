@@ -7,7 +7,7 @@ if (!Array.prototype.toReversed) {
     configurable: true,
   });
 }
-
+const path = require('path');
 const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
@@ -16,6 +16,7 @@ config.resolver.alias = {
   ...(config.resolver.alias || {}),
   'jose/node': 'jose/browser',
   'jose/dist/node': 'jose/dist/browser',
+  '@privy-io/js-sdk-core/node_modules/uuid/wrapper.mjs': path.resolve(__dirname, 'web/uuid-wrapper.mjs'),
 };
 config.resolver.unstable_enablePackageExports = false;
 

@@ -48,3 +48,12 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## Web & PWA
+
+The same Expo project already targets the web, so you can deliver Memeswipe as a Progressive Web App.
+
+- `npm run web` launches the web bundle locally with the PWA manifest (`web/manifest.json`) and service worker (`web/service-worker.js`) that cache the static shell and `/tokens` API responses.
+- Visit `http://localhost:19006` (or the URL printed in the terminal) to try the installable experience.
+- For a production build, run `npx expo build:web` (or `expo export:web`) and serve the generated files from `web-build/`.
+- Update `web/manifest.json` or `web/service-worker.js` whenever you need to tweak the install metadata or caching strategy.

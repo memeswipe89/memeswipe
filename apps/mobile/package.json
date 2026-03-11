@@ -8,6 +8,7 @@
     "android": "expo start --go --android",
     "ios": "expo start --go --ios",
     "web": "expo start --web",
+    "postinstall": "node ./scripts/apply-node-patches.js",
     "lint": "expo lint"
   },
   "dependencies": {

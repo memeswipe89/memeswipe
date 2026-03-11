@@ -27,7 +27,15 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "Memeswipe",
+      "shortName": "Memeswipe",
+      "lang": "en-US",
+      "description": "Swipe the freshest Solana memecoins and trade them from any device.",
+      "themeColor": "#7285ff",
+      "backgroundColor": "#05060e",
+      "manifest": "./web/manifest.json",
+      "serviceWorker": "./web/service-worker.js"
     },
     "plugins": [
       "expo-router",
