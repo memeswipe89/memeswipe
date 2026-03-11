@@ -5,12 +5,14 @@ import React, {
   useEffect,
   useImperativeHandle,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Alert,
   Dimensions,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -63,6 +65,8 @@ export const ProfileSheet = memo(
     const [mounted, setMounted] = useState(false);
     const [open, setOpen] = useState(false);
     const [inputFocused, setInputFocused] = useState(false);
+    const scrollRef = useRef<ScrollView>(null);
+    const [keyboardOffset, setKeyboardOffset] = useState(0);
     const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
 
     const openProgress = useSharedValue(0);
@@ -159,6 +163,27 @@ export const ProfileSheet = memo(
       };
     }, [open, tradingWalletAddress, walletAddress]);
 
+    useEffect(() => {
+      const show = Keyboard.addListener('keyboardDidShow', (event) => {
+        const height = event.endCoordinates?.height || 0;
+        setKeyboardOffset(height);
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+      });
+      const hide = Keyboard.addListener('keyboardDidHide', () => {
+        setKeyboardOffset(0);
+      });
+      return () => {
+        show.remove();
+        hide.remove();
+      };
+    }, []);
+
+    useEffect(() => {
+      if (inputFocused) {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      }
+    }, [inputFocused]);
+
     const panGesture = Gesture.Pan()
       .enabled(!inputFocused)
       .onUpdate((event) => {
@@ -217,6 +242,7 @@ export const ProfileSheet = memo(
 
         <KeyboardAvoidingView
           behavior={Platform.select({ ios: 'padding', android: undefined })}
+          keyboardVerticalOffset={keyboardOffset}
           style={styles.keyboardWrap}
         >
           <GestureDetector gesture={panGesture}>
@@ -239,8 +265,12 @@ export const ProfileSheet = memo(
                   </View>
 
                   <ScrollView
+                    ref={scrollRef}
                     style={styles.scroll}
-                    contentContainerStyle={[styles.content, { paddingBottom: 20 + insets.bottom }]}
+                    contentContainerStyle={[
+                      styles.content,
+                      { paddingBottom: 20 + insets.bottom + keyboardOffset },
+                    ]}
                     showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled"
                   >
