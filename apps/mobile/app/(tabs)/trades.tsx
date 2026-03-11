@@ -232,6 +232,7 @@ export default function TradesScreen() {
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const autoCloseRetryAfterRef = useRef<Record<string, number>>({});
   const lastAutoClosePriceFetchRef = useRef(0);
+  const recentlyClosedRef = useRef<Set<string>>(new Set());
   const pageSize = 20;
 
   const loadTrades = useCallback(async () => {
@@ -544,6 +545,7 @@ export default function TradesScreen() {
         console.log('[TRADES] finalize close response', { orderId, url, status: res.status, body: json });
         if (!res.ok) throw new Error(json?.error || 'Failed to finalize close');
         const closeTxSignature = signature;
+        recentlyClosedRef.current.add(orderId);
 
         setTrades((prev) =>
           prev.map((t) =>
@@ -574,6 +576,9 @@ export default function TradesScreen() {
       } catch (err: any) {
         const message = err?.message || 'Failed to close trade';
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+        if (recentlyClosedRef.current.has(orderId) || trade.closeTxSignature) {
+          return;
+        }
         try {
           if (!resolvedUserId) {
             resolvedUserId = await getOrCreateLocalUserId();
