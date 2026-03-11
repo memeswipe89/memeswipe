@@ -296,7 +296,7 @@ export default function TradesScreen() {
         return {
           id: String(order.id || Math.random()),
           symbol: order.token_symbol || 'TOKEN',
-          status: normalizeTradeStatus(order.status),
+          status: order.close_tx_signature ? 'closed' : normalizeTradeStatus(order.status),
           fallbackPnlUsd: (amount * roi) / 100,
           amountUsd: amount,
           displayAmountUsd,
@@ -846,6 +846,9 @@ export default function TradesScreen() {
                     ? ` (${(item.closeTriggerPct as number) > 0 ? '+' : ''}${(item.closeTriggerPct as number).toFixed(2)}%)`
                     : ''}
                 </Text>
+              ) : null}
+              {item.status === 'closed' && !item.closeReason && item.closeTxSignature ? (
+                <Text style={styles.meta}>Closed by MANUAL</Text>
               ) : null}
               {item.closeError ? (
                 <Text style={[styles.meta, styles.red]}>
