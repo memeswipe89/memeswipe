@@ -717,18 +717,30 @@ export default function HomeScreen() {
         if (incoming.length === 0) return [];
         const seen = loadedAddressRef.current[segmentType];
 
-        const deduped = incoming.filter((token) => {
+        const filtered = incoming.filter((token) => {
           if (!token.address) return false;
           if (hiddenTokenAddresses.has(token.address)) return false;
-          if (seen.has(token.address)) return false;
-          seen.add(token.address);
           return true;
         });
 
-        if (deduped.length > 0) {
+        const deduped = [];
+        for (const token of filtered) {
+          if (!seen.has(token.address)) {
+            seen.add(token.address);
+            deduped.push(token);
+          }
+        }
+
+        if (!deduped.length && filtered.length) {
+          // if dedup eliminated everything, still add the filtered batch so we keep cards flowing
+          filtered.forEach((token) => seen.add(token.address));
+        }
+
+        const tokensToAdd = deduped.length > 0 ? deduped : filtered;
+        if (tokensToAdd.length > 0) {
           setSegmentCache((prev) => ({
             ...prev,
-            [segmentType]: [...prev[segmentType], ...deduped],
+            [segmentType]: [...prev[segmentType], ...tokensToAdd],
           }));
           setSegmentDepleted((prev) => ({ ...prev, [segmentType]: false }));
         }

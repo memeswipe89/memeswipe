@@ -22,13 +22,23 @@ const MORALIS_GRADUATED_URL =
 
 const DEXSCREENER_MULTI_TOKEN_URL =
   "https://api.dexscreener.com/tokens/v1/solana";
+const DEXSCREENER_LATEST_URL = "https://api.dexscreener.com/token-profiles/latest/v1";
+const BIRDEYE_URL = "https://public-api.birdeye.so/defi/v3/token/list";
 
 // Make filters less strict so you get more than 2-4 tokens
-const MIN_LIQUIDITY_USD = 50000;
-const MIN_VOLUME_24H_USD = 10000;
-
 // How many tokens the mobile app asks for per page
 const DEFAULT_PAGE_LIMIT = 50;
+// Multi-source feed config
+const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD || 20_000);
+const MIN_VOLUME_USD = Number(process.env.MIN_VOLUME_USD || 5_000);
+const FALLBACK_MIN_LIQUIDITY_USD = Number(process.env.FALLBACK_MIN_LIQUIDITY_USD || 5_000);
+const FALLBACK_MIN_VOLUME_USD = Number(process.env.FALLBACK_MIN_VOLUME_USD || 1_000);
+const LENIENT_MIN_LIQUIDITY_USD = Number(process.env.LENIENT_MIN_LIQUIDITY_USD || 0);
+const LENIENT_MIN_VOLUME_USD = Number(process.env.LENIENT_MIN_VOLUME_USD || 0);
+const MAX_TOKEN_AGE_HOURS = Number(process.env.MAX_TOKEN_AGE_HOURS || 72);
+const GRADUATED_ADDRESS_FETCH_LIMIT = 400;
+const MAX_GRADUATED_FEED_TOKENS = 400;
+const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || "";
 
 // Cache
 const CACHE_TIME_MS = 20 * 1000;
@@ -116,6 +126,9 @@ function formatPair(pair) {
     graduationTime: pair.pairCreatedAt
       ? new Date(pair.pairCreatedAt).toLocaleString()
       : "Live now",
+    createdAt: pair.pairCreatedAt
+      ? new Date(pair.pairCreatedAt).toISOString()
+      : null,
 
     image: pair.info?.imageUrl || null,
     imageUrl: pair.info?.imageUrl || null,
@@ -133,7 +146,7 @@ function isGoodFeedPair(pair) {
   return (
     pair.chainId === "solana" &&
     (pair.liquidity?.usd || 0) >= MIN_LIQUIDITY_USD &&
-    (pair.volume?.h24 || 0) >= MIN_VOLUME_24H_USD
+    (pair.volume?.h24 || 0) >= MIN_VOLUME_USD
   );
 }
 
@@ -152,6 +165,24 @@ function pickBestPairForToken(pairs) {
   return solanaPairs[0];
 }
 
+function compareNormalizedTokens(a, b) {
+  const liquidityA = Number(a.liquidityUsd || 0);
+  const liquidityB = Number(b.liquidityUsd || 0);
+  if (liquidityB !== liquidityA) return liquidityB - liquidityA;
+
+  const volumeA = Number(a.volume24hUsd || 0);
+  const volumeB = Number(b.volume24hUsd || 0);
+  if (volumeB !== volumeA) return volumeB - volumeA;
+
+  const timeA =
+    new Date(a.createdAt || a.graduatedAt || 0).getTime() || 0;
+  const timeB =
+    new Date(b.createdAt || b.graduatedAt || 0).getTime() || 0;
+  if (timeB !== timeA) return timeB - timeA;
+
+  return (a.name || "").localeCompare(b.name || "");
+}
+
 function printTokenNamesToTerminal(tokens, label = "TOKENS") {
   console.log(`\n========== ${label} (${tokens.length}) ==========`);
 
@@ -168,6 +199,104 @@ function printTokenNamesToTerminal(tokens, label = "TOKENS") {
   });
 
   console.log("====================================\n");
+}
+
+const MAX_TOKEN_AGE_MS = MAX_TOKEN_AGE_HOURS * 60 * 60 * 1000;
+
+function safeNumber(value) {
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function normalizeTimestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value * 1000).toISOString();
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  return null;
+}
+
+function formatDollar(value) {
+  if (!Number.isFinite(value) || value === null || value === undefined) return "N/A";
+  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+}
+
+function logTokensBySource(source, tokens, tier) {
+  const label = source.toUpperCase();
+  const prefix = tier ? `${label}-${tier.toUpperCase()}` : label;
+  if (!tokens.length) {
+    console.log(`[${prefix}] no tokens`);
+    return;
+  }
+  tokens.forEach((token) => {
+    console.log(
+      `[${prefix}] ${token.name || "Unknown"} (${token.symbol || "-"}) - liquidity: ${formatDollar(
+        token.liquidityUsd
+      )} - address: ${token.address || "n/a"}`
+    );
+  });
+}
+
+function isTokenFresh(token) {
+  if (!token.address) return false;
+  if (MAX_TOKEN_AGE_MS > 0 && token.createdAt) {
+    const age = Date.now() - new Date(token.createdAt).getTime();
+    if (age > MAX_TOKEN_AGE_MS) return false;
+  }
+  return true;
+}
+
+function passesPreferredFilters(token) {
+  if (!token.address) return false;
+  const liquidity = safeNumber(token.liquidityUsd) || 0;
+  const volume = safeNumber(token.volume24hUsd) || 0;
+  if (liquidity < MIN_LIQUIDITY_USD) return false;
+  if (volume < MIN_VOLUME_USD) return false;
+  return isTokenFresh(token);
+}
+
+function passesFallbackFilters(token) {
+  if (!token.address) return false;
+  const liquidity = safeNumber(token.liquidityUsd) || 0;
+  const volume = safeNumber(token.volume24hUsd) || 0;
+  if (liquidity < FALLBACK_MIN_LIQUIDITY_USD) return false;
+  if (volume < FALLBACK_MIN_VOLUME_USD) return false;
+  return isTokenFresh(token);
+}
+
+function passesLenientFilters(token) {
+  if (!token.address) return false;
+  const liquidity = safeNumber(token.liquidityUsd) || 0;
+  const volume = safeNumber(token.volume24hUsd) || 0;
+  if (liquidity < LENIENT_MIN_LIQUIDITY_USD) return false;
+  if (volume < LENIENT_MIN_VOLUME_USD) return false;
+  return isTokenFresh(token);
+}
+
+function mergeTokensByAddress(tokens) {
+  const seen = new Map();
+  for (const token of tokens) {
+    if (typeof token.address !== "string") continue;
+    const address = token.address.toLowerCase();
+    if (!address) continue;
+    if (!seen.has(address)) {
+      seen.set(address, token);
+      continue;
+    }
+    const existing = seen.get(address);
+    if (compareNormalizedTokens(token, existing) < 0) {
+      continue;
+    }
+    seen.set(address, token);
+  }
+  const merged = Array.from(seen.values());
+  merged.sort(compareNormalizedTokens);
+  return merged.slice(0, MAX_GRADUATED_FEED_TOKENS);
 }
 
 function base64UrlEncode(input) {
@@ -279,77 +408,174 @@ async function fetchDexscreenerPairsForAddresses(addresses) {
   return allPairs;
 }
 
-async function buildGraduatedFeed() {
-  const tokenAddresses = await fetchGraduatedTokenAddresses(180);
+async function fetchPumpfunTokens() {
+  const tokenAddresses = await fetchGraduatedTokenAddresses(GRADUATED_ADDRESS_FETCH_LIMIT);
+  if (!tokenAddresses.length) return [];
 
-  if (!tokenAddresses.length) {
-    return [];
-  }
-
-  let pairs;
-  try {
-    pairs = await fetchDexscreenerPairsForAddresses(tokenAddresses);
-  } catch (error) {
-    console.error("Dexscreener fetch failed, using fallback:", error.message);
-    if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
-      return graduatedLastGoodFeed;
-    }
-    return tokenAddresses.slice(0, 50).map((address) => ({
-      id: address,
-      name: `Token ${address.slice(0, 4)}`,
-      symbol: address.slice(0, 4).toUpperCase(),
-      address,
-      priceUsd: null,
-      liquidityUsd: 0,
-      volume24hUsd: 0,
-      marketCapUsd: null,
-      change24hPct: 0,
-      chartData: [],
-      graduatedAt: null,
-      graduationTime: "Unknown",
-      image: null,
-      imageUrl: null,
-      pairAddress: "",
-      dexId: "",
-      url: "",
-      chain: "solana",
-      source: "graduated-fallback",
-    }));
-  }
+  const pairs = await fetchDexscreenerPairsForAddresses(tokenAddresses);
 
   const byToken = new Map();
 
   for (const pair of pairs) {
     const tokenAddress = pair?.baseToken?.address;
     if (!tokenAddress) continue;
-
     if (!byToken.has(tokenAddress)) {
       byToken.set(tokenAddress, []);
     }
     byToken.get(tokenAddress).push(pair);
   }
 
-  const feed = [];
+  const normalized = [];
 
   for (const [, tokenPairs] of byToken.entries()) {
     const bestPair = pickBestPairForToken(tokenPairs);
     if (!bestPair) continue;
-    if (!isGoodFeedPair(bestPair)) continue;
-
-    feed.push(formatPair(bestPair));
+    const formatted = {
+      ...formatPair(bestPair),
+      source: "pumpfun",
+    };
+    normalized.push(formatted);
   }
 
-  feed.sort((a, b) => {
-    const createdA = new Date(a.graduatedAt || 0).getTime() || 0;
-    const createdB = new Date(b.graduatedAt || 0).getTime() || 0;
-    if (createdB !== createdA) return createdB - createdA;
-    return (b.volume24hUsd || 0) - (a.volume24hUsd || 0);
+  return normalized;
+}
+
+async function fetchBirdeyeTokens() {
+  if (!BIRDEYE_API_KEY) {
+    console.log("[birdeye] skipped (BIRDEYE_API_KEY missing)");
+    return [];
+  }
+
+  const url = new URL(BIRDEYE_URL);
+  url.searchParams.set("chain", "solana");
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("sort_by", "liquidity");
+  url.searchParams.set("sort_type", "desc");
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "x-chain": "solana",
+      "x-api-key": BIRDEYE_API_KEY,
+    },
   });
 
-  if (feed.length > 0) {
-    graduatedLastGoodFeed = feed;
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Birdeye API failed: ${response.status} ${text}`);
   }
-  return feed;
+
+  const json = await response.json();
+  const rawTokens =
+    Array.isArray(json?.data?.tokens) ? json.data.tokens :
+    Array.isArray(json?.tokens) ? json.tokens :
+    [];
+
+  return rawTokens
+    .map((token) => {
+      const createdAt =
+        normalizeTimestamp(token.createdAt) ||
+        normalizeTimestamp(token.created_at) ||
+        normalizeTimestamp(token.listingTime) ||
+        normalizeTimestamp(token.listing_time) ||
+        normalizeTimestamp(token.launchTime) ||
+        normalizeTimestamp(token.launch_time);
+
+      return {
+        name: token.name || token.tokenName || token.marketName || "",
+        symbol: token.symbol || token.tokenSymbol || token.symbol_short || token.token_id || "",
+        address: token.tokenAddress || token.token_address || token.mint || token.id || token.tokenId || "",
+        priceUsd: safeNumber(token.priceUsd || token.price_usd || token.market_price),
+        liquidityUsd: safeNumber(token.liquidityUsd || token.liquidity_usd || token.liquidity),
+        volume24hUsd: safeNumber(token.volume24hUsd || token.volume_24h_usd || token.volume || token.volume_usd),
+        marketCapUsd: safeNumber(token.marketCapUsd || token.market_cap_usd || token.market_cap),
+        pairAddress:
+          token.pairAddress ||
+          token.marketAddress ||
+          token.market_address ||
+          token.poolAddress ||
+          token.pool_address ||
+          null,
+        createdAt,
+        source: "birdeye",
+      };
+    })
+    .filter((token) => Boolean(token.address));
+}
+
+const SOURCE_FETCHERS = [
+  { name: "pumpfun", fetcher: fetchPumpfunTokens },
+  { name: "birdeye", fetcher: fetchBirdeyeTokens },
+  { name: "dexscreener", fetcher: fetchDexscreenerLatestTokens },
+];
+async function buildGraduatedFeed() {
+  const preferredTokens = [];
+  const fallbackTokens = [];
+  const lenientTokens = [];
+
+  for (const source of SOURCE_FETCHERS) {
+    try {
+      const tokens = await source.fetcher();
+      const preferred = [];
+      const fallback = [];
+      const lenient = [];
+
+      for (const token of tokens) {
+        if (passesPreferredFilters(token)) {
+          preferred.push(token);
+        } else if (passesFallbackFilters(token)) {
+          fallback.push(token);
+        } else if (passesLenientFilters(token)) {
+          lenient.push(token);
+        }
+      }
+
+      logTokensBySource(source.name, preferred, "preferred");
+      logTokensBySource(source.name, fallback, "fallback");
+      logTokensBySource(source.name, lenient, "lenient");
+
+      preferredTokens.push(...preferred);
+      fallbackTokens.push(...fallback);
+      lenientTokens.push(...lenient);
+    } catch (error) {
+      console.error(`[${source.name}] fetch failed: ${error.message}`);
+    }
+  }
+
+  const mergedPreferred = mergeTokensByAddress(preferredTokens);
+  const preferredAddresses = new Set(
+    mergedPreferred.map((token) => token.address?.toLowerCase?.())
+  );
+
+  const uniqueFallback = fallbackTokens.filter((token) => {
+    const address = token.address?.toLowerCase?.();
+    return address && !preferredAddresses.has(address);
+  });
+
+  const mergedFallback = mergeTokensByAddress(uniqueFallback);
+  const fallbackAddresses = new Set(preferredAddresses);
+  mergedFallback.forEach((token) => {
+    const addr = token.address?.toLowerCase?.();
+    if (addr) fallbackAddresses.add(addr);
+  });
+
+  const uniqueLenient = lenientTokens.filter((token) => {
+    const address = token.address?.toLowerCase?.();
+    return address && !fallbackAddresses.has(address);
+  });
+
+  const mergedLenient = mergeTokensByAddress(uniqueLenient);
+  const merged = [...mergedPreferred, ...mergedFallback, ...mergedLenient].slice(
+    0,
+    MAX_GRADUATED_FEED_TOKENS
+  );
+
+  if (merged.length > 0) {
+    graduatedLastGoodFeed = merged;
+  }
+
+  return merged;
 }
 
 async function getCachedGraduatedFeed() {
@@ -552,6 +778,81 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     });
   }
 });
+
+async function fetchDexscreenerLatestTokens() {
+  const response = await fetch(DEXSCREENER_LATEST_URL, { method: "GET" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Dexscreener latest API failed: ${response.status} ${text}`);
+  }
+
+  const json = await response.json();
+  const rawTokens =
+    Array.isArray(json?.tokens)
+      ? json.tokens
+      : Array.isArray(json?.pairs)
+      ? json.pairs
+      : Array.isArray(json?.data?.tokens)
+      ? json.data.tokens
+      : [];
+
+  return rawTokens
+    .map((item) => {
+      const baseToken = item.baseToken || item.token || item;
+      const createdAt =
+        normalizeTimestamp(item.createdAt) ||
+        normalizeTimestamp(item.listingTime) ||
+        normalizeTimestamp(item.listing_time) ||
+        normalizeTimestamp(item.graduatedAt) ||
+        normalizeTimestamp(item.created_at);
+
+      return {
+        name:
+          baseToken?.name ||
+          item.name ||
+          item.tokenName ||
+          item.token?.name ||
+          "",
+        symbol:
+          baseToken?.symbol ||
+          item.symbol ||
+          item.tokenSymbol ||
+          item.token?.symbol ||
+          "",
+        address:
+          baseToken?.address ||
+          item.address ||
+          item.tokenAddress ||
+          item.token?.address ||
+          "",
+        priceUsd:
+          safeNumber(item.priceUsd || item.price_usd || baseToken?.priceUsd),
+        liquidityUsd:
+          safeNumber(
+            item.liquidity?.usd ||
+              item.liquidityUsd ||
+              item.liquidity_usd ||
+              item.liquidity ||
+              baseToken?.liquidityUsd
+          ),
+        volume24hUsd:
+          safeNumber(
+            item.volume?.h24 ||
+              item.volume24hUsd ||
+              item.volume_24h_usd ||
+              item.volume ||
+              baseToken?.volume24hUsd
+          ),
+        marketCapUsd:
+          safeNumber(item.marketCapUsd || item.market_cap_usd || item.marketCap),
+        pairAddress:
+          item.pairAddress || item.poolAddress || item.marketAddress || item.pair || null,
+        createdAt,
+        source: "dexscreener",
+      };
+    })
+    .filter((token) => Boolean(token.address));
+}
 
 app.get("/api/solana/price-usd", async (req, res) => {
   try {
@@ -1064,9 +1365,12 @@ app.post("/api/favorites", (req, res) => {
 
 app.get("/tokens/graduated", async (req, res) => {
   try {
+    const requestedLimit = Number(req.query.limit) || DEFAULT_PAGE_LIMIT;
+    const limit = Math.max(1, Math.min(requestedLimit, DEFAULT_PAGE_LIMIT));
     const feed = await getCachedGraduatedFeed();
-    printTokenNamesToTerminal(feed, "DIRECT GRADUATED FEED");
-    return res.json(feed);
+    const limitedFeed = feed.slice(0, limit);
+    printTokenNamesToTerminal(limitedFeed, "DIRECT GRADUATED FEED");
+    return res.json(limitedFeed);
   } catch (error) {
     console.error("GET /tokens/graduated error:", error.message);
     return res.status(500).json({
