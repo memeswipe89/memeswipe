@@ -740,8 +740,14 @@ export default function TradesScreen() {
     for (const trade of trades) {
       if (trade.status !== 'closed') continue;
       const pnl = trade.closePnlUsd ?? 0;
-      if (pnl > 0) totalProfit += pnl;
-      if (pnl < 0) totalLoss += Math.abs(pnl);
+      if (trade.closeReason === 'tp') {
+        totalProfit += Math.max(0, pnl);
+      } else if (trade.closeReason === 'sl') {
+        totalLoss += Math.max(0, Math.abs(pnl || 0));
+      } else {
+        if (pnl > 0) totalProfit += pnl;
+        if (pnl < 0) totalLoss += Math.abs(pnl);
+      }
     }
     return { totalProfit, totalLoss };
   }, [trades]);
@@ -801,12 +807,16 @@ export default function TradesScreen() {
           </Pressable>
         ))}
       </View>
-      {filter === 'profit' ? (
+    {filter === 'profit' ? (
+      <View style={styles.totalsRow}>
         <Text style={styles.meta}>Total Profit: ${totals.totalProfit.toFixed(6)}</Text>
-      ) : null}
-      {filter === 'loss' ? (
+      </View>
+    ) : null}
+    {filter === 'loss' ? (
+      <View style={styles.totalsRow}>
         <Text style={styles.meta}>Total Loss: ${totals.totalLoss.toFixed(6)}</Text>
-      ) : null}
+      </View>
+    ) : null}
 
       {loading ? (
         <View style={styles.centerState}>
@@ -957,6 +967,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 10 },
+  totalsRow: { marginBottom: 12 },
   filterChip: {
     paddingVertical: 8,
     paddingHorizontal: 10,
