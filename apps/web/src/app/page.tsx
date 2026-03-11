@@ -1,4 +1,4 @@
-export default function Home() {
+export default function LandingPage() {
   return (
     <div className="min-h-screen bg-[#06070b] text-white relative overflow-hidden">
       <div className="absolute inset-0">

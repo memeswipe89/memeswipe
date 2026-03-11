@@ -130,7 +130,7 @@ export default function WaitlistPage() {
           )}
 
           <a
-            href="/"
+            href="/landing"
             className="inline-flex items-center justify-center rounded-full border border-cyan-400/30 px-5 py-2 text-xs uppercase tracking-[0.25em] text-cyan-200/80 hover:border-cyan-300 hover:text-cyan-100 transition-colors"
           >
             More detail
