@@ -428,7 +428,7 @@ export default function TradesScreen() {
       }
     };
     void refreshLivePrices();
-    const id = setInterval(refreshLivePrices, 15000);
+    const id = setInterval(refreshLivePrices, 5000);
     return () => {
       active = false;
       clearInterval(id);
@@ -686,7 +686,7 @@ export default function TradesScreen() {
     // If live prices are missing, refresh them on-demand so TP/SL can trigger reliably.
     const openAddresses = Array.from(new Set(trades.filter((t) => t.status === 'open' && t.tokenAddress).map((t) => t.tokenAddress)));
     if (!openAddresses.length) return;
-    if (now - lastAutoClosePriceFetchRef.current < 10_000) return;
+    if (now - lastAutoClosePriceFetchRef.current < 5_000) return;
     lastAutoClosePriceFetchRef.current = now;
     void (async () => {
       try {
