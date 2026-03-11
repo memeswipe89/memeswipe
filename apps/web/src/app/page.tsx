@@ -213,7 +213,7 @@ export default function LandingPage() {
             <p className="text-xs uppercase tracking-[0.35em] text-cyan-200/70">Waitlist</p>
             <h2 className="mt-3 text-3xl font-semibold text-balance">Ready to swipe early?</h2>
             <p className="mt-3 text-sm text-white/60 text-balance">
-              Secure your spot and get early access as soon as we open the gates.
+              Secure your spot with your Twitter handle and email.
             </p>
             <a
               href="/waitlist"

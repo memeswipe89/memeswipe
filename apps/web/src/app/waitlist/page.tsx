@@ -4,31 +4,31 @@ import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
 
 export default function WaitlistPage() {
-  const [walletAddress, setWalletAddress] = useState('');
+  const [twitterHandle, setTwitterHandle] = useState('');
   const [email, setEmail] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const isValidSolanaAddress = (address: string) => {
-    const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-    return base58Regex.test(address);
-  };
 
   const isValidEmail = (emailValue: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(emailValue);
   };
 
+  const normalizeTwitter = (value: string) => value.trim().replace(/^@/, '');
+  const isValidTwitter = (value: string) =>
+    /^[A-Za-z0-9_]{1,15}$/.test(normalizeTwitter(value));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!walletAddress.trim()) {
-      alert('Please enter your wallet address.');
+    if (!twitterHandle.trim()) {
+      alert('Please enter your Twitter handle.');
       return;
     }
 
-    if (!isValidSolanaAddress(walletAddress.trim())) {
-      alert('Please enter a valid Solana wallet address.');
+    const normalizedTwitter = normalizeTwitter(twitterHandle);
+    if (!isValidTwitter(normalizedTwitter)) {
+      alert('Please enter a valid Twitter handle.');
       return;
     }
 
@@ -46,7 +46,7 @@ export default function WaitlistPage() {
 
     try {
       const { error } = await supabase.from('waitlist').insert({
-        wallet_address: walletAddress.trim(),
+        wallet_address: normalizedTwitter,
         email: email.trim(),
       });
 
@@ -97,9 +97,9 @@ export default function WaitlistPage() {
               <form onSubmit={handleSubmit} className="space-y-4">
                 <input
                   type="text"
-                  placeholder="Wallet Address"
-                  value={walletAddress}
-                  onChange={(e) => setWalletAddress(e.target.value)}
+                  placeholder="Twitter handle (e.g. @memeswipe)"
+                  value={twitterHandle}
+                  onChange={(e) => setTwitterHandle(e.target.value)}
                   required
                   className="w-full px-4 py-4 bg-gray-900/50 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-400 text-white placeholder-gray-400 text-center transition-all duration-300 hover:bg-gray-800/50"
                 />
