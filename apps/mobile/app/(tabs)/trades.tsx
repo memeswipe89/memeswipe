@@ -728,6 +728,12 @@ export default function TradesScreen() {
       if (query && !trade.symbol.toLowerCase().includes(query.toLowerCase())) return false;
       if (filter === 'open' && trade.status !== 'open') return false;
       if (filter === 'closed' && trade.status !== 'closed') return false;
+      if (filter === 'profit') {
+        return trade.status === 'closed' && trade.closeReason === 'tp';
+      }
+      if (filter === 'loss') {
+        return trade.status === 'closed' && trade.closeReason === 'sl';
+      }
       if (filter === 'profit' && livePnlUsd <= 0) return false;
       if (filter === 'loss' && livePnlUsd >= 0) return false;
       return true;
