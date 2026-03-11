@@ -9,26 +9,50 @@ export default function Home() {
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const isValidSolanaAddress = (address: string) => {
+    const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    return base58Regex.test(address);
+  };
+
+  const isValidEmail = (email: string) => {
+    const emailRegex =
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Additional validation
     if (!walletAddress.trim()) {
       alert('Please enter your wallet address.');
       return;
     }
+
+    if (!isValidSolanaAddress(walletAddress.trim())) {
+      alert('Please enter a valid Solana wallet address.');
+      return;
+    }
+
     if (!email.trim()) {
       alert('Please enter your email address.');
       return;
     }
-    
+
+    if (!isValidEmail(email.trim())) {
+      alert('Please enter a valid email address.');
+      return;
+    }
+
     setLoading(true);
+
     try {
       const { error } = await supabase.from('waitlist').insert({
         wallet_address: walletAddress.trim(),
         email: email.trim(),
       });
+
       if (error) throw error;
+
       setSubmitted(true);
     } catch (error) {
       console.error('Error submitting to waitlist:', error);
@@ -48,14 +72,16 @@ export default function Home() {
         <div className="absolute top-2/3 right-1/4 w-1 h-1 bg-blue-300/25 rounded-full animate-pulse delay-1500"></div>
         <div className="absolute bottom-1/4 right-1/2 w-2 h-2 bg-green-300/15 rounded-full animate-pulse delay-2000"></div>
       </div>
+
       {/* Hero Section */}
       <section className="flex-1 flex flex-col items-center justify-center px-4 py-8 relative z-10">
         <div className="text-center max-w-2xl mx-auto space-y-4">
-          {/* Logo and Early Access */}
+
           <div className="space-y-3">
             <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-green-500 rounded-full mx-auto flex items-center justify-center">
               <span className="text-xl font-bold text-white">M</span>
             </div>
+
             <div className="space-y-1">
               <h2 className="text-2xl font-bold text-white">MemeSwipe</h2>
               <p className="text-xs text-gray-400 uppercase tracking-wider">Early Access</p>
@@ -67,27 +93,17 @@ export default function Home() {
             <h1 className="text-2xl md:text-2xl font-light text-gray-200">
               Join the waitlist for
             </h1>
+
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-400 via-green-400 to-blue-500 bg-clip-text text-transparent">
              Tinder for Memecoins
             </h1>
           </div>
 
-          {/* Subtext */}
-          <div className="space-y-1 max-w-lg mx-auto">
-            {/* <p className="text-base text-gray-300 leading-relaxed">
-              Discover memecoins before they trend.
-            </p>
-            <p className="text-base text-gray-300 leading-relaxed">
-              Set Take Profit. Set Stop Loss.
-            </p>
-            <p className="text-base text-gray-300 leading-relaxed">
-              Swipe right to buy. Swipe left to skip.
-            </p> */}
-          </div>
           {/* Waitlist Form */}
           {!submitted ? (
             <div className="w-full max-w-md pt-8 mx-auto space-y-4">
               <form onSubmit={handleSubmit} className="space-y-4">
+
                 <input
                   type="text"
                   placeholder="Wallet Address"
@@ -96,6 +112,7 @@ export default function Home() {
                   required
                   className="w-full px-4 py-4 bg-gray-900/50 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-gray-400 text-center transition-all duration-300 hover:bg-gray-800/50"
                 />
+
                 <input
                   type="email"
                   placeholder="Email"
@@ -104,6 +121,7 @@ export default function Home() {
                   required
                   className="w-full px-4 py-4 bg-gray-900/50 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-gray-400 text-center transition-all duration-300 hover:bg-gray-800/50"
                 />
+
                 <button
                   type="submit"
                   disabled={loading}
@@ -111,8 +129,10 @@ export default function Home() {
                 >
                   {loading ? 'Joining...' : 'Join Waitlist →'}
                 </button>
+
               </form>
             </div>
+
           ) : (
             <div className="w-full max-w-md mx-auto space-y-4 text-center">
               <h2 className="text-2xl font-bold text-green-400">You&apos;re on the MemeSwipe waitlist.</h2>
