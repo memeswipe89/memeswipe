@@ -734,6 +734,18 @@ export default function TradesScreen() {
     });
   }, [filter, query, trades]);
 
+  const totals = useMemo(() => {
+    let totalProfit = 0;
+    let totalLoss = 0;
+    for (const trade of trades) {
+      if (trade.status !== 'closed') continue;
+      const pnl = trade.closePnlUsd ?? 0;
+      if (pnl > 0) totalProfit += pnl;
+      if (pnl < 0) totalLoss += Math.abs(pnl);
+    }
+    return { totalProfit, totalLoss };
+  }, [trades]);
+
   const paged = filtered.slice(0, page * pageSize);
   const hasMore = paged.length < filtered.length;
   const openSolscanTx = useCallback(async (signature: string) => {
@@ -789,6 +801,12 @@ export default function TradesScreen() {
           </Pressable>
         ))}
       </View>
+      {filter === 'profit' ? (
+        <Text style={styles.meta}>Total Profit: ${totals.totalProfit.toFixed(6)}</Text>
+      ) : null}
+      {filter === 'loss' ? (
+        <Text style={styles.meta}>Total Loss: ${totals.totalLoss.toFixed(6)}</Text>
+      ) : null}
 
       {loading ? (
         <View style={styles.centerState}>
@@ -858,7 +876,7 @@ export default function TradesScreen() {
               )}
               {item.status === 'closed' && item.closeReason ? (
                 <Text style={styles.meta}>
-                  Closed by {item.closeReason.toUpperCase()}
+                  CLOSED BY {item.closeReason.toUpperCase()}
                   {Number.isFinite(item.closeTriggerPct || Number.NaN)
                     ? ` (${(item.closeTriggerPct as number) > 0 ? '+' : ''}${(item.closeTriggerPct as number).toFixed(2)}%)`
                     : ''}
