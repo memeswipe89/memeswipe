@@ -46,7 +46,7 @@ export default function WaitlistPage() {
 
     try {
       const { error } = await supabase.from('waitlist').insert({
-        wallet_address: normalizedTwitter,
+        twitter_id: normalizedTwitter,
         email: email.trim(),
       });
 
