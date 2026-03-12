@@ -418,6 +418,8 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   const panGesture = useMemo(
     () =>
       Gesture.Pan()
+        .maxPointers(1)
+        .activeOffsetY([-10, 10])
         .enabled(!isInteractionLocked)
         .onBegin(() => {
           if (onSwipeStateChange) runOnJS(onSwipeStateChange)(true);
@@ -568,6 +570,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     alignItems: 'stretch',
     paddingHorizontal: 0,
+    touchAction: 'none',
   },
   bgTintLayer: {
     ...StyleSheet.absoluteFillObject,
