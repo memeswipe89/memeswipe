@@ -592,6 +592,7 @@ const styles = StyleSheet.create({
     right: 0,
     width: '100%',
     alignItems: 'stretch',
+    touchAction: 'none',
   },
   nextCard: {
     transform: [{ scale: 0.95 }],

@@ -18,6 +18,8 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  'list.bullet.rectangle.fill': 'view-list', // chosen Material icon similar to list
+  'creditcard.fill': 'credit_card',
 } as IconMapping;
 
 /**
