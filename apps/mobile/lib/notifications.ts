@@ -1,20 +1,26 @@
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
 
 const TRADE_CHANNEL_ID = 'trade-events';
 let initialized = false;
+const isWeb = Platform.OS === 'web';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+let Notifications: typeof import('expo-notifications') | null = null;
+
+if (!isWeb) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  Notifications = require('expo-notifications');
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 export const initializeNotifications = async () => {
-  if (initialized) return;
+  if (isWeb || initialized || Notifications == null) return;
 
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync(TRADE_CHANNEL_ID, {
@@ -41,13 +47,16 @@ export const notifyTradeClosed = async ({
   symbol: string;
   pnlUsd: number;
 }) => {
+  if (isWeb || Notifications == null) return false;
   const permissions = await Notifications.getPermissionsAsync();
   if (permissions.status !== 'granted') return false;
 
   await Notifications.scheduleNotificationAsync({
     content: {
       title: 'Trade Closed',
-      body: `${symbol.toUpperCase()} ${pnlUsd >= 0 ? 'closed in profit' : 'closed in loss'} (${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(4)}).`,
+      body: `${symbol.toUpperCase()} ${
+        pnlUsd >= 0 ? 'closed in profit' : 'closed in loss'
+      } (${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(4)}).`,
       sound: 'default',
       ...(Platform.OS === 'android' ? { channelId: TRADE_CHANNEL_ID } : {}),
     },

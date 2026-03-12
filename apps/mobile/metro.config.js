@@ -16,7 +16,11 @@ config.resolver.alias = {
   ...(config.resolver.alias || {}),
   'jose/node': 'jose/browser',
   'jose/dist/node': 'jose/dist/browser',
-  '@privy-io/js-sdk-core/node_modules/uuid/wrapper.mjs': path.resolve(__dirname, 'web/uuid-wrapper.mjs'),
+  '@privy-io/js-sdk-core/node_modules/uuid/wrapper.mjs': path.resolve(
+    __dirname,
+    'web/uuid-wrapper.mjs'
+  ),
+  'expo-application': path.resolve(__dirname, 'web/expo-application-stub.js'),
 };
 config.resolver.unstable_enablePackageExports = false;
 

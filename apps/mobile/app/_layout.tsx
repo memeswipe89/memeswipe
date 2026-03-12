@@ -10,7 +10,7 @@ import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Text, View } from "react-native";
-import { PrivyProvider } from "@privy-io/expo";
+import { PrivyProviderWrapper } from "@/lib/privy-runtime";
 import React from 'react';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
@@ -61,7 +61,7 @@ export default function RootLayout() {
   }
 
   const content = (
-    <PrivyProvider
+    <PrivyProviderWrapper
       appId={privyAppId}
       clientId={privyClientId}
       config={{
@@ -88,7 +88,7 @@ export default function RootLayout() {
           </TradeSettingsProvider>
         </WalletProvider>
       </AuthProvider>
-    </PrivyProvider>
+    </PrivyProviderWrapper>
   );
 
   return content;

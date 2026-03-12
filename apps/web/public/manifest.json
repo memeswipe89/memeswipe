@@ -1,0 +1,26 @@
+{
+  "short_name": "MemeSwipe",
+  "name": "MemeSwipe: Solana Meme Trading",
+  "description": "Swipe, rate, and trade Solana memecoins with a one-tap wallet.",
+  "lang": "en-US",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05060e",
+  "theme_color": "#7285ff",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
