@@ -335,7 +335,7 @@ export default function HomeScreen() {
   );
 
   const handleTwitterRedirect = useCallback(
-    (url: string) => {
+    async (url: string) => {
       if (!connectInProgressRef.current) return;
       const parsed = Linking.parse(url);
       const path = parsed.path || "";
@@ -371,17 +371,17 @@ export default function HomeScreen() {
       }
 
       const profile = { username: twitterUsername, id: twitterUserId };
-        try {
-          await ensurePrivyWalletSynced(profile);
-        } catch (walletErr: any) {
-          console.log("Privy wallet sync failed", walletErr);
-          Alert.alert(
-            "Wallet Sync Failed",
-            walletErr?.message || "Could not restore your Privy wallet. Please try reconnecting."
-          );
-        }
-        setTwitterProfile(profile);
-        void AsyncStorage.setItem(TWITTER_PROFILE_CACHE_KEY, JSON.stringify(profile));
+      try {
+        await ensurePrivyWalletSynced(profile);
+      } catch (walletErr: any) {
+        console.log("Privy wallet sync failed", walletErr);
+        Alert.alert(
+          "Wallet Sync Failed",
+          walletErr?.message || "Could not restore your Privy wallet. Please try reconnecting."
+        );
+      }
+      setTwitterProfile(profile);
+      void AsyncStorage.setItem(TWITTER_PROFILE_CACHE_KEY, JSON.stringify(profile));
       setShowTwitterPrompt(false);
       Alert.alert("Connected", `Connected as @${twitterUsername}`);
     },
@@ -1233,7 +1233,12 @@ export default function HomeScreen() {
   }, [hideToken]);
 
   const handleBuy = useCallback(
-    (token: SwipeToken) => {
+    async (token: SwipeToken) => {
+      if (!twitterProfile) {
+        setShowTwitterPrompt(true);
+        void connectTwitter();
+        return;
+      }
       if (!tradingWalletAddress) {
         Alert.alert("Set up wallet", "Please create your Privy wallet first.");
         return;

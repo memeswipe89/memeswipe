@@ -17,7 +17,7 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
-import { useLoginWithEmail, usePrivy } from "@privy-io/expo";
+import { usePrivy } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 
@@ -72,7 +72,6 @@ export default function WalletScreen() {
   } = useWalletContext();
   const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
-  const { sendCode, loginWithCode } = useLoginWithEmail();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -80,11 +79,6 @@ export default function WalletScreen() {
   const [withdrawAmount, setWithdrawAmount] = useState("0.01");
   const [withdrawing, setWithdrawing] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [emailInput, setEmailInput] = useState("");
-  const [codeInput, setCodeInput] = useState("");
-  const [sendingCode, setSendingCode] = useState(false);
-  const [verifyingCode, setVerifyingCode] = useState(false);
-  const [codeSent, setCodeSent] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -174,45 +168,6 @@ export default function WalletScreen() {
     }
   };
 
-  const handleSendCode = useCallback(async () => {
-    const email = emailInput.trim();
-    if (!email) {
-      Alert.alert("Connect Privy", "Enter a valid email address.");
-      return;
-    }
-    try {
-      setSendingCode(true);
-      await sendCode({ email });
-      setCodeSent(true);
-      Alert.alert("Check your email", "Enter the verification code we sent.");
-    } catch (error: any) {
-      Alert.alert("Privy Login", error?.message || "Failed to send code.");
-    } finally {
-      setSendingCode(false);
-    }
-  }, [emailInput, sendCode]);
-
-  const handleVerifyCode = useCallback(async () => {
-    const email = emailInput.trim();
-    const code = codeInput.trim();
-    if (!email || !code) {
-      Alert.alert("Connect Privy", "Enter your email and verification code.");
-      return;
-    }
-    try {
-      setVerifyingCode(true);
-      await loginWithCode({ email, code });
-      const address = await getOrCreateTradingWalletAddress();
-      Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
-      if (address) {
-        await loadBalance(address);
-      }
-    } catch (error: any) {
-      Alert.alert("Privy Login", error?.message || "Failed to verify code.");
-    } finally {
-      setVerifyingCode(false);
-    }
-  }, [codeInput, emailInput, getOrCreateTradingWalletAddress, loginWithCode]);
 
   const openPhantom = async () => {
     if (!tradingWalletAddress) return;
