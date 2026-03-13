@@ -107,6 +107,29 @@ const createUuidV4 = () =>
     return value.toString(16);
   });
 
+const getTwitterFromPrivy = (privyUser: any): TwitterProfile | null => {
+  if (!privyUser) return null;
+  const linked = Array.isArray(privyUser?.linkedAccounts) ? privyUser.linkedAccounts : [];
+  const twitter =
+    linked.find((account: any) => account?.type === "twitter_oauth") ||
+    linked.find((account: any) => typeof account?.username === "string");
+  if (!twitter) return null;
+  const username =
+    typeof twitter?.username === "string"
+      ? twitter.username
+      : typeof twitter?.handle === "string"
+        ? twitter.handle
+        : null;
+  const id =
+    typeof twitter?.subject === "string"
+      ? twitter.subject
+      : typeof twitter?.id === "string"
+        ? twitter.id
+        : null;
+  if (!username || !id) return null;
+  return { username, id };
+};
+
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const { user, isReady } = usePrivy();
   const solanaWallet = useEmbeddedSolanaWallet();
@@ -127,6 +150,16 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const profile = getTwitterFromPrivy(user);
+    if (!profile) return;
+    setTwitterProfile((prev) => {
+      if (prev?.id === profile.id && prev?.username === profile.username) return prev;
+      return profile;
+    });
   }, [user]);
 
   useEffect(() => {
@@ -172,7 +205,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     await waitForPrivyReady();
 
     if (!userRef.current) {
-      throw new Error("Please connect your Twitter account first.");
+      throw new Error("Privy login required. Please connect and try again.");
     }
   }, [waitForPrivyReady]);
 

@@ -1,112 +1,435 @@
+import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Line, Path, Stop } from 'react-native-svg';
+import { area, curveBasis, line } from 'd3-shape';
 
-import { Collapsible } from '@/components/ui/collapsible';
-import { ExternalLink } from '@/components/external-link';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Fonts } from '@/constants/theme';
+import { useWalletContext } from '@/contexts/wallet-context';
+import { API_BASE } from '@/lib/api-base';
 
 export default function TabTwoScreen() {
+  const chartHeight = 190;
+  const chartPadding = 12;
+  const [chartWidth, setChartWidth] = useState(0);
+  const { twitterProfile, getOrCreateLocalUserId } = useWalletContext();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
+
+  const loadOrders = useCallback(async () => {
+    if (!twitterProfile) {
+      setOrders([]);
+      setError(null);
+      return;
+    }
+    try {
+      setLoading(true);
+      setError(null);
+      const userId = await getOrCreateLocalUserId();
+      const res = await fetch(`${API_BASE}/api/orders?userId=${encodeURIComponent(userId)}&limit=200`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Failed to load orders');
+      setOrders(Array.isArray(json?.orders) ? json.orders : []);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load orders');
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [API_BASE, getOrCreateLocalUserId, twitterProfile]);
+
+  const loadSolPrice = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/solana/price-usd`);
+      const json = await res.json();
+      const price = Number(json?.priceUsd || 0);
+      if (Number.isFinite(price) && price > 0) {
+        setSolPriceUsd(price);
+      }
+    } catch {
+      // ignore
+    }
+  }, [API_BASE]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadOrders();
+      void loadSolPrice();
+    }, [loadOrders, loadSolPrice])
+  );
+
+  const toNumber = (value: any, fallback = 0) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  };
+
+  const metrics = useMemo(() => {
+    const closed = orders.filter((o) => o?.close_tx_signature || o?.close_reason === 'tp' || o?.close_reason === 'sl');
+    const totalTrades = orders.length;
+    const wins = closed.filter((o) => o?.close_reason === 'tp').length;
+    const losses = closed.filter((o) => o?.close_reason === 'sl').length;
+    const winRate = wins + losses > 0 ? Math.round((wins / (wins + losses)) * 100) : 0;
+
+    let totalPnlUsd = 0;
+    closed.forEach((o) => {
+      const pnlUsd = toNumber(o?.close_pnl_usd, 0);
+      totalPnlUsd += pnlUsd;
+    });
+    const totalPnlSol = solPriceUsd ? totalPnlUsd / solPriceUsd : 0;
+
+    const dayBuckets = new Map<string, { profit: number; loss: number }>();
+    const days: string[] = [];
+    for (let i = 6; i >= 0; i -= 1) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      dayBuckets.set(key, { profit: 0, loss: 0 });
+      days.push(key);
+    }
+    closed.forEach((o) => {
+      const closedAt = typeof o?.closed_at === 'string' ? o.closed_at : null;
+      if (!closedAt) return;
+      const key = new Date(closedAt).toISOString().slice(0, 10);
+      const bucket = dayBuckets.get(key);
+      if (!bucket) return;
+      const pnl = toNumber(o?.close_pnl_usd, 0);
+      if (o?.close_reason === 'tp') bucket.profit += Math.max(0, pnl);
+      if (o?.close_reason === 'sl') bucket.loss += Math.abs(Math.min(0, pnl));
+    });
+
+    const profitSeries = days.map((k) => dayBuckets.get(k)?.profit || 0);
+    const lossSeries = days.map((k) => dayBuckets.get(k)?.loss || 0);
+
+    return {
+      totalTrades,
+      winRate,
+      totalPnlSol,
+      profitSeries,
+      lossSeries,
+      recentWins: closed
+        .filter((o) => o?.close_reason === 'tp')
+        .sort((a, b) => String(b?.closed_at || '').localeCompare(String(a?.closed_at || '')))
+        .slice(0, 3),
+    };
+  }, [orders, solPriceUsd]);
+
+  const combinedSeries = metrics.profitSeries.map((value, index) => value - (metrics.lossSeries[index] || 0));
+  const hasSeries = combinedSeries.some((value) => Math.abs(value) > 0.00001);
+  const cumulativeSeries = combinedSeries.reduce<number[]>((acc, value) => {
+    const prev = acc.length ? acc[acc.length - 1] : 0;
+    acc.push(prev + value);
+    return acc;
+  }, []);
+  const minSeries = Math.min(...cumulativeSeries, hasSeries ? 0 : -1);
+  const maxSeries = Math.max(...cumulativeSeries, hasSeries ? 1 : 1);
+  const yScale = (value: number) => {
+    const range = chartHeight - chartPadding * 2;
+    const min = Math.min(minSeries, maxSeries - 1);
+    const max = Math.max(maxSeries, minSeries + 1);
+    return chartPadding + ((max - value) / (max - min)) * range;
+  };
+  const xScale = (index: number) => {
+    if (combinedSeries.length <= 1) return chartPadding;
+    const usable = chartWidth - chartPadding * 2;
+    return chartPadding + (usable * index) / (combinedSeries.length - 1);
+  };
+
+  const linePath = useMemo(() => {
+    if (!chartWidth) return '';
+    if (!hasSeries) {
+      const midY = chartPadding + (chartHeight - chartPadding * 2) / 2;
+      return `M ${chartPadding} ${midY} L ${chartWidth - chartPadding} ${midY}`;
+    }
+    return (
+      line<number>()
+        .x((_, index) => xScale(index))
+        .y((value) => yScale(value))
+        .curve(curveBasis)(cumulativeSeries) || ''
+    );
+  }, [chartWidth, cumulativeSeries, minSeries, maxSeries, hasSeries]);
+
+  const areaPath = useMemo(() => {
+    if (!chartWidth) return '';
+    if (!hasSeries) return '';
+    return (
+      area<number>()
+        .x((_, index) => xScale(index))
+        .y0(chartHeight - chartPadding)
+        .y1((value) => yScale(value))
+        .curve(curveBasis)(cumulativeSeries) || ''
+    );
+  }, [chartWidth, cumulativeSeries, minSeries, maxSeries, chartHeight, chartPadding, hasSeries]);
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
-      headerImage={
-        <IconSymbol
-          size={310}
-          color="#808080"
-          name="chevron.left.forwardslash.chevron.right"
-          style={styles.headerImage}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText
-          type="title"
-          style={{
-            fontFamily: Fonts.rounded,
-          }}>
-          Explore
-        </ThemedText>
-      </ThemedView>
-      <ThemedText>This app includes example code to help you get started.</ThemedText>
-      <Collapsible title="File-based routing">
-        <ThemedText>
-          This app has two screens:{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/explore.tsx</ThemedText>
-        </ThemedText>
-        <ThemedText>
-          The layout file in <ThemedText type="defaultSemiBold">app/(tabs)/_layout.tsx</ThemedText>{' '}
-          sets up the tab navigator.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/router/introduction">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Android, iOS, and web support">
-        <ThemedText>
-          You can open this project on Android, iOS, and the web. To open the web version, press{' '}
-          <ThemedText type="defaultSemiBold">w</ThemedText> in the terminal running this project.
-        </ThemedText>
-      </Collapsible>
-      <Collapsible title="Images">
-        <ThemedText>
-          For static images, you can use the <ThemedText type="defaultSemiBold">@2x</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">@3x</ThemedText> suffixes to provide files for
-          different screen densities
-        </ThemedText>
-        <Image
-          source={require('@/assets/images/react-logo.png')}
-          style={{ width: 100, height: 100, alignSelf: 'center' }}
-        />
-        <ExternalLink href="https://reactnative.dev/docs/images">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Light and dark mode components">
-        <ThemedText>
-          This template has light and dark mode support. The{' '}
-          <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect
-          what the user&apos;s current color scheme is, and so you can adjust UI colors accordingly.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/develop/user-interface/color-themes/">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Animations">
-        <ThemedText>
-          This template includes an example of an animated component. The{' '}
-          <ThemedText type="defaultSemiBold">components/HelloWave.tsx</ThemedText> component uses
-          the powerful{' '}
-          <ThemedText type="defaultSemiBold" style={{ fontFamily: Fonts.mono }}>
-            react-native-reanimated
-          </ThemedText>{' '}
-          library to create a waving hand animation.
-        </ThemedText>
-        {Platform.select({
-          ios: (
-            <ThemedText>
-              The <ThemedText type="defaultSemiBold">components/ParallaxScrollView.tsx</ThemedText>{' '}
-              component provides a parallax effect for the header image.
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <View style={styles.hero}>
+        <ExpoLinearGradient colors={['#121a32', '#0b0f1a']} style={StyleSheet.absoluteFillObject} />
+        <View style={styles.heroOrbCyan} />
+        <View style={styles.heroOrbLime} />
+        <View style={styles.heroOrbAmber} />
+        <View style={styles.heroBadge}>
+          <Image source={require('@/assets/images/icon.png')} style={styles.heroBadgeImage} contentFit="contain" />
+        </View>
+        <ThemedText type="title" style={styles.heroTitle}>Dashboard</ThemedText>
+        <ThemedText style={styles.heroSubtitle}>Your meme portfolio at a glance.</ThemedText>
+      </View>
+
+      <View style={styles.summaryRow}>
+        {[
+          { label: 'Total PnL', value: `${metrics.totalPnlSol >= 0 ? '+' : ''}${metrics.totalPnlSol.toFixed(4)} SOL`, tone: 'positive' },
+          { label: 'Win Rate', value: `${metrics.winRate}%`, tone: 'neutral' },
+          { label: 'Trades', value: String(metrics.totalTrades), tone: 'neutral' },
+        ].map((item) => (
+          <View key={item.label} style={styles.summaryCard}>
+            <ThemedText style={styles.summaryLabel}>{item.label}</ThemedText>
+            <ThemedText style={[styles.summaryValue, item.tone === 'positive' && styles.positive]}>
+              {item.value}
             </ThemedText>
-          ),
-        })}
-      </Collapsible>
-    </ParallaxScrollView>
+          </View>
+        ))}
+      </View>
+
+      <ThemedView style={styles.sectionHeader}>
+        <ThemedText type="defaultSemiBold" style={styles.sectionTitle}>PnL chart</ThemedText>
+        <ThemedText style={styles.sectionHint}>Last 7 sessions</ThemedText>
+      </ThemedView>
+      <View style={styles.chartCard} onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}>
+        <View style={styles.chartGrid} />
+        {chartWidth > 0 ? (
+          <Svg width={chartWidth} height={chartHeight}>
+            <Defs>
+              <SvgLinearGradient id="pnlFill" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%" stopColor="#6ee7ff" stopOpacity="0.35" />
+                <Stop offset="75%" stopColor="#1c2333" stopOpacity="0.05" />
+                <Stop offset="100%" stopColor="#101625" stopOpacity="0.01" />
+              </SvgLinearGradient>
+              <SvgLinearGradient id="pnlStroke" x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0%" stopColor="#6ee7ff" />
+                <Stop offset="100%" stopColor="#a4ff8c" />
+              </SvgLinearGradient>
+            </Defs>
+            {[0.2, 0.5, 0.8].map((t) => (
+              <Line
+                key={t}
+                x1={chartPadding}
+                y1={chartPadding + (chartHeight - chartPadding * 2) * t}
+                x2={chartWidth - chartPadding}
+                y2={chartPadding + (chartHeight - chartPadding * 2) * t}
+                stroke="rgba(120,140,190,0.16)"
+                strokeWidth={1}
+              />
+            ))}
+            <Path d={areaPath} fill="url(#pnlFill)" />
+            <Path d={linePath} stroke="url(#pnlStroke)" strokeWidth={3} fill="none" />
+          </Svg>
+        ) : null}
+        <View style={styles.chartLegend}>
+          <View style={styles.legendDot} />
+          <ThemedText style={styles.legendText}>Cumulative PnL (USD)</ThemedText>
+        </View>
+      </View>
+
+      <ThemedView style={styles.sectionHeader}>
+        <ThemedText type="defaultSemiBold" style={styles.sectionTitle}>Recent wins</ThemedText>
+        <ThemedText style={styles.sectionHint}>Quick read of your best exits</ThemedText>
+      </ThemedView>
+      <View style={styles.listWrap}>
+        {loading ? (
+          <ThemedText style={styles.sectionHint}>Loading dashboard...</ThemedText>
+        ) : error ? (
+          <ThemedText style={styles.sectionHint}>{error}</ThemedText>
+        ) : metrics.recentWins.length === 0 ? (
+          <ThemedText style={styles.sectionHint}>No wins yet.</ThemedText>
+        ) : (
+          metrics.recentWins.map((item) => {
+            const pnlUsd = toNumber(item?.close_pnl_usd, 0);
+            const pnlSol = solPriceUsd ? pnlUsd / solPriceUsd : 0;
+            return (
+              <View key={String(item?.id || Math.random())} style={styles.listCard}>
+                <View>
+                  <ThemedText style={styles.listName}>{item?.token_symbol || 'TOKEN'}</ThemedText>
+                  <ThemedText style={styles.listMeta}>{String(item?.closed_at || '').slice(0, 10)}</ThemedText>
+                </View>
+                <ThemedText style={styles.listPnl}>
+                  +{pnlSol.toFixed(4)} SOL
+                </ThemedText>
+              </View>
+            );
+          })
+        )}
+      </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: '#808080',
-    bottom: -90,
-    left: -35,
-    position: 'absolute',
+  screen: {
+    flex: 1,
+    backgroundColor: '#07090f',
   },
-  titleContainer: {
+  content: {
+    padding: 16,
+    paddingBottom: 28,
+  },
+  hero: {
+    borderRadius: 20,
+    padding: 18,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(120,140,190,0.2)',
+    marginTop: 50,
+    marginBottom: 16,
+  },
+  heroOrbCyan: {
+    position: 'absolute',
+    right: -30,
+    top: -20,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(77,214,255,0.3)',
+  },
+  heroOrbLime: {
+    position: 'absolute',
+    left: -20,
+    bottom: -30,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: 'rgba(183,244,107,0.2)',
+  },
+  heroOrbAmber: {
+    position: 'absolute',
+    right: 30,
+    bottom: 10,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255,180,84,0.28)',
+  },
+  heroTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#f4f7ff',
+  },
+  heroBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(120,140,190,0.35)',
+    backgroundColor: '#0b0f1a',
+    marginBottom: 8,
+  },
+  heroBadgeImage: {
+    width: '100%',
+    height: '100%',
+  },
+  heroSubtitle: {
+    marginTop: 6,
+    color: '#9aa6c4',
+    fontSize: 12,
+  },
+  summaryRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
+    marginBottom: 18,
+  },
+  summaryCard: {
+    flex: 1,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(120,140,190,0.2)',
+    backgroundColor: '#0c111f',
+  },
+  summaryLabel: {
+    color: '#8794b4',
+    fontSize: 11,
+  },
+  summaryValue: {
+    marginTop: 8,
+    color: '#f4f7ff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  positive: {
+    color: '#9bf28b',
+  },
+  sectionHeader: {
+    gap: 4,
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  sectionTitle: {
+    color: '#f4f7ff',
+    fontSize: 16,
+  },
+  sectionHint: {
+    color: '#7f8dad',
+    fontSize: 11,
+  },
+  chartCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(120,140,190,0.2)',
+    backgroundColor: '#0c111f',
+    padding: 12,
+    marginBottom: 16,
+    minHeight: 240,
+  },
+  chartGrid: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(120,140,190,0.08)',
+  },
+  chartLegend: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#7bffb4',
+  },
+  legendText: {
+    fontSize: 11,
+    color: '#9aa6c4',
+  },
+  listWrap: {
+    gap: 10,
+  },
+  listCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(120,140,190,0.2)',
+    backgroundColor: '#0c111f',
+    padding: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  listName: {
+    color: '#f4f7ff',
+    fontWeight: '700',
+  },
+  listMeta: {
+    color: '#7f8dad',
+    fontSize: 11,
+    marginTop: 4,
+  },
+  listPnl: {
+    color: '#9bf28b',
+    fontWeight: '700',
   },
 });

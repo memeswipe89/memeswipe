@@ -13,8 +13,6 @@ import {
   Alert,
   Dimensions,
   Keyboard,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -66,8 +64,8 @@ export const ProfileSheet = memo(
     const [open, setOpen] = useState(false);
     const [inputFocused, setInputFocused] = useState(false);
     const scrollRef = useRef<ScrollView>(null);
-    const [keyboardOffset, setKeyboardOffset] = useState(0);
     const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
 
     const openProgress = useSharedValue(0);
     const dragY = useSharedValue(0);
@@ -165,12 +163,10 @@ export const ProfileSheet = memo(
 
     useEffect(() => {
       const show = Keyboard.addListener('keyboardDidShow', (event) => {
-        const height = event.endCoordinates?.height || 0;
-        setKeyboardOffset(height);
-        scrollRef.current?.scrollTo({ y: 0, animated: true });
+        setKeyboardHeight(event.endCoordinates?.height || 0);
       });
       const hide = Keyboard.addListener('keyboardDidHide', () => {
-        setKeyboardOffset(0);
+        setKeyboardHeight(0);
       });
       return () => {
         show.remove();
@@ -180,7 +176,7 @@ export const ProfileSheet = memo(
 
     useEffect(() => {
       if (inputFocused) {
-        scrollRef.current?.scrollToEnd({ animated: true });
+        scrollRef.current?.scrollTo({ y: 160, animated: true });
       }
     }, [inputFocused]);
 
@@ -240,92 +236,86 @@ export const ProfileSheet = memo(
           }}
         />
 
-        <KeyboardAvoidingView
-          behavior={Platform.select({ ios: 'padding', android: undefined })}
-          keyboardVerticalOffset={keyboardOffset}
-          style={styles.keyboardWrap}
-        >
-          <GestureDetector gesture={panGesture}>
-            <Animated.View style={[styles.sheetWrap, sheetStyle]}>
-              <LinearGradient colors={['rgba(82,130,255,0.22)', 'rgba(38,216,179,0.1)']} style={styles.glowHalo} />
-              <BlurView intensity={35} tint="dark" style={styles.sheetBlur}>
-                <LinearGradient
-                  colors={['rgba(255,255,255,0.15)', 'rgba(255,255,255,0.05)']}
-                  style={styles.sheetCard}
+        <GestureDetector gesture={panGesture}>
+          <Animated.View style={[styles.sheetWrap, sheetStyle]}>
+            <LinearGradient colors={['rgba(82,130,255,0.22)', 'rgba(38,216,179,0.1)']} style={styles.glowHalo} />
+            <BlurView intensity={35} tint="dark" style={styles.sheetBlur}>
+              <LinearGradient
+                colors={['rgba(255,255,255,0.15)', 'rgba(255,255,255,0.05)']}
+                style={styles.sheetCard}
+              >
+                <View style={styles.handleWrap}>
+                  <View style={styles.handle} />
+                </View>
+
+                <View style={styles.header}>
+                  <Text style={styles.title}>Profile & Trading</Text>
+                  <Pressable onPress={closeSheet} style={styles.closeBtn}>
+                    <Text style={styles.closeText}>Close</Text>
+                  </Pressable>
+                </View>
+
+                <ScrollView
+                  ref={scrollRef}
+                  style={styles.scroll}
+                  contentContainerStyle={[
+                    styles.content,
+                    { paddingBottom: 20 + insets.bottom + keyboardHeight },
+                  ]}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
                 >
-                  <View style={styles.handleWrap}>
-                    <View style={styles.handle} />
-                  </View>
-
-                  <View style={styles.header}>
-                    <Text style={styles.title}>Profile & Trading</Text>
-                    <Pressable onPress={closeSheet} style={styles.closeBtn}>
-                      <Text style={styles.closeText}>Close</Text>
-                    </Pressable>
-                  </View>
-
-                  <ScrollView
-                    ref={scrollRef}
-                    style={styles.scroll}
-                    contentContainerStyle={[
-                      styles.content,
-                      { paddingBottom: 20 + insets.bottom + keyboardOffset },
-                    ]}
-                    showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
-                  >
-                    <View style={styles.section}>
-                      <Text style={styles.sectionTitle}>User Info</Text>
-                      <View style={styles.balanceTopWrap}>
-                        <Text style={styles.balanceTopLabel}>Balance (SOL)</Text>
-                        <Text style={styles.balanceTopValue}>
-                          {walletSolBalance == null ? '--' : `${walletSolBalance.toFixed(4)} SOL`}
+                  <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>User Info</Text>
+                    <View style={styles.balanceTopWrap}>
+                      <Text style={styles.balanceTopLabel}>Balance (SOL)</Text>
+                      <Text style={styles.balanceTopValue}>
+                        {walletSolBalance == null ? '--' : `${walletSolBalance.toFixed(4)} SOL`}
+                      </Text>
+                    </View>
+                    <View style={styles.userRow}>
+                      <View style={styles.avatarPlaceholder}>
+                        <Text style={styles.avatarText}>{initials}</Text>
+                      </View>
+                      <View style={styles.userFields}>
+                        <TextInput
+                          value={profileName}
+                          onChangeText={setProfileName}
+                          onFocus={() => setInputFocused(true)}
+                          onBlur={() => setInputFocused(false)}
+                          placeholder="Profile Name"
+                          placeholderTextColor="#8290b3"
+                          style={styles.nameInput}
+                        />
+                        <Text style={styles.userId}>
+                          Twitter: {twitterProfile?.username ? `@${twitterProfile.username}` : 'Not connected'}
                         </Text>
                       </View>
-                      <View style={styles.userRow}>
-                        <View style={styles.avatarPlaceholder}>
-                          <Text style={styles.avatarText}>{initials}</Text>
-                        </View>
-                        <View style={styles.userFields}>
-                          <TextInput
-                            value={profileName}
-                            onChangeText={setProfileName}
-                            onFocus={() => setInputFocused(true)}
-                            onBlur={() => setInputFocused(false)}
-                            placeholder="Profile Name"
-                            placeholderTextColor="#8290b3"
-                            style={styles.nameInput}
-                          />
-                          <Text style={styles.userId}>
-                            Twitter: {twitterProfile?.username ? `@${twitterProfile.username}` : 'Not connected'}
-                          </Text>
-                        </View>
-                      </View>
                     </View>
+                  </View>
 
-                    <TradeSettings onInputFocusChange={setInputFocused} />
+                  <TradeSettings onInputFocusChange={setInputFocused} />
 
-                    <View style={styles.actionsWrap}>
-                      <Text style={[styles.sectionTitle, styles.networkTitle]}>Network</Text>
-                      <ChainSwitcher value={activeChain} onChange={setActiveChain} />
+                  <View style={styles.actionsWrap}>
+                    <Text style={[styles.sectionTitle, styles.networkTitle]}>Network</Text>
+                    <ChainSwitcher value={activeChain} onChange={setActiveChain} />
 
-                      <Text style={[styles.sectionTitle, styles.networkTitle]}>Actions</Text>
-                      <Pressable style={styles.logoutButton} onPress={handleLogout}>
-                        <Text style={styles.logoutIcon}>⇢</Text>
-                        <Text style={styles.logoutText}>Logout</Text>
-                      </Pressable>
-                      <Text style={styles.version}>Version 1.0.0</Text>
-                    </View>
+                    <Text style={[styles.sectionTitle, styles.networkTitle]}>Actions</Text>
+                    <Pressable style={styles.logoutButton} onPress={handleLogout}>
+                      <Text style={styles.logoutIcon}>⇢</Text>
+                      <Text style={styles.logoutText}>Logout</Text>
+                    </Pressable>
+                    <Text style={styles.version}>Version 1.0.0</Text>
+                  </View>
 
-                    <Text style={styles.footnote}>
-                      Active Config: ${tradeAmount.toFixed(2)} | TP {tpROI}% | SL {stopLoss}%
-                    </Text>
-                  </ScrollView>
-                </LinearGradient>
-              </BlurView>
-            </Animated.View>
-          </GestureDetector>
-        </KeyboardAvoidingView>
+                  <Text style={styles.footnote}>
+                    Active Config: ${tradeAmount.toFixed(2)} | TP {tpROI}% | SL {stopLoss}%
+                  </Text>
+                </ScrollView>
+              </LinearGradient>
+            </BlurView>
+          </Animated.View>
+        </GestureDetector>
       </Animated.View>
     );
   })
@@ -340,10 +330,6 @@ const styles = StyleSheet.create({
   dimLayer: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  keyboardWrap: {
-    width: '100%',
-    justifyContent: 'flex-end',
   },
   sheetWrap: {
     width: '100%',

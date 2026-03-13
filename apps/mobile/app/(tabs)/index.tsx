@@ -1219,8 +1219,8 @@ export default function HomeScreen() {
 
   const handleBuy = useCallback(
     (token: SwipeToken) => {
-      if (!twitterProfile) {
-        setShowTwitterPrompt(true);
+      if (!tradingWalletAddress) {
+        Alert.alert("Set up wallet", "Please create your Privy wallet first.");
         return;
       }
       console.log('[TRADE][SWIPE_RIGHT] token selected', {
@@ -1292,7 +1292,7 @@ export default function HomeScreen() {
         }
       })();
     },
-    [createOrder, executeJupiterSwap, hideToken, persistFavorites, tpROI, tradeAmount, twitterProfile]
+    [createOrder, executeJupiterSwap, hideToken, persistFavorites, tpROI, tradeAmount, tradingWalletAddress]
   );
 
   const openDevWalletControls = useCallback(() => {

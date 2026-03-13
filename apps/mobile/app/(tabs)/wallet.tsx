@@ -1,14 +1,25 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Keyboard,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
+import { useLoginWithEmail, usePrivy } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
-import { API_BASE } from "@/lib/api-base";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
@@ -52,24 +63,30 @@ export default function WalletScreen() {
   }, [height, width]);
 
   const {
-    twitterProfile,
     setTwitterProfile,
     tradingWalletAddress,
     walletLoading,
     walletError,
-    getOrCreateLocalUserId,
     getOrCreateTradingWalletAddress,
     withdrawFromTradingWallet,
   } = useWalletContext();
   const { logout } = useAuth();
+  const { user: privyUser } = usePrivy();
+  const { sendCode, loginWithCode } = useLoginWithEmail();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [withdrawToAddress, setWithdrawToAddress] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("0.01");
   const [withdrawing, setWithdrawing] = useState(false);
-  const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [codeInput, setCodeInput] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
 
   const clearLocalAppData = async () => {
     await AsyncStorage.multiRemove([
@@ -107,6 +124,19 @@ export default function WalletScreen() {
     void loadBalance(tradingWalletAddress);
   }, [tradingWalletAddress]);
 
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", (event) => {
+      setKeyboardHeight(event.endCoordinates?.height || 0);
+    });
+    const hide = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
   const handleCreateWallet = async () => {
     let applicationId = "unknown";
     try {
@@ -136,9 +166,53 @@ export default function WalletScreen() {
         );
         return;
       }
+      if (message.toLowerCase().includes("privy login required")) {
+        Alert.alert("Connect Privy", "Please connect to Privy before creating your wallet.");
+        return;
+      }
       Alert.alert("Wallet", "Could not create a wallet address right now.");
     }
   };
+
+  const handleSendCode = useCallback(async () => {
+    const email = emailInput.trim();
+    if (!email) {
+      Alert.alert("Connect Privy", "Enter a valid email address.");
+      return;
+    }
+    try {
+      setSendingCode(true);
+      await sendCode({ email });
+      setCodeSent(true);
+      Alert.alert("Check your email", "Enter the verification code we sent.");
+    } catch (error: any) {
+      Alert.alert("Privy Login", error?.message || "Failed to send code.");
+    } finally {
+      setSendingCode(false);
+    }
+  }, [emailInput, sendCode]);
+
+  const handleVerifyCode = useCallback(async () => {
+    const email = emailInput.trim();
+    const code = codeInput.trim();
+    if (!email || !code) {
+      Alert.alert("Connect Privy", "Enter your email and verification code.");
+      return;
+    }
+    try {
+      setVerifyingCode(true);
+      await loginWithCode({ email, code });
+      const address = await getOrCreateTradingWalletAddress();
+      Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
+      if (address) {
+        await loadBalance(address);
+      }
+    } catch (error: any) {
+      Alert.alert("Privy Login", error?.message || "Failed to verify code.");
+    } finally {
+      setVerifyingCode(false);
+    }
+  }, [codeInput, emailInput, getOrCreateTradingWalletAddress, loginWithCode]);
 
   const openPhantom = async () => {
     if (!tradingWalletAddress) return;
@@ -190,35 +264,6 @@ export default function WalletScreen() {
     }
   };
 
-  const disconnectTwitter = async () => {
-    try {
-      setDisconnectingTwitter(true);
-      const userId = await getOrCreateLocalUserId();
-      const res = await fetch(`${API_BASE}/api/twitter/connection/${encodeURIComponent(userId)}`, {
-        method: "DELETE",
-      });
-      if (!res.ok && res.status !== 404) {
-        const text = await res.text();
-        throw new Error(text || "Failed to disconnect Twitter");
-      }
-      setTwitterProfile(null);
-      await clearLocalAppData();
-      router.replace("/(tabs)");
-      Alert.alert("Twitter Disconnected", "Your Twitter account has been disconnected.");
-    } catch (error: any) {
-      Alert.alert("Twitter", error?.message || "Failed to disconnect Twitter.");
-    } finally {
-      setDisconnectingTwitter(false);
-    }
-  };
-
-  const handleDisconnectTwitter = () => {
-    Alert.alert("Disconnect Twitter", "Are you sure you want to disconnect this Twitter account?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Disconnect", style: "destructive", onPress: () => void disconnectTwitter() },
-    ]);
-  };
-
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout from this app?", [
       { text: "Cancel", style: "cancel" },
@@ -245,63 +290,24 @@ export default function WalletScreen() {
     ]);
   };
 
+  const showWalletDetails = Boolean(tradingWalletAddress);
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
       <ScrollView
-        contentContainerStyle={{ paddingBottom: 18 }}
+        ref={scrollRef}
+        contentContainerStyle={{ paddingBottom: 18 + keyboardHeight }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-      {twitterProfile ? (
-        <View
-          style={{
-            marginTop: 6,
-            borderRadius: 10,
-            paddingVertical: 8,
-            paddingHorizontal: 10,
-            borderWidth: 1,
-            borderColor: "#254d78",
-            backgroundColor: "#0a1a33",
-          }}
-        >
-          <Text style={{ color: "#7fddff", fontWeight: "700" }}>User Profile</Text>
-          <Text style={{ color: "#fff", marginTop: 2 }}>@{twitterProfile.username}</Text>
-          <Text style={{ color: "#8f9ab7", marginTop: 2, fontSize: 11 }} numberOfLines={1}>
-            ID: {twitterProfile.id}
-          </Text>
-          <Pressable
-            onPress={handleDisconnectTwitter}
-            disabled={disconnectingTwitter || loggingOut}
-            style={{
-              marginTop: 10,
-              borderRadius: 8,
-              paddingVertical: 9,
-              backgroundColor: "#3b0f16",
-              borderWidth: 1,
-              borderColor: "#8a2335",
-              opacity: disconnectingTwitter || loggingOut ? 0.7 : 1,
-            }}
-          >
-            <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
-              {disconnectingTwitter ? "Disconnecting..." : "Disconnect Twitter"}
-            </Text>
-          </Pressable>
-        </View>
-      ) : null}
       <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
 
-      {!twitterProfile ? (
-        <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
-          <Text style={{ color: "#aaa" }}>
-            Connect Twitter on Home first, then create/use your wallet.
-          </Text>
-        </View>
-      ) : walletLoading ? (
+      {walletLoading ? (
         <View style={{ marginTop: 12 }}>
           <ActivityIndicator />
           <Text style={{ color: "#999", marginTop: 6 }}>Loading wallet address...</Text>
         </View>
-      ) : tradingWalletAddress ? (
+      ) : showWalletDetails ? (
         <View style={{ flex: 1 }}>
           <View
             style={{
@@ -409,6 +415,7 @@ export default function WalletScreen() {
                 placeholderTextColor="#68738a"
                 autoCapitalize="none"
                 autoCorrect={false}
+                onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
                 style={{
                   marginTop: 8,
                   borderWidth: 1,
@@ -426,6 +433,7 @@ export default function WalletScreen() {
                 placeholder="SOL amount (e.g. 0.01)"
                 placeholderTextColor="#68738a"
                 keyboardType="decimal-pad"
+                onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
                 style={{
                   marginTop: 8,
                   borderWidth: 1,
@@ -458,7 +466,7 @@ export default function WalletScreen() {
 
             <Pressable
               onPress={handleLogout}
-              disabled={loggingOut || disconnectingTwitter}
+              disabled={loggingOut}
               style={{
                 marginTop: 12,
                 borderRadius: 10,
@@ -466,7 +474,7 @@ export default function WalletScreen() {
                 borderWidth: 1,
                 borderColor: "#5f2128",
                 backgroundColor: "#2b1115",
-                opacity: loggingOut || disconnectingTwitter ? 0.7 : 1,
+                opacity: loggingOut ? 0.7 : 1,
               }}
             >
               <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
@@ -478,19 +486,93 @@ export default function WalletScreen() {
         </View>
       ) : (
         <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
-          <Text style={{ color: "#aaa" }}>
-            {!twitterProfile
-              ? "Connect Twitter on Home first, then create your wallet."
-              : walletError || "No wallet address found yet."}
-          </Text>
-          {twitterProfile ? (
+          <Text style={{ color: "#aaa" }}>{walletError || "No wallet address found yet."}</Text>
+          {privyUser ? (
             <Pressable
               onPress={handleCreateWallet}
               style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
             >
               <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Privy Wallet</Text>
             </Pressable>
-          ) : null}
+          ) : (
+            <View style={{ marginTop: 10 }}>
+              <TextInput
+                value={emailInput}
+                onChangeText={setEmailInput}
+                placeholder="Email address"
+                placeholderTextColor="#68738a"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                style={{
+                  borderWidth: 1,
+                  borderColor: "#2a2a2a",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  paddingVertical: 8,
+                  color: "#fff",
+                  fontSize: 12,
+                }}
+              />
+              <Pressable
+                onPress={handleSendCode}
+                disabled={sendingCode}
+                style={{
+                  marginTop: 10,
+                  backgroundColor: "#0f223b",
+                  borderRadius: 10,
+                  paddingVertical: 10,
+                  borderWidth: 1,
+                  borderColor: "#254d78",
+                  opacity: sendingCode ? 0.7 : 1,
+                }}
+              >
+                <Text style={{ color: "#d7efff", textAlign: "center", fontWeight: "700" }}>
+                  {sendingCode ? "Sending..." : "Send Code"}
+                </Text>
+              </Pressable>
+              {codeSent ? (
+                <>
+                  <TextInput
+                    value={codeInput}
+                    onChangeText={setCodeInput}
+                    placeholder="Verification code"
+                    placeholderTextColor="#68738a"
+                    keyboardType="number-pad"
+                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                    style={{
+                      marginTop: 10,
+                      borderWidth: 1,
+                      borderColor: "#2a2a2a",
+                      borderRadius: 8,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                      color: "#fff",
+                      fontSize: 12,
+                    }}
+                  />
+                  <Pressable
+                    onPress={handleVerifyCode}
+                    disabled={verifyingCode}
+                    style={{
+                      marginTop: 10,
+                      backgroundColor: "#1a2a1a",
+                      borderRadius: 10,
+                      paddingVertical: 10,
+                      borderWidth: 1,
+                      borderColor: "#2f6b38",
+                      opacity: verifyingCode ? 0.7 : 1,
+                    }}
+                  >
+                    <Text style={{ color: "#d7ffd9", textAlign: "center", fontWeight: "700" }}>
+                      {verifyingCode ? "Verifying..." : "Verify & Connect"}
+                    </Text>
+                  </Pressable>
+                </>
+              ) : null}
+            </View>
+          )}
         </View>
       )}
       </ScrollView>
