@@ -16,6 +16,7 @@ import {
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
+import { API_BASE } from "@/lib/api-base";
 
 export type TwitterProfile = {
   id: string;
@@ -44,6 +45,9 @@ type WalletContextValue = {
     amountSol: number,
     toAddress?: string
   ) => Promise<WithdrawResult>;
+  ensurePrivyWalletSynced: (
+    profile: TwitterProfile | null
+  ) => Promise<string>;
 };
 
 const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
@@ -416,6 +420,49 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [getEmbeddedSolanaProvider, getOrCreateEmbeddedWalletAddress]
   );
 
+  const syncedProfileRef = useRef<TwitterProfile | null>(null);
+  const syncInProgressRef = useRef(false);
+
+  const ensurePrivyWalletSynced = useCallback(
+    async (profile: TwitterProfile | null): Promise<string> => {
+      if (syncInProgressRef.current) {
+        // prevent duplicate sync attempts
+        return walletAddress ?? (await getOrCreateEmbeddedWalletAddress());
+      }
+      syncInProgressRef.current = true;
+      try {
+        await requirePrivyUser();
+        const address = await getOrCreateEmbeddedWalletAddress();
+        const privyUserId = typeof (userRef.current as any)?.id === "string" ? (userRef.current as any).id : null;
+        if (!privyUserId) {
+          throw new Error("Privy user is missing; cannot sync wallet.");
+        }
+        const payload = {
+          privy_user_id: privyUserId,
+          twitter_user_id: profile?.id ?? null,
+          twitter_username: profile?.username ?? null,
+          wallet_address: address,
+          wallet_provider: "privy_embedded",
+          updated_at: new Date().toISOString(),
+        };
+        const res = await fetch(`${API_BASE}/api/users/privy-wallet`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to sync wallet with Supabase.");
+        }
+        syncedProfileRef.current = profile;
+        return address;
+      } finally {
+        syncInProgressRef.current = false;
+      }
+    },
+    [getOrCreateEmbeddedWalletAddress, requirePrivyUser, walletAddress]
+  );
+
   const value = useMemo<WalletContextValue>(
     () => ({
       twitterProfile,
@@ -430,6 +477,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       refreshWalletAddress,
       getOrCreateTradingWalletAddress,
       withdrawFromTradingWallet,
+      ensurePrivyWalletSynced,
     }),
     [
       twitterProfile,

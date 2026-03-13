@@ -1363,6 +1363,43 @@ app.post("/api/favorites", (req, res) => {
   return res.json({ ok: true });
 });
 
+app.post("/api/users/privy-wallet", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const privyUserId = String(body.privy_user_id || "").trim();
+    const walletAddress = String(body.wallet_address || "").trim();
+    if (!privyUserId || !walletAddress) {
+      return res.status(400).json({ error: "privy_user_id and wallet_address are required" });
+    }
+
+    const payload = {
+      privy_user_id: privyUserId,
+      twitter_user_id: String(body.twitter_user_id || "").trim() || null,
+      twitter_username: String(body.twitter_username || "").trim() || null,
+      wallet_address: walletAddress,
+      wallet_provider: String(body.wallet_provider || "privy_embedded"),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { res: sbRes, json, text } = await supabaseRequest("users", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=representation,resolution=merge-duplicates",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!sbRes.ok) {
+      return res.status(500).json({ error: "Failed to sync wallet", details: text });
+    }
+
+    return res.json({ user: Array.isArray(json) ? json[0] : json });
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to sync wallet", details: error.message });
+  }
+});
+
 app.get("/tokens/graduated", async (req, res) => {
   try {
     const requestedLimit = Number(req.query.limit) || DEFAULT_PAGE_LIMIT;

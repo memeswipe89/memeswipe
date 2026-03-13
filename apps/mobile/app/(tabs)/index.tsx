@@ -218,6 +218,7 @@ export default function HomeScreen() {
     getOrCreateTradingWalletAddress,
     getEmbeddedSolanaProvider,
     getOrCreateLocalUserId,
+    ensurePrivyWalletSynced,
   } =
     useWalletContext();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
@@ -370,12 +371,21 @@ export default function HomeScreen() {
       }
 
       const profile = { username: twitterUsername, id: twitterUserId };
-      setTwitterProfile(profile);
-      void AsyncStorage.setItem(TWITTER_PROFILE_CACHE_KEY, JSON.stringify(profile));
+        try {
+          await ensurePrivyWalletSynced(profile);
+        } catch (walletErr: any) {
+          console.log("Privy wallet sync failed", walletErr);
+          Alert.alert(
+            "Wallet Sync Failed",
+            walletErr?.message || "Could not restore your Privy wallet. Please try reconnecting."
+          );
+        }
+        setTwitterProfile(profile);
+        void AsyncStorage.setItem(TWITTER_PROFILE_CACHE_KEY, JSON.stringify(profile));
       setShowTwitterPrompt(false);
       Alert.alert("Connected", `Connected as @${twitterUsername}`);
     },
-    [setTwitterProfile]
+    [ensurePrivyWalletSynced, setTwitterProfile]
   );
 
   const canFetchFeed = useCallback(() => {
