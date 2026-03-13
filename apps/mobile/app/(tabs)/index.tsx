@@ -833,12 +833,17 @@ export default function HomeScreen() {
     }
   }, [ensureDeckRefill, hiddenTokenAddresses, segment, segmentCache, segmentLoadingMore]);
 
+  const segmentCacheLength = segmentCache[segment].length;
+
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
-    if (segmentCache[segment].length > 0) return;
-    setSegmentDepleted((prev) => ({ ...prev, [segment]: false }));
+    if (segmentCacheLength > 0) return;
+    setSegmentDepleted((prev) => {
+      if (prev[segment] === false) return prev;
+      return { ...prev, [segment]: false };
+    });
     void fetchNextPage(segment, true);
-  }, [fetchNextPage, segment, segmentCache]);
+  }, [fetchNextPage, segment, segmentCacheLength]);
 
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
