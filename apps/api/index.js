@@ -1363,6 +1363,113 @@ app.post("/api/favorites", (req, res) => {
   return res.json({ ok: true });
 });
 
+app.post("/api/onboard-user", async (req, res) => {
+  try {
+    const {
+      privy_user_id,
+      twitter_user_id,
+      twitter_username,
+      email,
+      wallet_address
+    } = req.body || {};
+
+    if (!privy_user_id || !twitter_user_id || !twitter_username || !email || !wallet_address) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Check if Twitter account already exists
+    const { res: checkRes, json: checkJson } = await supabaseRequest(
+      `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}&select=user_id,twitter_user_id,twitter_username`,
+      { method: "GET" }
+    );
+
+    if (!checkRes.ok) {
+      return res.status(500).json({ error: "Failed to check existing connections", details: checkJson });
+    }
+
+    let userId;
+    let existingUser = false;
+
+    if (Array.isArray(checkJson) && checkJson.length > 0) {
+      // Twitter account already exists
+      existingUser = true;
+      userId = checkJson[0].user_id;
+    } else {
+      // Create new user
+      userId = crypto.randomUUID();
+    }
+
+    // Insert or update twitter_connection
+    const twitterPayload = {
+      user_id: userId,
+      twitter_user_id,
+      twitter_username,
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { res: twitterRes, json: twitterJson } = await supabaseRequest("twitter_connections", {
+      method: existingUser ? "PATCH" : "POST",
+      headers: existingUser ? {} : { Prefer: "return=representation" },
+      body: JSON.stringify(existingUser ? {
+        ...twitterPayload,
+        twitter_user_id: undefined // Don't update the twitter_user_id in PATCH
+      } : twitterPayload),
+    });
+
+    if (!twitterRes.ok) {
+      return res.status(500).json({ error: "Failed to save Twitter connection", details: twitterJson });
+    }
+
+    // Check if wallet already exists for this user
+    const { res: walletCheckRes, json: walletCheckJson } = await supabaseRequest(
+      `user_wallets?user_id=eq.${encodeURIComponent(userId)}&select=id,wallet_address`,
+      { method: "GET" }
+    );
+
+    if (!walletCheckRes.ok) {
+      return res.status(500).json({ error: "Failed to check existing wallets", details: walletCheckJson });
+    }
+
+    let walletExists = false;
+    if (Array.isArray(walletCheckJson) && walletCheckJson.length > 0) {
+      walletExists = walletCheckJson.some(w => w.wallet_address === wallet_address);
+    }
+
+    if (!walletExists) {
+      // Insert new wallet
+      const walletPayload = {
+        user_id: userId,
+        privy_user_id,
+        wallet_address,
+        email,
+        created_at: new Date().toISOString(),
+      };
+
+      const { res: walletRes, json: walletJson } = await supabaseRequest("user_wallets", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(walletPayload),
+      });
+
+      if (!walletRes.ok) {
+        return res.status(500).json({ error: "Failed to save wallet", details: walletJson });
+      }
+    }
+
+    return res.json({
+      success: true,
+      user_id: userId,
+      existing_user: existingUser,
+      wallet_exists: walletExists,
+    });
+
+  } catch (error) {
+    console.error("POST /api/onboard-user error:", error.message);
+    return res.status(500).json({ error: "Failed to onboard user", details: error.message });
+  }
+});
+
 app.get("/tokens/graduated", async (req, res) => {
   try {
     const requestedLimit = Number(req.query.limit) || DEFAULT_PAGE_LIMIT;

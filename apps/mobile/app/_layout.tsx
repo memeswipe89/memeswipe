@@ -11,6 +11,7 @@ import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Text, View } from "react-native";
 import { PrivyProviderWrapper } from "@/lib/privy-runtime";
+import { OnboardingScreen } from '@/components/onboarding-screen';
 import React from 'react';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
@@ -68,6 +69,10 @@ export default function RootLayout() {
         appearance: {
           theme: 'dark',
         },
+        loginMethods: ['twitter', 'email'],
+        embeddedWallets: {
+          createOnLogin: 'users-without-wallets',
+        },
         embedded: {
           ethereum: {
             createOnLogin: "users-without-wallets",
@@ -95,7 +100,7 @@ export default function RootLayout() {
 }
 
 function AuthGatedApp() {
-  const { loading, requiresDeposit, balanceLoading } = useAuth();
+  const { loading, requiresDeposit, balanceLoading, isLoggedIn } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -106,6 +111,11 @@ function AuthGatedApp() {
       return;
     }
   }, [balanceLoading, loading, pathname, requiresDeposit, router]);
+
+  // Show onboarding for new users
+  if (!loading && !isLoggedIn) {
+    return <OnboardingScreen />;
+  }
 
   return (
     <>
