@@ -63,6 +63,7 @@ export default function WalletScreen() {
   }, [height, width]);
 
   const {
+    twitterProfile,
     setTwitterProfile,
     tradingWalletAddress,
     walletLoading,
@@ -308,7 +309,14 @@ export default function WalletScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
+      <View style={{ marginTop: 6 }}>
+        <Text style={{ color: "#8aa0b6", fontSize: 12 }}>Twitter</Text>
+        <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>
+          {twitterProfile?.username ? `@${twitterProfile.username}` : "Not connected"}
+        </Text>
+      </View>
+
+      <Text style={{ color: "#bbb", marginTop: 10, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
 
       {walletLoading ? (
         <View style={{ marginTop: 12 }}>

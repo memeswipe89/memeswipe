@@ -29,6 +29,7 @@ type WithdrawResult = {
 };
 
 type WalletContextValue = {
+  privyUserId: string | null;
   twitterProfile: TwitterProfile | null;
   walletAddress: string | null;
   tradingWalletAddress: string | null;
@@ -146,6 +147,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const solanaWallet = useEmbeddedSolanaWallet();
 
   const [twitterProfile, setTwitterProfile] = useState<TwitterProfile | null>(null);
+  const [privyUserId, setPrivyUserId] = useState<string | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [tradingWalletAddress, setTradingWalletAddress] = useState<string | null>(null);
   const [walletLoading, setWalletLoading] = useState(false);
@@ -161,6 +163,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     userRef.current = user;
+    setPrivyUserId(typeof (user as any)?.id === "string" ? ((user as any).id as string) : null);
   }, [user]);
 
   useEffect(() => {
@@ -429,6 +432,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<WalletContextValue>(
     () => ({
+      privyUserId,
       twitterProfile,
       walletAddress,
       tradingWalletAddress,
@@ -443,6 +447,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       withdrawFromTradingWallet,
     }),
     [
+      privyUserId,
       twitterProfile,
       walletAddress,
       tradingWalletAddress,

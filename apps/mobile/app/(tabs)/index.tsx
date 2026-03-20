@@ -212,6 +212,7 @@ void WebBrowser.maybeCompleteAuthSession();
 
 export default function HomeScreen() {
   const {
+    privyUserId,
     twitterProfile,
     setTwitterProfile,
     tradingWalletAddress,
@@ -290,6 +291,10 @@ export default function HomeScreen() {
             return;
           }
           if (res.status === 404) {
+            if (privyUserId && twitterProfile) {
+              setShowTwitterPrompt(false);
+              return;
+            }
             setTwitterProfile(null);
             setShowTwitterPrompt(false);
             await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
@@ -330,7 +335,7 @@ export default function HomeScreen() {
         }
       }
     },
-    [setTwitterProfile, twitterProfile]
+    [privyUserId, setTwitterProfile, twitterProfile]
   );
 
   const handleTwitterRedirect = useCallback(
@@ -477,6 +482,7 @@ export default function HomeScreen() {
     (async () => {
       const localUserId = await getOrCreateLocalUserId();
       setUserId(localUserId);
+      const identityForTwitterCheck = (privyUserId || "").trim() || localUserId;
       const cachedProfileRaw = await AsyncStorage.getItem(TWITTER_PROFILE_CACHE_KEY);
       let hasCachedProfile = false;
 
@@ -496,11 +502,11 @@ export default function HomeScreen() {
         }
       }
 
-      await checkTwitterConnection(localUserId, { background: hasCachedProfile, allowStale: hasCachedProfile });
+      await checkTwitterConnection(identityForTwitterCheck, { background: hasCachedProfile, allowStale: hasCachedProfile });
     })();
 
     return () => sub.remove();
-  }, [checkTwitterConnection, getOrCreateLocalUserId, handleTwitterRedirect, setTwitterProfile]);
+  }, [checkTwitterConnection, getOrCreateLocalUserId, handleTwitterRedirect, privyUserId, setTwitterProfile]);
 
   const connectTwitter = useCallback(async () => {
     try {

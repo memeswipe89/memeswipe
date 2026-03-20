@@ -50,6 +50,13 @@ let graduatedLastGoodFeed = null;
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const SUPABASE_SERVICE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || "";
+const SUPABASE_HOST = (() => {
+  try {
+    return SUPABASE_URL ? new URL(SUPABASE_URL).host : "";
+  } catch {
+    return "";
+  }
+})();
 
 async function supabaseRequest(path, options = {}) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -82,6 +89,8 @@ const crypto = require("crypto");
 // In-memory Twitter connection store and auth state (demo/dev).
 const twitterConnections = new Map();
 const twitterAuthStates = new Map();
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /*
 ==============================
@@ -303,6 +312,118 @@ function base64UrlEncode(input) {
   return input.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+async function resolveTwitterConnection(userId) {
+  const normalized = String(userId || "").trim();
+  if (!normalized) return null;
+
+  // Prefer Supabase when configured.
+  if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+    try {
+      let resolvedUserId = null;
+
+      if (UUID_RE.test(normalized)) {
+        resolvedUserId = normalized;
+      } else {
+        const { res: walletRes, json: walletJson } = await supabaseRequest(
+          `user_wallets?privy_user_id=eq.${encodeURIComponent(normalized)}&select=user_id`,
+          { method: "GET" }
+        );
+        if (walletRes.ok && Array.isArray(walletJson) && walletJson.length > 0) {
+          resolvedUserId = walletJson[0].user_id;
+        }
+      }
+
+      if (resolvedUserId) {
+        const { res: twitterRes, json: twitterJson } = await supabaseRequest(
+          `twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}&select=user_id,twitter_user_id,twitter_username`,
+          { method: "GET" }
+        );
+        if (twitterRes.ok && Array.isArray(twitterJson) && twitterJson.length > 0) {
+          const row = twitterJson[0];
+          return {
+            twitterUserId: row.twitter_user_id,
+            twitterUsername: row.twitter_username,
+          };
+        }
+      }
+    } catch (error) {
+      console.error("resolveTwitterConnection supabase error:", error.message);
+    }
+  }
+
+  // Fallback to in-memory map (dev/demo).
+  const profile = twitterConnections.get(normalized);
+  if (!profile) return null;
+  return {
+    twitterUserId: profile.twitterUserId,
+    twitterUsername: profile.twitterUsername,
+  };
+}
+
+async function saveTwitterConnection(userId, twitterUserId, twitterUsername) {
+  const normalized = String(userId || "").trim();
+  if (!normalized) return;
+
+  // Prefer Supabase when configured.
+  if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+    try {
+      const payload = {
+        user_id: normalized,
+        twitter_user_id: twitterUserId,
+        twitter_username: twitterUsername,
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Try update by user_id first
+      const { res: byUserRes, json: byUserJson } = await supabaseRequest(
+        `twitter_connections?user_id=eq.${encodeURIComponent(normalized)}&select=user_id`,
+        { method: "GET" }
+      );
+
+      let target = "twitter_connections";
+      let method = "POST";
+      let body = payload;
+
+      if (byUserRes.ok && Array.isArray(byUserJson) && byUserJson.length > 0) {
+        target = `twitter_connections?user_id=eq.${encodeURIComponent(normalized)}`;
+        method = "PATCH";
+        body = { ...payload, twitter_user_id: undefined };
+      } else {
+        const { res: byTwitterRes, json: byTwitterJson } = await supabaseRequest(
+          `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitterUserId)}&select=user_id`,
+          { method: "GET" }
+        );
+        if (byTwitterRes.ok && Array.isArray(byTwitterJson) && byTwitterJson.length > 0) {
+          target = `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitterUserId)}`;
+          method = "PATCH";
+          body = { ...payload, twitter_user_id: undefined };
+        }
+      }
+
+      const { res: upsertRes, text: upsertText } = await supabaseRequest(target, {
+        method,
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      });
+      if (!upsertRes.ok) {
+        console.error("saveTwitterConnection supabase failed:", upsertText);
+      }
+      return;
+    } catch (error) {
+      console.error("saveTwitterConnection supabase error:", error.message);
+    }
+  }
+
+  // Fallback to in-memory map.
+  twitterConnections.set(normalized, {
+    connected: true,
+    twitterUsername,
+    twitterUserId,
+    connectedAt: new Date().toISOString(),
+  });
+}
+
 function sha256Base64Url(value) {
   const hash = crypto.createHash("sha256").update(value).digest("base64");
   return base64UrlEncode(hash);
@@ -513,10 +634,12 @@ async function buildGraduatedFeed() {
   const preferredTokens = [];
   const fallbackTokens = [];
   const lenientTokens = [];
+  const rawTokens = [];
 
   for (const source of SOURCE_FETCHERS) {
     try {
       const tokens = await source.fetcher();
+      rawTokens.push(...tokens);
       const preferred = [];
       const fallback = [];
       const lenient = [];
@@ -573,9 +696,20 @@ async function buildGraduatedFeed() {
 
   if (merged.length > 0) {
     graduatedLastGoodFeed = merged;
+    return merged;
   }
 
-  return merged;
+  if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
+    console.log("[feed] returning last known good feed");
+    return graduatedLastGoodFeed;
+  }
+
+  if (rawTokens.length > 0) {
+    console.log("[feed] returning unfiltered tokens (filters too strict or metadata missing)");
+    return mergeTokensByAddress(rawTokens).slice(0, MAX_GRADUATED_FEED_TOKENS);
+  }
+
+  return [];
 }
 
 async function getCachedGraduatedFeed() {
@@ -1067,16 +1201,20 @@ app.get("/api/twitter/connection/:userId", (req, res) => {
     return res.status(400).json({ error: "Missing userId" });
   }
 
-  const profile = twitterConnections.get(userId);
-  if (!profile) {
-    return res.status(404).json({ connected: false });
-  }
-
-  return res.json({
-    connected: true,
-    twitterUsername: profile.twitterUsername,
-    twitterUserId: profile.twitterUserId,
-  });
+  resolveTwitterConnection(userId)
+    .then((profile) => {
+      if (!profile) {
+        return res.status(404).json({ connected: false });
+      }
+      return res.json({
+        connected: true,
+        twitterUsername: profile.twitterUsername,
+        twitterUserId: profile.twitterUserId,
+      });
+    })
+    .catch((error) => {
+      return res.status(500).json({ error: "Failed to resolve twitter connection", details: error.message });
+    });
 });
 
 app.delete("/api/twitter/connection/:userId", (req, res) => {
@@ -1085,8 +1223,34 @@ app.delete("/api/twitter/connection/:userId", (req, res) => {
     return res.status(400).json({ error: "Missing userId" });
   }
 
-  twitterConnections.delete(userId);
-  return res.json({ ok: true });
+  (async () => {
+    if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+      try {
+        let resolvedUserId = null;
+        if (UUID_RE.test(userId)) {
+          resolvedUserId = userId;
+        } else {
+          const { res: walletRes, json: walletJson } = await supabaseRequest(
+            `user_wallets?privy_user_id=eq.${encodeURIComponent(userId)}&select=user_id`,
+            { method: "GET" }
+          );
+          if (walletRes.ok && Array.isArray(walletJson) && walletJson.length > 0) {
+            resolvedUserId = walletJson[0].user_id;
+          }
+        }
+        if (resolvedUserId) {
+          await supabaseRequest(`twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}`, {
+            method: "DELETE",
+          });
+        }
+      } catch (error) {
+        console.error("delete twitter connection supabase error:", error.message);
+      }
+    }
+
+    twitterConnections.delete(userId);
+    return res.json({ ok: true });
+  })();
 });
 
 app.get("/api/twitter/auth/start", (req, res) => {
@@ -1227,7 +1391,7 @@ app.get("/api/twitter/auth/callback", async (req, res) => {
       twitterUserId: meJson.data.id,
       connectedAt: new Date().toISOString(),
     };
-    twitterConnections.set(stored.userId, profile);
+    await saveTwitterConnection(stored.userId, profile.twitterUserId, profile.twitterUsername);
 
     const redirectUrl = buildRedirectUrl(stored.returnUrl, {
       status: "success",
@@ -1377,26 +1541,51 @@ app.post("/api/onboard-user", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check if Twitter account already exists
-    const { res: checkRes, json: checkJson } = await supabaseRequest(
-      `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}&select=user_id,twitter_user_id,twitter_username`,
+    const debugEnabled = process.env.DEBUG_ONBOARDING === "true";
+    const debug = debugEnabled ? { supabase_host: SUPABASE_HOST } : null;
+
+    // Try to find an existing user by Privy ID first
+    const { res: walletByPrivyRes, json: walletByPrivyJson } = await supabaseRequest(
+      `user_wallets?privy_user_id=eq.${encodeURIComponent(privy_user_id)}&select=user_id,privy_user_id`,
       { method: "GET" }
     );
 
-    if (!checkRes.ok) {
-      return res.status(500).json({ error: "Failed to check existing connections", details: checkJson });
+    if (!walletByPrivyRes.ok) {
+      return res.status(500).json({ error: "Failed to check existing wallets by Privy ID", details: walletByPrivyJson });
+    }
+    if (debug) {
+      debug.wallet_by_privy_count = Array.isArray(walletByPrivyJson) ? walletByPrivyJson.length : 0;
     }
 
     let userId;
     let existingUser = false;
+    let foundByTwitter = false;
 
-    if (Array.isArray(checkJson) && checkJson.length > 0) {
-      // Twitter account already exists
+    if (Array.isArray(walletByPrivyJson) && walletByPrivyJson.length > 0) {
       existingUser = true;
-      userId = checkJson[0].user_id;
+      userId = walletByPrivyJson[0].user_id;
     } else {
-      // Create new user
-      userId = crypto.randomUUID();
+      // Check if Twitter account already exists
+      const { res: checkRes, json: checkJson } = await supabaseRequest(
+        `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}&select=user_id,twitter_user_id,twitter_username`,
+        { method: "GET" }
+      );
+
+      if (!checkRes.ok) {
+        return res.status(500).json({ error: "Failed to check existing connections", details: checkJson });
+      }
+      if (debug) {
+        debug.twitter_by_id_count = Array.isArray(checkJson) ? checkJson.length : 0;
+      }
+
+      if (Array.isArray(checkJson) && checkJson.length > 0) {
+        existingUser = true;
+        foundByTwitter = true;
+        userId = checkJson[0].user_id;
+      } else {
+        // Create new user
+        userId = crypto.randomUUID();
+      }
     }
 
     // Insert or update twitter_connection
@@ -1408,36 +1597,73 @@ app.post("/api/onboard-user", async (req, res) => {
       updated_at: new Date().toISOString(),
     };
 
-    const twitterTarget =
-      existingUser
-        ? `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}`
-        : "twitter_connections";
-    const { res: twitterRes, json: twitterJson } = await supabaseRequest(twitterTarget, {
-      method: existingUser ? "PATCH" : "POST",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify(existingUser ? {
+    // Determine whether to PATCH or POST to avoid duplicate key errors
+    const { res: byUserRes, json: byUserJson } = await supabaseRequest(
+      `twitter_connections?user_id=eq.${encodeURIComponent(userId)}&select=user_id`,
+      { method: "GET" }
+    );
+
+    if (!byUserRes.ok) {
+      return res.status(500).json({ error: "Failed to check twitter connections by user_id", details: byUserJson });
+    }
+    const hasByUser = Array.isArray(byUserJson) && byUserJson.length > 0;
+    const hasByTwitter = foundByTwitter;
+
+    let twitterTarget = "twitter_connections";
+    let twitterMethod = "POST";
+    let twitterBody = twitterPayload;
+
+    if (hasByUser) {
+      twitterTarget = `twitter_connections?user_id=eq.${encodeURIComponent(userId)}`;
+      twitterMethod = "PATCH";
+      twitterBody = {
         ...twitterPayload,
-        twitter_user_id: undefined // Don't update the twitter_user_id in PATCH
-      } : twitterPayload),
+        twitter_user_id: undefined, // avoid accidental change
+      };
+    } else if (hasByTwitter) {
+      twitterTarget = `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}`;
+      twitterMethod = "PATCH";
+      twitterBody = {
+        ...twitterPayload,
+        twitter_user_id: undefined,
+      };
+    }
+    if (debug) {
+      debug.twitter_by_user_count = Array.isArray(byUserJson) ? byUserJson.length : 0;
+      debug.twitter_write_method = twitterMethod;
+      debug.twitter_write_target = twitterTarget;
+    }
+
+    const { res: twitterRes, json: twitterJson } = await supabaseRequest(twitterTarget, {
+      method: twitterMethod,
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(twitterBody),
     });
 
     if (!twitterRes.ok) {
       return res.status(500).json({ error: "Failed to save Twitter connection", details: twitterJson });
     }
+    if (debug) {
+      debug.twitter_write_status = twitterRes.status;
+      debug.twitter_write_rows = Array.isArray(twitterJson) ? twitterJson.length : 0;
+    }
 
     // Check if wallet already exists for this user
     const { res: walletCheckRes, json: walletCheckJson } = await supabaseRequest(
-      `user_wallets?user_id=eq.${encodeURIComponent(userId)}&select=id,wallet_address`,
+      `user_wallets?or=(user_id.eq.${encodeURIComponent(userId)},privy_user_id.eq.${encodeURIComponent(privy_user_id)})&select=id,wallet_address,privy_user_id`,
       { method: "GET" }
     );
 
     if (!walletCheckRes.ok) {
       return res.status(500).json({ error: "Failed to check existing wallets", details: walletCheckJson });
     }
+    if (debug) {
+      debug.wallet_check_count = Array.isArray(walletCheckJson) ? walletCheckJson.length : 0;
+    }
 
     let walletExists = false;
     if (Array.isArray(walletCheckJson) && walletCheckJson.length > 0) {
-      walletExists = walletCheckJson.some(w => w.wallet_address === wallet_address);
+      walletExists = walletCheckJson.some(w => w.wallet_address === wallet_address || w.privy_user_id === privy_user_id);
     }
 
     if (!walletExists) {
@@ -1459,14 +1685,22 @@ app.post("/api/onboard-user", async (req, res) => {
       if (!walletRes.ok) {
         return res.status(500).json({ error: "Failed to save wallet", details: walletJson });
       }
+      if (debug) {
+        debug.wallet_write_status = walletRes.status;
+        debug.wallet_write_rows = Array.isArray(walletJson) ? walletJson.length : 0;
+      }
     }
 
-    return res.json({
+    const responseBody = {
       success: true,
       user_id: userId,
       existing_user: existingUser,
       wallet_exists: walletExists,
-    });
+    };
+    if (debug) {
+      responseBody.debug = debug;
+    }
+    return res.json(responseBody);
 
   } catch (error) {
     console.error("POST /api/onboard-user error:", error.message);
@@ -1493,4 +1727,7 @@ app.get("/tokens/graduated", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Memeswipe API running on port ${PORT}`);
+  if (SUPABASE_HOST) {
+    console.log(`[supabase] host: ${SUPABASE_HOST}`);
+  }
 });
