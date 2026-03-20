@@ -3,6 +3,7 @@ import {
   View,
   Text,
   Pressable,
+  Alert,
   StyleSheet,
   Dimensions,
   TextInput,
@@ -104,24 +105,10 @@ export function OnboardingScreen() {
   const hasEmail = Boolean(emailFromUser);
   const hasWallet = Boolean(walletFromUser);
 
-  useEffect(() => {
-
-    if (!isReady) return;
-    if (isLoggedIn && user) return;
-
-    if (hasTwitter && hasEmail && hasWallet) {
-      completeOnboarding();
-    } else if (hasTwitter && hasEmail) {
-      setCurrentStep("wallet");
-    } else if (hasTwitter) {
-      setCurrentStep("email");
-    } else {
-      setCurrentStep("twitter");
-    }
-
-  }, [hasEmail, hasTwitter, hasWallet, isLoggedIn, isReady, user, tradingWalletAddress]);
-
-  const completeOnboarding = useCallback(async () => {
+  const completeOnboarding = useCallback(async (overrides?: {
+    walletAddress?: string;
+    email?: string;
+  }) => {
 
     if (!user) return;
 
@@ -129,8 +116,8 @@ export function OnboardingScreen() {
 
       setIsOnboarding(true);
 
-      const walletAddress = walletFromUser || "";
-      const email = emailFromUser || emailInput.trim();
+      const walletAddress = overrides?.walletAddress || walletFromUser || "";
+      const email = overrides?.email || emailFromUser || emailInput.trim();
 
       const missing: string[] = [];
       if (!twitterProfile?.id) missing.push("twitter_user_id");
@@ -174,11 +161,28 @@ export function OnboardingScreen() {
     } catch (error) {
 
       console.error("Onboarding error:", error);
+      Alert.alert("Setup failed", "Could not save your account to database. Please try again.");
       setIsOnboarding(false);
 
     }
 
   }, [emailFromUser, emailInput, tradingWalletAddress, user, walletFromUser, twitterProfile]);
+
+  useEffect(() => {
+
+    if (!isReady) return;
+
+    if (hasTwitter && hasEmail && hasWallet && user) {
+      void completeOnboarding();
+    } else if (hasTwitter && hasEmail) {
+      setCurrentStep("wallet");
+    } else if (hasTwitter) {
+      setCurrentStep("email");
+    } else {
+      setCurrentStep("twitter");
+    }
+
+  }, [completeOnboarding, hasEmail, hasTwitter, hasWallet, isLoggedIn, isReady, user, tradingWalletAddress]);
 
   const handleTwitterConnect = async () => {
 
@@ -238,8 +242,8 @@ export function OnboardingScreen() {
   const handleCreateWallet = async () => {
     try {
       setCreatingWallet(true);
-      await getOrCreateTradingWalletAddress();
-      await completeOnboarding();
+      const createdWalletAddress = await getOrCreateTradingWalletAddress();
+      await completeOnboarding({ walletAddress: createdWalletAddress });
     } catch (error) {
       console.error("Wallet create error:", error);
     } finally {
