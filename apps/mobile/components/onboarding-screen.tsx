@@ -16,6 +16,7 @@ import { usePrivy, useLoginWithOAuth, useLinkWithOAuth, useLinkEmail } from "@pr
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { API_BASE } from "@/lib/api-base";
+import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -161,7 +162,11 @@ export function OnboardingScreen() {
     } catch (error) {
 
       console.error("Onboarding error:", error);
-      Alert.alert("Setup failed", "Could not save your account to database. Please try again.");
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Setup failed",
+        message: "Could not save your account right now. Please try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
       setIsOnboarding(false);
 
     }
@@ -201,6 +206,11 @@ export function OnboardingScreen() {
     } catch (error) {
 
       console.error("Twitter login error:", error);
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Twitter connection failed",
+        message: "Could not connect your Twitter account. Please try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
 
     }
 
@@ -211,13 +221,21 @@ export function OnboardingScreen() {
       return;
     }
     const email = emailInput.trim();
-    if (!email) return;
+    if (!email) {
+      Alert.alert("Email required", "Please enter your email address.");
+      return;
+    }
     try {
       setSendingCode(true);
       await sendCode({ email });
       setCodeSent(true);
     } catch (error) {
       console.error("Email send code error:", error);
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Could not send code",
+        message: "We couldn't send a verification code. Please try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
     } finally {
       setSendingCode(false);
     }
@@ -227,13 +245,21 @@ export function OnboardingScreen() {
     if (!user) return;
     const email = emailInput.trim();
     const code = codeInput.trim();
-    if (!email || !code) return;
+    if (!email || !code) {
+      Alert.alert("Missing details", "Please enter both email and verification code.");
+      return;
+    }
     try {
       setVerifyingCode(true);
       await linkWithCode({ email, code });
       setCurrentStep("wallet");
     } catch (error) {
       console.error("Email verify error:", error);
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Verification failed",
+        message: "We couldn't verify this code. Please check and try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
     } finally {
       setVerifyingCode(false);
     }
@@ -246,6 +272,11 @@ export function OnboardingScreen() {
       await completeOnboarding({ walletAddress: createdWalletAddress });
     } catch (error) {
       console.error("Wallet create error:", error);
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Wallet creation failed",
+        message: "Could not create your wallet right now. Please try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
     } finally {
       setCreatingWallet(false);
     }

@@ -20,6 +20,7 @@ import { useRouter } from "expo-router";
 import { useLinkEmail, usePrivy } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
+import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
@@ -171,7 +172,11 @@ export default function WalletScreen() {
         Alert.alert("Connect Privy", "Please connect to Privy before creating your wallet.");
         return;
       }
-      Alert.alert("Wallet", "Could not create a wallet address right now.");
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Wallet",
+        message: "Could not create a wallet address right now.",
+      });
+      Alert.alert(friendly.title, friendly.message);
     }
   };
 
@@ -191,7 +196,11 @@ export default function WalletScreen() {
       setCodeSent(true);
       Alert.alert("Check your email", "Enter the verification code we sent.");
     } catch (error: any) {
-      Alert.alert("Privy Login", error?.message || "Failed to send code.");
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Could not send code",
+        message: "We couldn't send a verification code. Please try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
     } finally {
       setSendingCode(false);
     }
@@ -217,7 +226,11 @@ export default function WalletScreen() {
         await loadBalance(address);
       }
     } catch (error: any) {
-      Alert.alert("Privy Login", error?.message || "Failed to verify code.");
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Verification failed",
+        message: "The code could not be verified. Please check and try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
     } finally {
       setVerifyingCode(false);
     }
@@ -300,6 +313,7 @@ export default function WalletScreen() {
   };
 
   const showWalletDetails = Boolean(tradingWalletAddress);
+  const displayWalletAddress = tradingWalletAddress ?? "";
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
@@ -336,10 +350,10 @@ export default function WalletScreen() {
             }}
           >
             <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13 }}>
-              {truncateMiddle(tradingWalletAddress)}
+              {truncateMiddle(displayWalletAddress)}
             </Text>
             <Text selectable numberOfLines={1} style={{ color: "#666", fontFamily: "Courier", marginTop: 5, fontSize: 10 }}>
-              {tradingWalletAddress}
+              {displayWalletAddress}
             </Text>
           </View>
 
@@ -352,7 +366,7 @@ export default function WalletScreen() {
 
           <View style={{ marginTop: 10, marginBottom: 10, alignItems: "center", justifyContent: "center" }}>
             <View style={{ backgroundColor: "#fff", padding: 10, borderRadius: 12 }}>
-              <QRCode value={tradingWalletAddress} size={qrSize} />
+              <QRCode value={tradingWalletAddress ?? undefined} size={qrSize} />
             </View>
           </View>
 

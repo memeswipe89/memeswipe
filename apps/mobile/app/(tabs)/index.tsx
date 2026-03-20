@@ -37,8 +37,11 @@ const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const PAGE_LIMIT = 50;
+const INITIAL_PAGE_LIMIT = 12;
 const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
+const INITIAL_DECK_RETRY_MS = 1200;
+const FEED_FETCH_TIMEOUT_MS = 7000;
 const MIN_TRADE_AMOUNT_USD = 0.0001;
 const MAX_TRADE_AMOUNT_USD = 500;
 const MIN_PERCENT = 0.1;
@@ -228,6 +231,7 @@ export default function HomeScreen() {
   const [twitterConnectLoading, setTwitterConnectLoading] = useState(false);
   const [showTwitterPrompt, setShowTwitterPrompt] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [initialDeckPending, setInitialDeckPending] = useState(true);
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [buyLoading, setBuyLoading] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
@@ -268,6 +272,7 @@ export default function HomeScreen() {
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI, setStopLoss } =
     useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
+  const initialRetryScheduledRef = useRef<Record<RemoteSegment, boolean>>(makeSegmentMap(() => false));
   const recoveredHiddenRef = useRef(false);
   const bootstrapCheckedRef = useRef(false);
   const lastFeedFetchRef = useRef(0);
@@ -708,11 +713,15 @@ export default function HomeScreen() {
         const chain = activeChain === 'base' ? 'base' : 'solana';
         const endpoint = endpointFor(chain, segmentType);
         const cursor = segmentCursor[segmentType];
+        const limit = initial ? INITIAL_PAGE_LIMIT : PAGE_LIMIT;
         const q = cursor
-          ? `?limit=${PAGE_LIMIT}&cursor=${encodeURIComponent(cursor)}`
-          : `?limit=${PAGE_LIMIT}`;
+          ? `?limit=${limit}&cursor=${encodeURIComponent(cursor)}`
+          : `?limit=${limit}`;
 
-        const res = await fetch(`${API_BASE}${endpoint}${q}`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), FEED_FETCH_TIMEOUT_MS);
+        const res = await fetch(`${API_BASE}${endpoint}${q}`, { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (!res.ok) {
           onFeedError(res.status);
           return [];
@@ -839,7 +848,35 @@ export default function HomeScreen() {
     }
   }, [ensureDeckRefill, hiddenTokenAddresses, segment, segmentCache, segmentLoadingMore]);
 
-  const segmentCacheLength = segmentCache[segment].length;
+  const segmentCacheLength = isRemoteSegment(segment) ? segmentCache[segment].length : 0;
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) {
+      setInitialDeckPending(false);
+      return;
+    }
+    const shouldKeepPending =
+      segmentCacheLength === 0 &&
+      (segmentLoadingMore[segment] || segmentHasMore[segment]);
+    setInitialDeckPending(shouldKeepPending);
+    initialRetryScheduledRef.current[segment] = false;
+  }, [segment, segmentCacheLength, segmentHasMore, segmentLoadingMore]);
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) return;
+    if (!initialDeckPending) return;
+    if (segmentCacheLength > 0) return;
+    if (segmentLoadingMore[segment]) return;
+    if (!segmentHasMore[segment]) return;
+    if (initialRetryScheduledRef.current[segment]) return;
+
+    initialRetryScheduledRef.current[segment] = true;
+    const retryTimer = setTimeout(() => {
+      void fetchNextPage(segment, true);
+    }, INITIAL_DECK_RETRY_MS);
+
+    return () => clearTimeout(retryTimer);
+  }, [fetchNextPage, initialDeckPending, segment, segmentCacheLength, segmentHasMore, segmentLoadingMore]);
 
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
@@ -1481,14 +1518,14 @@ export default function HomeScreen() {
                 onReject={handleReject}
                 onToggleFavorite={handleToggleFavorite}
               favoriteAddresses={favoriteAddresses}
-              isLoading={loading}
+              isLoading={loading || (isRemoteSegment(segment) && initialDeckPending && tokens.length === 0)}
               isInteractionLocked={appLoading || creatingOrder || buyLoading}
               onSwipeStateChange={setIsSwiping}
               onActiveCardChange={handleActiveCardChange}
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'
-                  : (loading || (isRemoteSegment(segment) && segmentLoadingMore[segment]))
+                  : (loading || (isRemoteSegment(segment) && (segmentLoadingMore[segment] || initialDeckPending)))
                     ? 'Loading tokens...'
                   : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'No more tokens available right now'
@@ -1497,7 +1534,7 @@ export default function HomeScreen() {
               emptySubtitle={
                 segment === 'favorites'
                   ? 'Tap the heart to save tokens for later'
-                  : (loading || (isRemoteSegment(segment) && segmentLoadingMore[segment]))
+                  : (loading || (isRemoteSegment(segment) && (segmentLoadingMore[segment] || initialDeckPending)))
                     ? 'Please wait while we fetch market data.'
                   : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'Please check back shortly for fresh listings.'
