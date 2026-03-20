@@ -7,10 +7,11 @@ import "fast-text-encoding";
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import Constants from "expo-constants";
 import { Stack, usePathname, useRouter } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Text, View } from "react-native";
-import { PrivyProviderWrapper } from "@/lib/privy-runtime";
+import { PrivyProviderWrapper, usePrivy } from "@/lib/privy-runtime";
 import { OnboardingScreen } from '@/components/onboarding-screen';
 import React from 'react';
 
@@ -18,6 +19,7 @@ import { AuthProvider, useAuth } from '@/contexts/auth-context';
 import { TradeSettingsProvider } from '@/contexts/trade-settings-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { WalletProvider } from '@/contexts/wallet-context';
+import { useWalletContext } from '@/contexts/wallet-context';
 import { initializeNotifications } from '@/lib/notifications';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -49,6 +51,7 @@ export default function RootLayout() {
 
   console.log('Privy App ID:', privyAppId);
   console.log('Privy Client ID:', privyClientId);
+  console.log('Privy OAuth Redirect URL:', Linking.createURL('/privy/oauth'));
 
   if (!privyAppId) {
     return (
@@ -70,6 +73,9 @@ export default function RootLayout() {
           theme: 'dark',
         },
         loginMethods: ['twitter', 'email'],
+        // Privy Expo SDK expects a path, not a full scheme URI.
+        // Expo will build the full deep link with the correct scheme.
+        redirectUri: "/privy/oauth",
         embeddedWallets: {
           createOnLogin: 'users-without-wallets',
         },
@@ -101,6 +107,9 @@ export default function RootLayout() {
 
 function AuthGatedApp() {
   const { loading, requiresDeposit, balanceLoading, isLoggedIn } = useAuth();
+  const { twitterProfile } = useWalletContext();
+  const { user: privyUser } = usePrivy();
+  const { tradingWalletAddress, walletAddress } = useWalletContext();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -112,8 +121,16 @@ function AuthGatedApp() {
     }
   }, [balanceLoading, loading, pathname, requiresDeposit, router]);
 
-  // Show onboarding for new users
-  if (!loading && !isLoggedIn) {
+  const linkedAccounts = Array.isArray((privyUser as any)?.linked_accounts)
+    ? (privyUser as any).linked_accounts
+    : Array.isArray((privyUser as any)?.linkedAccounts)
+      ? (privyUser as any).linkedAccounts
+      : [];
+  const hasEmail = linkedAccounts.some((account: any) => account?.type === "email");
+  const hasWallet = Boolean(tradingWalletAddress || walletAddress);
+
+  // Require Twitter + Email + Wallet before proceeding
+  if (!loading && (!isLoggedIn || !twitterProfile || !hasEmail || !hasWallet)) {
     return <OnboardingScreen />;
   }
 

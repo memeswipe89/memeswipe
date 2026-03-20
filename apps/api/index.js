@@ -1408,9 +1408,13 @@ app.post("/api/onboard-user", async (req, res) => {
       updated_at: new Date().toISOString(),
     };
 
-    const { res: twitterRes, json: twitterJson } = await supabaseRequest("twitter_connections", {
+    const twitterTarget =
+      existingUser
+        ? `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}`
+        : "twitter_connections";
+    const { res: twitterRes, json: twitterJson } = await supabaseRequest(twitterTarget, {
       method: existingUser ? "PATCH" : "POST",
-      headers: existingUser ? {} : { Prefer: "return=representation" },
+      headers: { Prefer: "return=representation" },
       body: JSON.stringify(existingUser ? {
         ...twitterPayload,
         twitter_user_id: undefined // Don't update the twitter_user_id in PATCH

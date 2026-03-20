@@ -107,13 +107,24 @@ const createUuidV4 = () =>
     return value.toString(16);
   });
 
+const getLinkedAccounts = (privyUser: any): any[] => {
+  if (!privyUser) return [];
+  if (Array.isArray(privyUser?.linked_accounts)) return privyUser.linked_accounts;
+  if (Array.isArray(privyUser?.linkedAccounts)) return privyUser.linkedAccounts;
+  return [];
+};
+
 const getTwitterFromPrivy = (privyUser: any): TwitterProfile | null => {
   if (!privyUser) return null;
-  const linked = Array.isArray(privyUser?.linkedAccounts) ? privyUser.linkedAccounts : [];
-  const twitter =
-    linked.find((account: any) => account?.type === "twitter_oauth") ||
-    linked.find((account: any) => typeof account?.username === "string");
-  if (!twitter) return null;
+  const linked = getLinkedAccounts(privyUser);
+  const twitter = linked.find((account: any) => account?.type === "twitter_oauth");
+  if (!twitter) {
+    const legacy = privyUser?.twitter;
+    if (legacy && typeof legacy?.subject === "string" && typeof legacy?.username === "string") {
+      return { id: legacy.subject, username: legacy.username };
+    }
+    return null;
+  }
   const username =
     typeof twitter?.username === "string"
       ? twitter.username

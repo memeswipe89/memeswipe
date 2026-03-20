@@ -17,7 +17,7 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
-import { useLoginWithEmail, usePrivy } from "@privy-io/expo";
+import { useLinkEmail, usePrivy } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 
@@ -72,7 +72,7 @@ export default function WalletScreen() {
   } = useWalletContext();
   const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
-  const { sendCode, loginWithCode } = useLoginWithEmail();
+  const { sendCode, linkWithCode } = useLinkEmail();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -175,6 +175,10 @@ export default function WalletScreen() {
   };
 
   const handleSendCode = useCallback(async () => {
+    if (!privyUser) {
+      Alert.alert("Connect Twitter", "Please connect Twitter first, then link your email.");
+      return;
+    }
     const email = emailInput.trim();
     if (!email) {
       Alert.alert("Connect Privy", "Enter a valid email address.");
@@ -190,9 +194,13 @@ export default function WalletScreen() {
     } finally {
       setSendingCode(false);
     }
-  }, [emailInput, sendCode]);
+  }, [emailInput, privyUser, sendCode]);
 
   const handleVerifyCode = useCallback(async () => {
+    if (!privyUser) {
+      Alert.alert("Connect Twitter", "Please connect Twitter first, then link your email.");
+      return;
+    }
     const email = emailInput.trim();
     const code = codeInput.trim();
     if (!email || !code) {
@@ -201,7 +209,7 @@ export default function WalletScreen() {
     }
     try {
       setVerifyingCode(true);
-      await loginWithCode({ email, code });
+      await linkWithCode({ email, code });
       const address = await getOrCreateTradingWalletAddress();
       Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
       if (address) {
@@ -212,7 +220,7 @@ export default function WalletScreen() {
     } finally {
       setVerifyingCode(false);
     }
-  }, [codeInput, emailInput, getOrCreateTradingWalletAddress, loginWithCode]);
+  }, [codeInput, emailInput, getOrCreateTradingWalletAddress, linkWithCode, privyUser]);
 
   const openPhantom = async () => {
     if (!tradingWalletAddress) return;

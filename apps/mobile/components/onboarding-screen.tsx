@@ -1,46 +1,125 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { View, Text, Pressable, StyleSheet, Dimensions } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  StyleSheet,
+  Dimensions,
+  TextInput,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
+} from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { usePrivy, useLoginWithOAuth } from "@privy-io/expo";
+import { usePrivy, useLoginWithOAuth, useLinkWithOAuth, useLinkEmail } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
+import { useWalletContext } from "@/contexts/wallet-context";
 import { API_BASE } from "@/lib/api-base";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 type OnboardingStep = "twitter" | "email" | "wallet";
 
+const getLinkedAccounts = (privyUser: any): any[] => {
+  if (!privyUser) return [];
+  if (Array.isArray(privyUser?.linked_accounts)) return privyUser.linked_accounts;
+  if (Array.isArray(privyUser?.linkedAccounts)) return privyUser.linkedAccounts;
+  return [];
+};
+
+const getTwitterFromPrivy = (privyUser: any) => {
+  if (!privyUser) return null;
+  const linked = getLinkedAccounts(privyUser);
+  const twitter = linked.find((account: any) => account?.type === "twitter_oauth");
+  if (!twitter) {
+    const legacy = privyUser?.twitter;
+    if (legacy && typeof legacy?.subject === "string" && typeof legacy?.username === "string") {
+      return { id: legacy.subject, username: legacy.username };
+    }
+    return null;
+  }
+  const username =
+    typeof twitter?.username === "string"
+      ? twitter.username
+      : typeof twitter?.handle === "string"
+        ? twitter.handle
+        : null;
+  const id =
+    typeof twitter?.subject === "string"
+      ? twitter.subject
+      : typeof twitter?.id === "string"
+        ? twitter.id
+        : null;
+  if (!username || !id) return null;
+  return { id, username };
+};
+
+const getEmailFromPrivy = (privyUser: any): string | null => {
+  if (!privyUser) return null;
+  const linked = getLinkedAccounts(privyUser);
+  const email = linked.find((account: any) => account?.type === "email");
+  if (typeof email?.address === "string") return email.address;
+  const legacy = privyUser?.email;
+  if (typeof legacy?.address === "string") return legacy.address;
+  return null;
+};
+
+const getWalletAddressFromPrivy = (privyUser: any): string | null => {
+  if (!privyUser) return null;
+  const legacyAddress =
+    (privyUser as any)?.wallet?.address ||
+    (privyUser as any)?.wallets?.[0]?.address;
+  if (typeof legacyAddress === "string" && legacyAddress.length > 0) return legacyAddress;
+  const linked = getLinkedAccounts(privyUser);
+  const withAddress = linked.find((account: any) => typeof account?.address === "string");
+  if (typeof withAddress?.address === "string") return withAddress.address;
+  return null;
+};
+
 export function OnboardingScreen() {
 
   const { user, isReady } = usePrivy();
-  const { login } = useLoginWithOAuth(); // ✅ correct
+  const { login } = useLoginWithOAuth();
+  const { link } = useLinkWithOAuth();
+  const { sendCode, linkWithCode } = useLinkEmail();
   const { isLoggedIn } = useAuth();
+  const { getOrCreateTradingWalletAddress, tradingWalletAddress } = useWalletContext();
+  useEffect(() => {
+    console.log("API_BASE:", API_BASE);
+  }, []);
 
   const [currentStep, setCurrentStep] = useState<OnboardingStep>("twitter");
   const [isOnboarding, setIsOnboarding] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [codeInput, setCodeInput] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
+  const [creatingWallet, setCreatingWallet] = useState(false);
+
+  const twitterProfile = getTwitterFromPrivy(user);
+  const emailFromUser = getEmailFromPrivy(user);
+  const walletFromUser = getWalletAddressFromPrivy(user) || tradingWalletAddress;
+  const hasTwitter = Boolean(twitterProfile?.id);
+  const hasEmail = Boolean(emailFromUser);
+  const hasWallet = Boolean(walletFromUser);
 
   useEffect(() => {
 
     if (!isReady) return;
     if (isLoggedIn && user) return;
 
-    const twitterId = (user as any)?.twitter?.subject;
-    const email = (user as any)?.email?.address;
-
-    const wallet =
-      (user as any)?.wallet?.address ||
-      (user as any)?.wallets?.[0]?.address;
-
-    if (twitterId && email && wallet) {
+    if (hasTwitter && hasEmail && hasWallet) {
       completeOnboarding();
-    } else if (twitterId && email) {
+    } else if (hasTwitter && hasEmail) {
       setCurrentStep("wallet");
-    } else if (twitterId) {
+    } else if (hasTwitter) {
       setCurrentStep("email");
     } else {
       setCurrentStep("twitter");
     }
 
-  }, [user, isReady]);
+  }, [hasEmail, hasTwitter, hasWallet, isLoggedIn, isReady, user, tradingWalletAddress]);
 
   const completeOnboarding = useCallback(async () => {
 
@@ -50,15 +129,23 @@ export function OnboardingScreen() {
 
       setIsOnboarding(true);
 
-      const walletAddress =
-        (user as any)?.wallet?.address ||
-        (user as any)?.wallets?.[0]?.address;
+      const walletAddress = walletFromUser || "";
+      const email = emailFromUser || emailInput.trim();
+
+      const missing: string[] = [];
+      if (!twitterProfile?.id) missing.push("twitter_user_id");
+      if (!twitterProfile?.username) missing.push("twitter_username");
+      if (!email) missing.push("email");
+      if (!walletAddress) missing.push("wallet_address");
+      if (missing.length > 0) {
+        throw new Error(`Missing required fields: ${missing.join(", ")}`);
+      }
 
       const payload = {
         privy_user_id: user.id,
-        twitter_user_id: (user as any)?.twitter?.subject || "",
-        twitter_username: (user as any)?.twitter?.username || "",
-        email: (user as any)?.email?.address || "",
+        twitter_user_id: twitterProfile?.id || "",
+        twitter_username: twitterProfile?.username || "",
+        email: email || "",
         wallet_address: walletAddress || "",
       };
 
@@ -70,11 +157,17 @@ export function OnboardingScreen() {
         body: JSON.stringify(payload),
       });
 
+      const responseText = await response.text();
       if (!response.ok) {
-        throw new Error("Onboarding failed");
+        throw new Error(`Onboarding failed (${response.status}): ${responseText}`);
       }
-
-      await response.json();
+      if (responseText) {
+        try {
+          JSON.parse(responseText);
+        } catch {
+          // ignore non-JSON response
+        }
+      }
 
       setIsOnboarding(false);
 
@@ -85,15 +178,21 @@ export function OnboardingScreen() {
 
     }
 
-  }, [user]);
+  }, [emailFromUser, emailInput, tradingWalletAddress, user, walletFromUser, twitterProfile]);
 
   const handleTwitterConnect = async () => {
 
     try {
+      if (hasTwitter) {
+        setCurrentStep("email");
+        return;
+      }
 
-      await login({
-        provider: "twitter"
-      });
+      if (user) {
+        await link({ provider: "twitter" });
+      } else {
+        await login({ provider: "twitter" });
+      }
 
     } catch (error) {
 
@@ -101,6 +200,51 @@ export function OnboardingScreen() {
 
     }
 
+  };
+
+  const handleSendCode = async () => {
+    if (!user) {
+      return;
+    }
+    const email = emailInput.trim();
+    if (!email) return;
+    try {
+      setSendingCode(true);
+      await sendCode({ email });
+      setCodeSent(true);
+    } catch (error) {
+      console.error("Email send code error:", error);
+    } finally {
+      setSendingCode(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (!user) return;
+    const email = emailInput.trim();
+    const code = codeInput.trim();
+    if (!email || !code) return;
+    try {
+      setVerifyingCode(true);
+      await linkWithCode({ email, code });
+      setCurrentStep("wallet");
+    } catch (error) {
+      console.error("Email verify error:", error);
+    } finally {
+      setVerifyingCode(false);
+    }
+  };
+
+  const handleCreateWallet = async () => {
+    try {
+      setCreatingWallet(true);
+      await getOrCreateTradingWalletAddress();
+      await completeOnboarding();
+    } catch (error) {
+      console.error("Wallet create error:", error);
+    } finally {
+      setCreatingWallet(false);
+    }
   };
 
   if (!isReady) {
@@ -111,14 +255,15 @@ export function OnboardingScreen() {
     );
   }
 
-  if (isLoggedIn) return null;
+  // Keep showing onboarding until Twitter (and other steps) are satisfied.
 
   return (
-    <LinearGradient
-      colors={["#000000", "#1a1a1a", "#000000"]}
-      style={styles.container}
-    >
-      <View style={styles.content}>
+    <LinearGradient colors={["#000000", "#1a1a1a", "#000000"]} style={styles.container}>
+      <KeyboardAvoidingView
+        style={styles.keyboard}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
         <View style={styles.header}>
           <Text style={styles.title}>Welcome to Memeswipe</Text>
@@ -126,9 +271,9 @@ export function OnboardingScreen() {
         </View>
 
         <View style={styles.steps}>
-          {renderStep("twitter", "1", "Connect Twitter", currentStep)}
-          {renderStep("email", "2", "Verify Email", currentStep)}
-          {renderStep("wallet", "3", "Create Wallet", currentStep)}
+          {renderStep("twitter", "1", "Connect Twitter", currentStep, () => setCurrentStep("twitter"), true)}
+          {renderStep("email", "2", "Verify Email", currentStep, () => setCurrentStep("email"), hasTwitter)}
+          {renderStep("wallet", "3", "Create Wallet", currentStep, () => setCurrentStep("wallet"), hasTwitter && hasEmail)}
         </View>
 
         <View style={styles.actionContainer}>
@@ -140,19 +285,47 @@ export function OnboardingScreen() {
           )}
 
           {currentStep === "email" && (
-            <View style={styles.infoContainer}>
-              <Text style={styles.infoText}>
-                Verify your email to continue
-              </Text>
+            <View style={styles.emailContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter email"
+                placeholderTextColor="#666"
+                value={emailInput}
+                onChangeText={setEmailInput}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+              <Pressable style={styles.secondaryButton} onPress={handleSendCode} disabled={sendingCode}>
+                <Text style={styles.secondaryButtonText}>
+                  {sendingCode ? "SENDING..." : "SEND CODE"}
+                </Text>
+              </Pressable>
+              {codeSent && (
+                <>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Enter code"
+                    placeholderTextColor="#666"
+                    value={codeInput}
+                    onChangeText={setCodeInput}
+                    keyboardType="number-pad"
+                  />
+                  <Pressable style={styles.primaryButton} onPress={handleVerifyCode} disabled={verifyingCode}>
+                    <Text style={styles.primaryButtonText}>
+                      {verifyingCode ? "VERIFYING..." : "VERIFY EMAIL"}
+                    </Text>
+                  </Pressable>
+                </>
+              )}
             </View>
           )}
 
           {currentStep === "wallet" && (
-            <View style={styles.infoContainer}>
-              <Text style={styles.infoText}>
-                Creating your trading wallet...
+            <Pressable style={styles.primaryButton} onPress={handleCreateWallet} disabled={creatingWallet}>
+              <Text style={styles.primaryButtonText}>
+                {creatingWallet ? "CREATING..." : tradingWalletAddress ? "CONTINUE" : "CREATE WALLET"}
               </Text>
-            </View>
+            </Pressable>
           )}
 
         </View>
@@ -165,17 +338,29 @@ export function OnboardingScreen() {
           </View>
         )}
 
-      </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </LinearGradient>
   );
 }
 
-function renderStep(step: OnboardingStep, number: string, title: string, currentStep: OnboardingStep) {
+function renderStep(
+  step: OnboardingStep,
+  number: string,
+  title: string,
+  currentStep: OnboardingStep,
+  onPress: () => void,
+  enabled: boolean
+) {
 
   const active = currentStep === step;
 
   return (
-    <View style={[styles.step, active && styles.activeStep]}>
+    <Pressable
+      style={[styles.step, active && styles.activeStep, !enabled && styles.disabledStep]}
+      onPress={enabled ? onPress : undefined}
+      disabled={!enabled}
+    >
       <View style={[styles.stepIndicator, active && styles.activeIndicator]}>
         <Text style={[styles.stepNumber, active && styles.activeStepNumber]}>
           {number}
@@ -185,21 +370,23 @@ function renderStep(step: OnboardingStep, number: string, title: string, current
       <Text style={[styles.stepTitle, active && styles.activeStepTitle]}>
         {title}
       </Text>
-    </View>
+    </Pressable>
   );
 
 }
 
 const styles = StyleSheet.create({
   container:{flex:1,width:SCREEN_WIDTH,height:SCREEN_HEIGHT},
+  keyboard:{flex:1},
   center:{justifyContent:"center",alignItems:"center"},
-  content:{flex:1,paddingHorizontal:24,paddingTop:80,paddingBottom:40},
+  content:{flexGrow:1,paddingHorizontal:24,paddingTop:80,paddingBottom:40},
   header:{alignItems:"center",marginBottom:60},
   title:{fontSize:32,fontWeight:"700",color:"#fff"},
   subtitle:{fontSize:18,color:"#888"},
   steps:{flex:1,justifyContent:"center",gap:24},
   step:{flexDirection:"row",alignItems:"center",padding:20,backgroundColor:"#1a1a1a",borderRadius:16,borderWidth:1,borderColor:"#333"},
   activeStep:{borderColor:"#007AFF",backgroundColor:"#001122"},
+  disabledStep:{opacity:0.4},
   stepIndicator:{width:40,height:40,borderRadius:20,backgroundColor:"#333",justifyContent:"center",alignItems:"center",marginRight:16},
   activeIndicator:{backgroundColor:"#007AFF"},
   stepNumber:{fontSize:18,color:"#888"},
@@ -209,8 +396,12 @@ const styles = StyleSheet.create({
   actionContainer:{marginTop:40},
   primaryButton:{backgroundColor:"#007AFF",paddingVertical:16,borderRadius:12,alignItems:"center"},
   primaryButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
+  secondaryButton:{backgroundColor:"#1a1a1a",paddingVertical:14,borderRadius:12,alignItems:"center",borderWidth:1,borderColor:"#333",marginTop:12},
+  secondaryButtonText:{color:"#fff",fontSize:16,fontWeight:"600"},
   infoContainer:{padding:20,backgroundColor:"#1a1a1a",borderRadius:12,alignItems:"center"},
   infoText:{color:"#fff",fontSize:16},
   loadingOverlay:{position:"absolute",top:0,left:0,right:0,bottom:0,backgroundColor:"rgba(0,0,0,0.8)",justifyContent:"center",alignItems:"center"},
-  loadingText:{fontSize:18,color:"#fff",fontWeight:"600"}
+  loadingText:{fontSize:18,color:"#fff",fontWeight:"600"},
+  emailContainer:{gap:12},
+  input:{backgroundColor:"#111",borderWidth:1,borderColor:"#333",borderRadius:12,paddingHorizontal:14,paddingVertical:12,color:"#fff",fontSize:16}
 });
