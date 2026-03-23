@@ -24,6 +24,9 @@ const DEXSCREENER_MULTI_TOKEN_URL =
   "https://api.dexscreener.com/tokens/v1/solana";
 const DEXSCREENER_LATEST_URL = "https://api.dexscreener.com/token-profiles/latest/v1";
 const BIRDEYE_URL = "https://public-api.birdeye.so/defi/v3/token/list";
+const BAGS_FEED_URL = "https://public-api-v2.bags.fm/api/v1/token-launch/feed";
+const BAGS_API_KEY = process.env.BAGS_API_KEY || "";
+const BAGS_FEED_TOKEN_LIMIT = Number(process.env.BAGS_FEED_TOKEN_LIMIT || 400);
 
 // Make filters less strict so you get more than 2-4 tokens
 // How many tokens the mobile app asks for per page
@@ -117,7 +120,8 @@ function normalizeAddress(item) {
   );
 }
 
-function formatPair(pair) {
+function formatPair(pair, options = {}) {
+  const { source = "graduated", tradeRoute = "jupiter" } = options;
   return {
     id: pair.baseToken?.address || pair.pairAddress || "",
     name: pair.baseToken?.name || "",
@@ -147,7 +151,8 @@ function formatPair(pair) {
     url: pair.url || "",
 
     chain: "solana",
-    source: "graduated",
+    source,
+    tradeRoute,
   };
 }
 
@@ -233,6 +238,27 @@ function normalizeTimestamp(value) {
 function formatDollar(value) {
   if (!Number.isFinite(value) || value === null || value === undefined) return "N/A";
   return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+}
+
+const BAGS_STATUS_PATTERNS = ["TRADE", "GRAD", "LIVE"];
+
+function isBagsStatusTradable(status) {
+  if (!status) return false;
+  const normalized = String(status).toUpperCase();
+  return BAGS_STATUS_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+function logBagsAccepted(token, liquidityUsd) {
+  const label = token?.name || token?.symbol || token?.mint || "Unknown";
+  const symbol = token?.symbol ? ` (${token.symbol})` : "";
+  console.log(
+    `[BAGS][ACCEPTED] ${label}${symbol} - liquidity: ${formatDollar(liquidityUsd)} - address: ${token?.mint || "n/a"}`
+  );
+}
+
+function logBagsRejected(token, reason) {
+  const label = token?.name || token?.symbol || token?.mint || "Unknown";
+  console.log(`[BAGS][REJECTED] ${label} - ${reason}`);
 }
 
 function logTokensBySource(source, tokens, tier) {
@@ -551,11 +577,100 @@ async function fetchPumpfunTokens() {
   for (const [, tokenPairs] of byToken.entries()) {
     const bestPair = pickBestPairForToken(tokenPairs);
     if (!bestPair) continue;
-    const formatted = {
-      ...formatPair(bestPair),
+    const formatted = formatPair(bestPair, {
       source: "pumpfun",
-    };
+      tradeRoute: "jupiter",
+    });
     normalized.push(formatted);
+  }
+
+  return normalized;
+}
+
+async function fetchBagsTokens() {
+  if (!BAGS_API_KEY) {
+    console.log("[bags] skipped (BAGS_API_KEY missing)");
+    return [];
+  }
+
+  const response = await fetch(BAGS_FEED_URL, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "x-api-key": BAGS_API_KEY,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Bags feed failed: ${response.status} ${text}`);
+  }
+
+  const data = await response.json();
+  const rawItems = Array.isArray(data?.response) ? data.response : [];
+  if (!rawItems.length) return [];
+
+  const tokensByAddress = new Map();
+  for (const item of rawItems) {
+    const status = String(item?.status || "").trim();
+    if (!isBagsStatusTradable(status)) {
+      logBagsRejected(
+        { name: item?.name, symbol: item?.symbol, mint: item?.tokenMint, status },
+        `status ${status || "unknown"}`
+      );
+      continue;
+    }
+
+    const mint = String(item?.tokenMint || "").trim();
+    if (!mint) {
+      logBagsRejected(item, "missing token mint");
+      continue;
+    }
+
+    const symbol = String(item?.symbol || item?.tokenSymbol || "").trim();
+    if (!symbol) {
+      logBagsRejected({ mint, status }, "missing symbol");
+      continue;
+    }
+
+    const name = String(item?.name || symbol || "").trim() || symbol;
+    const key = mint.toLowerCase();
+    if (tokensByAddress.has(key)) continue;
+    tokensByAddress.set(key, { mint, name, symbol, status });
+    if (tokensByAddress.size >= BAGS_FEED_TOKEN_LIMIT) break;
+  }
+
+  if (!tokensByAddress.size) return [];
+
+  const tokenAddresses = Array.from(tokensByAddress.values()).map((token) => token.mint);
+  const pairs = await fetchDexscreenerPairsForAddresses(tokenAddresses);
+  const pairsByAddress = new Map();
+  for (const pair of pairs) {
+    const tokenAddress = pair?.baseToken?.address;
+    if (!tokenAddress) continue;
+    const addressKey = tokenAddress.toLowerCase();
+    if (!pairsByAddress.has(addressKey)) {
+      pairsByAddress.set(addressKey, []);
+    }
+    pairsByAddress.get(addressKey).push(pair);
+  }
+
+  const normalized = [];
+  for (const [address, metadata] of tokensByAddress.entries()) {
+    const tokenPairs = pairsByAddress.get(address);
+    if (!tokenPairs || tokenPairs.length === 0) {
+      logBagsRejected(metadata, "no dexscreener pairs found");
+      continue;
+    }
+
+    const bestPair = pickBestPairForToken(tokenPairs);
+    if (!bestPair) {
+      logBagsRejected(metadata, "no viable dexscreener pair");
+      continue;
+    }
+
+    const formatted = formatPair(bestPair, { source: "bags", tradeRoute: "bags" });
+    normalized.push(formatted);
+    logBagsAccepted(metadata, formatted.liquidityUsd);
   }
 
   return normalized;
@@ -620,6 +735,7 @@ async function fetchBirdeyeTokens() {
           null,
         createdAt,
         source: "birdeye",
+        tradeRoute: "jupiter",
       };
     })
     .filter((token) => Boolean(token.address));
@@ -627,6 +743,7 @@ async function fetchBirdeyeTokens() {
 
 const SOURCE_FETCHERS = [
   { name: "pumpfun", fetcher: fetchPumpfunTokens },
+  { name: "bags", fetcher: fetchBagsTokens },
   { name: "birdeye", fetcher: fetchBirdeyeTokens },
   { name: "dexscreener", fetcher: fetchDexscreenerLatestTokens },
 ];
@@ -983,6 +1100,7 @@ async function fetchDexscreenerLatestTokens() {
           item.pairAddress || item.poolAddress || item.marketAddress || item.pair || null,
         createdAt,
         source: "dexscreener",
+        tradeRoute: "jupiter",
       };
     })
     .filter((token) => Boolean(token.address));

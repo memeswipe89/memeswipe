@@ -41,6 +41,8 @@ export type SwipeToken = {
   change24hPct: number;
   chartData: number[];
   graduationTime?: string;
+  source?: string;
+  tradeRoute?: "jupiter" | "bags";
 };
 
 type SwipeTokenDeckProps = {

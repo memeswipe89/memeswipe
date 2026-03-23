@@ -79,6 +79,8 @@ type ApiToken = {
   chain?: string;
   graduatedAt?: string;
   graduationTime?: string;
+  source?: string;
+  tradeRoute?: "jupiter" | "bags";
 };
 
 const toNumber = (value: unknown, fallback = 0) => {
@@ -112,6 +114,8 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
     change24hPct: toNumber(token.change24hPct, 0),
     chartData: chart,
     graduationTime: token.graduationTime || token.graduatedAt || 'Live now',
+    source: token.source,
+    tradeRoute: token.tradeRoute,
   };
 };
 
