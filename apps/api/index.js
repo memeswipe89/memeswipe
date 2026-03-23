@@ -274,6 +274,20 @@ function getStrictTradabilityReason(token) {
   return null;
 }
 
+function filterStrictTokens(tokens, sourceName) {
+  const accepted = [];
+  for (const token of tokens) {
+    const reason = getStrictTradabilityReason(token);
+    if (reason) {
+      const label = token?.symbol || token?.name || "Unknown";
+      console.log(`[${sourceName.toUpperCase()}][REJECTED] ${label} - ${reason}`);
+      continue;
+    }
+    accepted.push(token);
+  }
+  return accepted;
+}
+
 function ensureTokenSource(token) {
   if (!token) return token;
   const normalized = { ...token };
