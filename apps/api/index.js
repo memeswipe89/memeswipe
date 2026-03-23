@@ -30,7 +30,7 @@ const BAGS_FEED_TOKEN_LIMIT = Number(process.env.BAGS_FEED_TOKEN_LIMIT || 400);
 
 // Make filters less strict so you get more than 2-4 tokens
 // How many tokens the mobile app asks for per page
-const DEFAULT_PAGE_LIMIT = 50;
+const DEFAULT_PAGE_LIMIT = 100;
 // Multi-source feed config
 const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD || 20_000);
 const MIN_VOLUME_USD = Number(process.env.MIN_VOLUME_USD || 5_000);
