@@ -24,6 +24,8 @@ const DEXSCREENER_MULTI_TOKEN_URL =
   "https://api.dexscreener.com/tokens/v1/solana";
 const DEXSCREENER_LATEST_URL = "https://api.dexscreener.com/token-profiles/latest/v1";
 const BIRDEYE_URL = "https://public-api.birdeye.so/defi/v3/token/list";
+const MIN_BAGS_LIQUIDITY_USD = Number(process.env.MIN_BAGS_LIQUIDITY_USD || 5000);
+const MIN_BAGS_VOLUME_USD = Number(process.env.MIN_BAGS_VOLUME_USD || 1000);
 const BAGS_FEED_URL = "https://public-api-v2.bags.fm/api/v1/token-launch/feed";
 const BAGS_API_KEY = process.env.BAGS_API_KEY || "";
 const BAGS_FEED_TOKEN_LIMIT = Number(process.env.BAGS_FEED_TOKEN_LIMIT || 400);
@@ -350,7 +352,8 @@ function mergeTokensByAddress(tokens) {
       continue;
     }
     const existing = seen.get(address);
-    if (compareNormalizedTokens(token, existing) < 0) {
+    const comparison = compareNormalizedTokens(token, existing);
+    if (comparison >= 0) {
       continue;
     }
     seen.set(address, token);
@@ -691,6 +694,23 @@ async function fetchBagsTokens() {
     const bestPair = pickBestPairForToken(tokenPairs);
     if (!bestPair) {
       logBagsRejected(metadata, "no viable dexscreener pair");
+      continue;
+    }
+
+    const liquidity = Number(bestPair.liquidity?.usd || 0);
+    const volume = Number(bestPair.volume?.h24 || 0);
+    if (liquidity < MIN_BAGS_LIQUIDITY_USD) {
+      logBagsRejected(
+        metadata,
+        `low liquidity ${liquidity.toFixed(0)} < ${MIN_BAGS_LIQUIDITY_USD}`
+      );
+      continue;
+    }
+    if (volume < MIN_BAGS_VOLUME_USD) {
+      logBagsRejected(
+        metadata,
+        `low volume ${volume.toFixed(0)} < ${MIN_BAGS_VOLUME_USD}`
+      );
       continue;
     }
 
