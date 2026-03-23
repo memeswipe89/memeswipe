@@ -261,6 +261,32 @@ function logBagsRejected(token, reason) {
   console.log(`[BAGS][REJECTED] ${label} - ${reason}`);
 }
 
+function ensureTokenSource(token) {
+  if (!token) return token;
+  const normalized = { ...token };
+  if (!normalized.source) normalized.source = "graduated";
+  if (!normalized.tradeRoute) normalized.tradeRoute = "jupiter";
+  return normalized;
+}
+
+function applySourceDefaults(tokens) {
+  if (!Array.isArray(tokens)) return [];
+  return tokens.map(ensureTokenSource);
+}
+
+function logFeedSourceSamples(tokens, label = "FEED SOURCE", limit = 3) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return;
+  const sampleCount = Math.min(tokens.length, limit);
+  for (let i = 0; i < sampleCount; i++) {
+    const token = tokens[i];
+    if (!token) continue;
+    console.log(
+      `[${label}] sample ${i + 1}: ${token.symbol || "unknown"} - source: ${token.source || "n/a"} - tradeRoute: ${token.tradeRoute ||
+        "n/a"}`
+    );
+  }
+}
+
 function logTokensBySource(source, tokens, tier) {
   const label = source.toUpperCase();
   const prefix = tier ? `${label}-${tier.toUpperCase()}` : label;
@@ -812,8 +838,9 @@ async function buildGraduatedFeed() {
   );
 
   if (merged.length > 0) {
-    graduatedLastGoodFeed = merged;
-    return merged;
+    const normalizedFeed = applySourceDefaults(merged);
+    graduatedLastGoodFeed = normalizedFeed;
+    return normalizedFeed;
   }
 
   if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
@@ -823,7 +850,9 @@ async function buildGraduatedFeed() {
 
   if (rawTokens.length > 0) {
     console.log("[feed] returning unfiltered tokens (filters too strict or metadata missing)");
-    return mergeTokensByAddress(rawTokens).slice(0, MAX_GRADUATED_FEED_TOKENS);
+    return applySourceDefaults(
+      mergeTokensByAddress(rawTokens).slice(0, MAX_GRADUATED_FEED_TOKENS)
+    );
   }
 
   return [];
@@ -1013,6 +1042,7 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const nextCursor = end < fullFeed.length ? String(end) : null;
 
     printTokenNamesToTerminal(pageTokens, "MOBILE GRADUATED FEED PAGE");
+    logFeedSourceSamples(pageTokens, "MOBILE GRADUATED FEED PAGE");
 
     return res.json({
       tokens: pageTokens,
