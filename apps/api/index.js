@@ -274,7 +274,7 @@ function applySourceDefaults(tokens) {
   return tokens.map(ensureTokenSource);
 }
 
-function logFeedSourceSamples(tokens, label = "FEED SOURCE", limit = 3) {
+function logFeedSourceSamples(tokens, label = "FEED SOURCE", limit = 10) {
   if (!Array.isArray(tokens) || tokens.length === 0) return;
   const sampleCount = Math.min(tokens.length, limit);
   for (let i = 0; i < sampleCount; i++) {
@@ -1042,7 +1042,7 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const nextCursor = end < fullFeed.length ? String(end) : null;
 
     printTokenNamesToTerminal(pageTokens, "MOBILE GRADUATED FEED PAGE");
-    logFeedSourceSamples(pageTokens, "MOBILE GRADUATED FEED PAGE");
+    logFeedSourceSamples(pageTokens, "MOBILE GRADUATED FEED PAGE", 10);
 
     return res.json({
       tokens: pageTokens,
