@@ -24,8 +24,6 @@ const DEXSCREENER_MULTI_TOKEN_URL =
   "https://api.dexscreener.com/tokens/v1/solana";
 const DEXSCREENER_LATEST_URL = "https://api.dexscreener.com/token-profiles/latest/v1";
 const BIRDEYE_URL = "https://public-api.birdeye.so/defi/v3/token/list";
-const MIN_BAGS_LIQUIDITY_USD = Number(process.env.MIN_BAGS_LIQUIDITY_USD || 5000);
-const MIN_BAGS_VOLUME_USD = Number(process.env.MIN_BAGS_VOLUME_USD || 1000);
 const BAGS_FEED_URL = "https://public-api-v2.bags.fm/api/v1/token-launch/feed";
 const BAGS_API_KEY = process.env.BAGS_API_KEY || "";
 const BAGS_FEED_TOKEN_LIMIT = Number(process.env.BAGS_FEED_TOKEN_LIMIT || 400);
@@ -34,12 +32,12 @@ const BAGS_FEED_TOKEN_LIMIT = Number(process.env.BAGS_FEED_TOKEN_LIMIT || 400);
 // How many tokens the mobile app asks for per page
 const DEFAULT_PAGE_LIMIT = 100;
 // Multi-source feed config
-const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD || 20_000);
-const MIN_VOLUME_USD = Number(process.env.MIN_VOLUME_USD || 5_000);
+const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD || 10_000);
+const MIN_VOLUME_USD = Number(process.env.MIN_VOLUME_USD || 2_000);
 const FALLBACK_MIN_LIQUIDITY_USD = Number(process.env.FALLBACK_MIN_LIQUIDITY_USD || 5_000);
-const FALLBACK_MIN_VOLUME_USD = Number(process.env.FALLBACK_MIN_VOLUME_USD || 1_000);
-const LENIENT_MIN_LIQUIDITY_USD = Number(process.env.LENIENT_MIN_LIQUIDITY_USD || 0);
-const LENIENT_MIN_VOLUME_USD = Number(process.env.LENIENT_MIN_VOLUME_USD || 0);
+const FALLBACK_MIN_VOLUME_USD = Number(process.env.FALLBACK_MIN_VOLUME_USD || 2_000);
+const LENIENT_MIN_LIQUIDITY_USD = Number(process.env.LENIENT_MIN_LIQUIDITY_USD || 5_000);
+const LENIENT_MIN_VOLUME_USD = Number(process.env.LENIENT_MIN_VOLUME_USD || 2_000);
 const MAX_TOKEN_AGE_HOURS = Number(process.env.MAX_TOKEN_AGE_HOURS || 72);
 const GRADUATED_ADDRESS_FETCH_LIMIT = 400;
 const MAX_GRADUATED_FEED_TOKENS = 400;
@@ -263,6 +261,19 @@ function logBagsRejected(token, reason) {
   console.log(`[BAGS][REJECTED] ${label} - ${reason}`);
 }
 
+function getStrictTradabilityReason(token) {
+  if (!token?.address) return "missing address";
+  const liquidity = Number(token.liquidityUsd || 0);
+  if (!Number.isFinite(liquidity) || liquidity <= 0) return "low liquidity";
+  if (liquidity < MIN_LIQUIDITY_USD) return "low liquidity";
+  const volume = Number(token.volume24hUsd || 0);
+  if (!Number.isFinite(volume) || volume <= 0) return "low volume";
+  if (volume < MIN_VOLUME_USD) return "low volume";
+  const price = Number(token.priceUsd || 0);
+  if (!Number.isFinite(price) || price <= 0) return "invalid price";
+  return null;
+}
+
 function ensureTokenSource(token) {
   if (!token) return token;
   const normalized = { ...token };
@@ -276,15 +287,15 @@ function applySourceDefaults(tokens) {
   return tokens.map(ensureTokenSource);
 }
 
-function logFeedSourceSamples(tokens, label = "FEED SOURCE", limit = 10) {
+function logFinalFeedTokens(tokens, limit = 10) {
   if (!Array.isArray(tokens) || tokens.length === 0) return;
   const sampleCount = Math.min(tokens.length, limit);
   for (let i = 0; i < sampleCount; i++) {
     const token = tokens[i];
     if (!token) continue;
     console.log(
-      `[${label}] sample ${i + 1}: ${token.symbol || "unknown"} - source: ${token.source || "n/a"} - tradeRoute: ${token.tradeRoute ||
-        "n/a"}`
+      `[FINAL FEED] ${token.symbol || "unknown"} - ${token.source || "n/a"} - ${token.tradeRoute ||
+        "n/a"} - ${formatDollar(token.liquidityUsd)}`
     );
   }
 }
@@ -361,6 +372,53 @@ function mergeTokensByAddress(tokens) {
   const merged = Array.from(seen.values());
   merged.sort(compareNormalizedTokens);
   return merged.slice(0, MAX_GRADUATED_FEED_TOKENS);
+}
+
+function buildBalancedFeed(pumpfunTokens, bagsTokens) {
+  const limit = MAX_GRADUATED_FEED_TOKENS;
+  const pattern = ["pumpfun", "pumpfun", "bags"];
+  const result = [];
+  let pumpIndex = 0;
+  let bagIndex = 0;
+  let cycle = 0;
+
+  while (
+    result.length < limit &&
+    (pumpIndex < pumpfunTokens.length || bagIndex < bagsTokens.length)
+  ) {
+    const slot = pattern[cycle % pattern.length];
+    cycle += 1;
+
+    if (slot === "bags") {
+      if (bagIndex < bagsTokens.length) {
+        result.push(bagsTokens[bagIndex++]);
+        continue;
+      }
+    } else {
+      if (pumpIndex < pumpfunTokens.length) {
+        result.push(pumpfunTokens[pumpIndex++]);
+        continue;
+      }
+    }
+
+    if (pumpIndex < pumpfunTokens.length) {
+      result.push(pumpfunTokens[pumpIndex++]);
+      continue;
+    }
+    if (bagIndex < bagsTokens.length) {
+      result.push(bagsTokens[bagIndex++]);
+      continue;
+    }
+  }
+
+  while (result.length < limit && pumpIndex < pumpfunTokens.length) {
+    result.push(pumpfunTokens[pumpIndex++]);
+  }
+  while (result.length < limit && bagIndex < bagsTokens.length) {
+    result.push(bagsTokens[bagIndex++]);
+  }
+
+  return result.slice(0, limit);
 }
 
 function base64UrlEncode(input) {
@@ -610,6 +668,10 @@ async function fetchPumpfunTokens() {
       source: "pumpfun",
       tradeRoute: "jupiter",
     });
+    const reason = getStrictTradabilityReason(formatted);
+    if (reason) {
+      continue;
+    }
     normalized.push(formatted);
   }
 
@@ -697,24 +759,20 @@ async function fetchBagsTokens() {
       continue;
     }
 
-    const liquidity = Number(bestPair.liquidity?.usd || 0);
-    const volume = Number(bestPair.volume?.h24 || 0);
-    if (liquidity < MIN_BAGS_LIQUIDITY_USD) {
-      logBagsRejected(
-        metadata,
-        `low liquidity ${liquidity.toFixed(0)} < ${MIN_BAGS_LIQUIDITY_USD}`
-      );
+    const formatted = formatPair(bestPair, { source: "bags", tradeRoute: "jupiter" });
+    const reason = getStrictTradabilityReason(formatted);
+    if (reason) {
+      const detail =
+        reason === "low liquidity"
+          ? `low liquidity ${Math.round(formatted.liquidityUsd || 0)} < ${MIN_LIQUIDITY_USD}`
+          : reason === "low volume"
+          ? `low volume ${Math.round(formatted.volume24hUsd || 0)} < ${MIN_VOLUME_USD}`
+          : reason === "invalid price"
+          ? `invalid price ${formatted.priceUsd ?? "n/a"}`
+          : reason;
+      logBagsRejected(metadata, detail);
       continue;
     }
-    if (volume < MIN_BAGS_VOLUME_USD) {
-      logBagsRejected(
-        metadata,
-        `low volume ${volume.toFixed(0)} < ${MIN_BAGS_VOLUME_USD}`
-      );
-      continue;
-    }
-
-    const formatted = formatPair(bestPair, { source: "bags", tradeRoute: "bags" });
     normalized.push(formatted);
     logBagsAccepted(metadata, formatted.liquidityUsd);
   }
@@ -794,71 +852,31 @@ const SOURCE_FETCHERS = [
   { name: "dexscreener", fetcher: fetchDexscreenerLatestTokens },
 ];
 async function buildGraduatedFeed() {
-  const preferredTokens = [];
-  const fallbackTokens = [];
-  const lenientTokens = [];
-  const rawTokens = [];
+  const pumpfunTokens = [];
+  const bagsTokens = [];
 
   for (const source of SOURCE_FETCHERS) {
     try {
       const tokens = await source.fetcher();
-      rawTokens.push(...tokens);
-      const preferred = [];
-      const fallback = [];
-      const lenient = [];
-
-      for (const token of tokens) {
-        if (passesPreferredFilters(token)) {
-          preferred.push(token);
-        } else if (passesFallbackFilters(token)) {
-          fallback.push(token);
-        } else if (passesLenientFilters(token)) {
-          lenient.push(token);
-        }
+      if (source.name === "pumpfun") {
+        pumpfunTokens.push(...tokens);
+      } else if (source.name === "bags") {
+        bagsTokens.push(...tokens);
       }
-
-      logTokensBySource(source.name, preferred, "preferred");
-      logTokensBySource(source.name, fallback, "fallback");
-      logTokensBySource(source.name, lenient, "lenient");
-
-      preferredTokens.push(...preferred);
-      fallbackTokens.push(...fallback);
-      lenientTokens.push(...lenient);
+      logTokensBySource(source.name, tokens, "strict");
     } catch (error) {
       console.error(`[${source.name}] fetch failed: ${error.message}`);
     }
   }
 
-  const mergedPreferred = mergeTokensByAddress(preferredTokens);
-  const preferredAddresses = new Set(
-    mergedPreferred.map((token) => token.address?.toLowerCase?.())
-  );
+  const mergedPumpfun = mergeTokensByAddress(pumpfunTokens);
+  const mergedBags = mergeTokensByAddress(bagsTokens);
+  logTokensBySource("pumpfun", mergedPumpfun, "final");
+  logTokensBySource("bags", mergedBags, "final");
 
-  const uniqueFallback = fallbackTokens.filter((token) => {
-    const address = token.address?.toLowerCase?.();
-    return address && !preferredAddresses.has(address);
-  });
-
-  const mergedFallback = mergeTokensByAddress(uniqueFallback);
-  const fallbackAddresses = new Set(preferredAddresses);
-  mergedFallback.forEach((token) => {
-    const addr = token.address?.toLowerCase?.();
-    if (addr) fallbackAddresses.add(addr);
-  });
-
-  const uniqueLenient = lenientTokens.filter((token) => {
-    const address = token.address?.toLowerCase?.();
-    return address && !fallbackAddresses.has(address);
-  });
-
-  const mergedLenient = mergeTokensByAddress(uniqueLenient);
-  const merged = [...mergedPreferred, ...mergedFallback, ...mergedLenient].slice(
-    0,
-    MAX_GRADUATED_FEED_TOKENS
-  );
-
-  if (merged.length > 0) {
-    const normalizedFeed = applySourceDefaults(merged);
+  const balanced = buildBalancedFeed(mergedPumpfun, mergedBags);
+  if (balanced.length > 0) {
+    const normalizedFeed = applySourceDefaults(balanced).slice(0, MAX_GRADUATED_FEED_TOKENS);
     graduatedLastGoodFeed = normalizedFeed;
     return normalizedFeed;
   }
@@ -866,13 +884,6 @@ async function buildGraduatedFeed() {
   if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
     console.log("[feed] returning last known good feed");
     return graduatedLastGoodFeed;
-  }
-
-  if (rawTokens.length > 0) {
-    console.log("[feed] returning unfiltered tokens (filters too strict or metadata missing)");
-    return applySourceDefaults(
-      mergeTokensByAddress(rawTokens).slice(0, MAX_GRADUATED_FEED_TOKENS)
-    );
   }
 
   return [];
@@ -1062,7 +1073,7 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const nextCursor = end < fullFeed.length ? String(end) : null;
 
     printTokenNamesToTerminal(pageTokens, "MOBILE GRADUATED FEED PAGE");
-    logFeedSourceSamples(pageTokens, "MOBILE GRADUATED FEED PAGE", 10);
+    logFinalFeedTokens(pageTokens, 10);
 
     return res.json({
       tokens: pageTokens,
