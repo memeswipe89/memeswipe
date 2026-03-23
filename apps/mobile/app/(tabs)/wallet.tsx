@@ -17,9 +17,10 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
-import { usePrivy } from "@privy-io/expo";
+import { useLinkEmail, usePrivy } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
+import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
@@ -63,6 +64,7 @@ export default function WalletScreen() {
   }, [height, width]);
 
   const {
+    twitterProfile,
     setTwitterProfile,
     tradingWalletAddress,
     walletLoading,
@@ -72,6 +74,7 @@ export default function WalletScreen() {
   } = useWalletContext();
   const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
+  const { sendCode, linkWithCode } = useLinkEmail();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -80,6 +83,11 @@ export default function WalletScreen() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [emailInput, setEmailInput] = useState("");
+  const [codeInput, setCodeInput] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const clearLocalAppData = async () => {
@@ -164,10 +172,69 @@ export default function WalletScreen() {
         Alert.alert("Connect Privy", "Please connect to Privy before creating your wallet.");
         return;
       }
-      Alert.alert("Wallet", "Could not create a wallet address right now.");
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Wallet",
+        message: "Could not create a wallet address right now.",
+      });
+      Alert.alert(friendly.title, friendly.message);
     }
   };
 
+  const handleSendCode = useCallback(async () => {
+    if (!privyUser) {
+      Alert.alert("Connect Twitter", "Please connect Twitter first, then link your email.");
+      return;
+    }
+    const email = emailInput.trim();
+    if (!email) {
+      Alert.alert("Connect Privy", "Enter a valid email address.");
+      return;
+    }
+    try {
+      setSendingCode(true);
+      await sendCode({ email });
+      setCodeSent(true);
+      Alert.alert("Check your email", "Enter the verification code we sent.");
+    } catch (error: any) {
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Could not send code",
+        message: "We couldn't send a verification code. Please try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
+    } finally {
+      setSendingCode(false);
+    }
+  }, [emailInput, privyUser, sendCode]);
+
+  const handleVerifyCode = useCallback(async () => {
+    if (!privyUser) {
+      Alert.alert("Connect Twitter", "Please connect Twitter first, then link your email.");
+      return;
+    }
+    const email = emailInput.trim();
+    const code = codeInput.trim();
+    if (!email || !code) {
+      Alert.alert("Connect Privy", "Enter your email and verification code.");
+      return;
+    }
+    try {
+      setVerifyingCode(true);
+      await linkWithCode({ email, code });
+      const address = await getOrCreateTradingWalletAddress();
+      Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
+      if (address) {
+        await loadBalance(address);
+      }
+    } catch (error: any) {
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Verification failed",
+        message: "The code could not be verified. Please check and try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
+    } finally {
+      setVerifyingCode(false);
+    }
+  }, [codeInput, emailInput, getOrCreateTradingWalletAddress, linkWithCode, privyUser]);
 
   const openPhantom = async () => {
     if (!tradingWalletAddress) return;
@@ -246,6 +313,7 @@ export default function WalletScreen() {
   };
 
   const showWalletDetails = Boolean(tradingWalletAddress);
+  const displayWalletAddress = tradingWalletAddress ?? "";
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
@@ -255,7 +323,14 @@ export default function WalletScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-      <Text style={{ color: "#bbb", marginTop: 8, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
+      <View style={{ marginTop: 6 }}>
+        <Text style={{ color: "#8aa0b6", fontSize: 12 }}>Twitter</Text>
+        <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>
+          {twitterProfile?.username ? `@${twitterProfile.username}` : "Not connected"}
+        </Text>
+      </View>
+
+      <Text style={{ color: "#bbb", marginTop: 10, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
 
       {walletLoading ? (
         <View style={{ marginTop: 12 }}>
@@ -275,10 +350,10 @@ export default function WalletScreen() {
             }}
           >
             <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13 }}>
-              {truncateMiddle(tradingWalletAddress)}
+              {truncateMiddle(displayWalletAddress)}
             </Text>
             <Text selectable numberOfLines={1} style={{ color: "#666", fontFamily: "Courier", marginTop: 5, fontSize: 10 }}>
-              {tradingWalletAddress}
+              {displayWalletAddress}
             </Text>
           </View>
 
@@ -291,7 +366,7 @@ export default function WalletScreen() {
 
           <View style={{ marginTop: 10, marginBottom: 10, alignItems: "center", justifyContent: "center" }}>
             <View style={{ backgroundColor: "#fff", padding: 10, borderRadius: 12 }}>
-              <QRCode value={tradingWalletAddress} size={qrSize} />
+              <QRCode value={tradingWalletAddress ?? undefined} size={qrSize} />
             </View>
           </View>
 

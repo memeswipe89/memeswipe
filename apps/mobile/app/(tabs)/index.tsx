@@ -37,8 +37,11 @@ const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
 const PAGE_LIMIT = 50;
+const INITIAL_PAGE_LIMIT = 12;
 const LOW_DECK_THRESHOLD = 5;
 const MAX_EMPTY_FETCH_ATTEMPTS = 3;
+const INITIAL_DECK_RETRY_MS = 1200;
+const FEED_FETCH_TIMEOUT_MS = 7000;
 const MIN_TRADE_AMOUNT_USD = 0.0001;
 const MAX_TRADE_AMOUNT_USD = 500;
 const MIN_PERCENT = 0.1;
@@ -76,6 +79,10 @@ type ApiToken = {
   chain?: string;
   graduatedAt?: string;
   graduationTime?: string;
+  source?: string;
+  tradeRoute?: "jupiter" | "bags";
+  isTradable?: boolean;
+  tradableReason?: string;
 };
 
 const toNumber = (value: unknown, fallback = 0) => {
@@ -109,8 +116,30 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
     change24hPct: toNumber(token.change24hPct, 0),
     chartData: chart,
     graduationTime: token.graduationTime || token.graduatedAt || 'Live now',
+    source: token.source,
+    tradeRoute: token.tradeRoute,
+    isTradable: token.isTradable ?? true,
+    tradableReason: token.tradableReason || undefined,
   };
 };
+
+const SourceTab = ({
+  label,
+  enabled,
+  onPress,
+}: {
+  label: string;
+  enabled: boolean;
+  onPress: () => void;
+}) => (
+  <Pressable
+    onPress={onPress}
+    style={[styles.sourceTab, enabled && styles.sourceTabActive]}
+    android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+  >
+    <Text style={[styles.sourceTabText, enabled && styles.sourceTabTextActive]}>{label}</Text>
+  </Pressable>
+);
 
 const mergeLiveUpdate = (prev: SwipeToken, incoming: SwipeToken): SwipeToken => {
   const history = [...prev.chartData, incoming.priceUsd].slice(-288);
@@ -212,6 +241,7 @@ void WebBrowser.maybeCompleteAuthSession();
 
 export default function HomeScreen() {
   const {
+    privyUserId,
     twitterProfile,
     setTwitterProfile,
     tradingWalletAddress,
@@ -228,9 +258,11 @@ export default function HomeScreen() {
   const [twitterConnectLoading, setTwitterConnectLoading] = useState(false);
   const [showTwitterPrompt, setShowTwitterPrompt] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [initialDeckPending, setInitialDeckPending] = useState(true);
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [buyLoading, setBuyLoading] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
+  const [activeSource, setActiveSource] = useState<'pumpfun' | 'bags'>('pumpfun');
   const [appLoading, setAppLoading] = useState(true);
   const [showSwipeHint, setShowSwipeHint] = useState(true);
   const [segment, setSegment] = useState<FeedSegment>('trending');
@@ -268,11 +300,16 @@ export default function HomeScreen() {
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI, setStopLoss } =
     useTradeSettings();
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
+  const initialRetryScheduledRef = useRef<Record<RemoteSegment, boolean>>(makeSegmentMap(() => false));
   const recoveredHiddenRef = useRef(false);
   const bootstrapCheckedRef = useRef(false);
   const lastFeedFetchRef = useRef(0);
   const blockedUntilRef = useRef(0);
   const retryDelayRef = useRef(10000);
+
+  useEffect(() => {
+    console.log('[FILTERS] activeSource=', activeSource);
+  }, [activeSource]);
 
   const checkTwitterConnection = useCallback(
     async (resolvedUserId: string, options?: { background?: boolean; allowStale?: boolean }) => {
@@ -291,6 +328,10 @@ export default function HomeScreen() {
             return;
           }
           if (res.status === 404) {
+            if (privyUserId && twitterProfile) {
+              setShowTwitterPrompt(false);
+              return;
+            }
             setTwitterProfile(null);
             setShowTwitterPrompt(false);
             await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
@@ -331,7 +372,7 @@ export default function HomeScreen() {
         }
       }
     },
-    [setTwitterProfile, twitterProfile]
+    [privyUserId, setTwitterProfile, twitterProfile]
   );
 
   const handleTwitterRedirect = useCallback(
@@ -487,6 +528,7 @@ export default function HomeScreen() {
     (async () => {
       const localUserId = await getOrCreateLocalUserId();
       setUserId(localUserId);
+      const identityForTwitterCheck = (privyUserId || "").trim() || localUserId;
       const cachedProfileRaw = await AsyncStorage.getItem(TWITTER_PROFILE_CACHE_KEY);
       let hasCachedProfile = false;
 
@@ -506,11 +548,11 @@ export default function HomeScreen() {
         }
       }
 
-      await checkTwitterConnection(localUserId, { background: hasCachedProfile, allowStale: hasCachedProfile });
+      await checkTwitterConnection(identityForTwitterCheck, { background: hasCachedProfile, allowStale: hasCachedProfile });
     })();
 
     return () => sub.remove();
-  }, [checkTwitterConnection, getOrCreateLocalUserId, handleTwitterRedirect, setTwitterProfile]);
+  }, [checkTwitterConnection, getOrCreateLocalUserId, handleTwitterRedirect, privyUserId, setTwitterProfile]);
 
   const connectTwitter = useCallback(async () => {
     try {
@@ -712,11 +754,15 @@ export default function HomeScreen() {
         const chain = activeChain === 'base' ? 'base' : 'solana';
         const endpoint = endpointFor(chain, segmentType);
         const cursor = segmentCursor[segmentType];
+        const limit = initial ? INITIAL_PAGE_LIMIT : PAGE_LIMIT;
         const q = cursor
-          ? `?limit=${PAGE_LIMIT}&cursor=${encodeURIComponent(cursor)}`
-          : `?limit=${PAGE_LIMIT}`;
+          ? `?limit=${limit}&cursor=${encodeURIComponent(cursor)}`
+          : `?limit=${limit}`;
 
-        const res = await fetch(`${API_BASE}${endpoint}${q}`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), FEED_FETCH_TIMEOUT_MS);
+        const res = await fetch(`${API_BASE}${endpoint}${q}`, { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (!res.ok) {
           onFeedError(res.status);
           return [];
@@ -843,7 +889,35 @@ export default function HomeScreen() {
     }
   }, [ensureDeckRefill, hiddenTokenAddresses, segment, segmentCache, segmentLoadingMore]);
 
-  const segmentCacheLength = segmentCache[segment].length;
+  const segmentCacheLength = isRemoteSegment(segment) ? segmentCache[segment].length : 0;
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) {
+      setInitialDeckPending(false);
+      return;
+    }
+    const shouldKeepPending =
+      segmentCacheLength === 0 &&
+      (segmentLoadingMore[segment] || segmentHasMore[segment]);
+    setInitialDeckPending(shouldKeepPending);
+    initialRetryScheduledRef.current[segment] = false;
+  }, [segment, segmentCacheLength, segmentHasMore, segmentLoadingMore]);
+
+  useEffect(() => {
+    if (!isRemoteSegment(segment)) return;
+    if (!initialDeckPending) return;
+    if (segmentCacheLength > 0) return;
+    if (segmentLoadingMore[segment]) return;
+    if (!segmentHasMore[segment]) return;
+    if (initialRetryScheduledRef.current[segment]) return;
+
+    initialRetryScheduledRef.current[segment] = true;
+    const retryTimer = setTimeout(() => {
+      void fetchNextPage(segment, true);
+    }, INITIAL_DECK_RETRY_MS);
+
+    return () => clearTimeout(retryTimer);
+  }, [fetchNextPage, initialDeckPending, segment, segmentCacheLength, segmentHasMore, segmentLoadingMore]);
 
   useEffect(() => {
     if (!isRemoteSegment(segment)) return;
@@ -1243,6 +1317,13 @@ export default function HomeScreen() {
         Alert.alert("Set up wallet", "Please create your Privy wallet first.");
         return;
       }
+      if (token.source === 'bags' && token.isTradable === false) {
+        const reason = token.tradableReason || 'very low liquidity';
+        console.log('[BAGS][SWIPE_BLOCKED]', { symbol: token.symbol, address: token.address, reason });
+        hideToken(token.address);
+        Alert.alert('Token not tradable', 'Token not tradable. Very low liquidity.');
+        return;
+      }
       console.log('[TRADE][SWIPE_RIGHT] token selected', {
         symbol: token.symbol,
         address: token.address,
@@ -1383,8 +1464,12 @@ export default function HomeScreen() {
     }
 
     const visible = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address)));
-    setTokens(visible);
-  }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache]);
+    const filteredBySource = visible.filter((token) => {
+      const source = (token.source || 'pumpfun').toLowerCase();
+      return source === activeSource;
+    });
+    setTokens(filteredBySource);
+  }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache, activeSource]);
 
   useEffect(() => {
     if (!tradeOpenPopup.visible) return;
@@ -1449,15 +1534,23 @@ export default function HomeScreen() {
               </View>
             </View>
           <View style={styles.filterRow}>
-            <Text style={styles.segmentLabel}>Trending</Text>
-            <Pressable
-              onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
-              style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
-            >
-              <Text style={[styles.favoritesToggleText, segment === 'favorites' && styles.favoritesToggleTextActive]}>
-                Favorites
-              </Text>
-            </Pressable>
+            <View style={styles.filterHeaderRow}>
+              <Text style={styles.segmentLabel}>Trending</Text>
+              <Pressable
+                onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
+                style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
+              >
+                <Text
+                  style={[styles.favoritesToggleText, segment === 'favorites' && styles.favoritesToggleTextActive]}
+                >
+                  Favorites
+                </Text>
+              </Pressable>
+            </View>
+            <View style={styles.sourceTabRow}>
+              <SourceTab label="Pump.fun" enabled={activeSource === 'pumpfun'} onPress={() => setActiveSource('pumpfun')} />
+              <SourceTab label="Bags" enabled={activeSource === 'bags'} onPress={() => setActiveSource('bags')} />
+            </View>
           </View>
           {activeChain === 'solana' ? (
             <View style={styles.swapBudgetRow}>
@@ -1490,14 +1583,14 @@ export default function HomeScreen() {
                 onReject={handleReject}
                 onToggleFavorite={handleToggleFavorite}
               favoriteAddresses={favoriteAddresses}
-              isLoading={loading}
+              isLoading={loading || (isRemoteSegment(segment) && initialDeckPending && tokens.length === 0)}
               isInteractionLocked={appLoading || creatingOrder || buyLoading}
               onSwipeStateChange={setIsSwiping}
               onActiveCardChange={handleActiveCardChange}
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'
-                  : (loading || (isRemoteSegment(segment) && segmentLoadingMore[segment]))
+                  : (loading || (isRemoteSegment(segment) && (segmentLoadingMore[segment] || initialDeckPending)))
                     ? 'Loading tokens...'
                   : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'No more tokens available right now'
@@ -1506,7 +1599,7 @@ export default function HomeScreen() {
               emptySubtitle={
                 segment === 'favorites'
                   ? 'Tap the heart to save tokens for later'
-                  : (loading || (isRemoteSegment(segment) && segmentLoadingMore[segment]))
+                  : (loading || (isRemoteSegment(segment) && (segmentLoadingMore[segment] || initialDeckPending)))
                     ? 'Please wait while we fetch market data.'
                   : isRemoteSegment(segment) && segmentDepleted[segment]
                     ? 'Please check back shortly for fresh listings.'
@@ -1667,15 +1760,47 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 6,
+    gap: 6,
+  },
+  filterHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  sourceTabRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   segmentLabel: {
     color: '#f3f7ff',
     fontSize: 20,
     fontWeight: '800',
     letterSpacing: 0.2,
+  },
+  sourceTab: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  sourceTabActive: {
+    borderColor: 'rgba(97,180,255,0.95)',
+    backgroundColor: 'rgba(97,180,255,0.2)',
+  },
+  sourceTabText: {
+    color: 'rgba(225,235,255,0.7)',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  sourceTabTextActive: {
+    color: '#fff',
   },
   favoritesToggle: {
     borderRadius: 999,

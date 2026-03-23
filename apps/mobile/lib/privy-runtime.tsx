@@ -23,6 +23,7 @@ const emptyPrivyValue: PrivyUseResult = {
   user: null,
   logout: async () => {},
   isReady: true,
+  login: async () => {},
   // Fill the rest with noop values just in case the app expects them.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as PrivyUseResult;
@@ -37,9 +38,7 @@ export function usePrivy(): PrivyUseResult {
   return emptyPrivyValue;
 }
 
-export function useEmbeddedSolanaWallet(): ReturnType<
-  PrivyModuleType['useEmbeddedSolanaWallet']
-> {
+export function useEmbeddedSolanaWallet(): ReturnType<PrivyModuleType['useEmbeddedSolanaWallet']> {
   const mod = getPrivyModule();
   if (mod) {
     return mod.useEmbeddedSolanaWallet();

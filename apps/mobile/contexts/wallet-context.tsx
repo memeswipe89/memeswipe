@@ -30,6 +30,7 @@ type WithdrawResult = {
 };
 
 type WalletContextValue = {
+  privyUserId: string | null;
   twitterProfile: TwitterProfile | null;
   walletAddress: string | null;
   tradingWalletAddress: string | null;
@@ -111,13 +112,24 @@ const createUuidV4 = () =>
     return value.toString(16);
   });
 
+const getLinkedAccounts = (privyUser: any): any[] => {
+  if (!privyUser) return [];
+  if (Array.isArray(privyUser?.linked_accounts)) return privyUser.linked_accounts;
+  if (Array.isArray(privyUser?.linkedAccounts)) return privyUser.linkedAccounts;
+  return [];
+};
+
 const getTwitterFromPrivy = (privyUser: any): TwitterProfile | null => {
   if (!privyUser) return null;
-  const linked = Array.isArray(privyUser?.linkedAccounts) ? privyUser.linkedAccounts : [];
-  const twitter =
-    linked.find((account: any) => account?.type === "twitter_oauth") ||
-    linked.find((account: any) => typeof account?.username === "string");
-  if (!twitter) return null;
+  const linked = getLinkedAccounts(privyUser);
+  const twitter = linked.find((account: any) => account?.type === "twitter_oauth");
+  if (!twitter) {
+    const legacy = privyUser?.twitter;
+    if (legacy && typeof legacy?.subject === "string" && typeof legacy?.username === "string") {
+      return { id: legacy.subject, username: legacy.username };
+    }
+    return null;
+  }
   const username =
     typeof twitter?.username === "string"
       ? twitter.username
@@ -139,6 +151,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const solanaWallet = useEmbeddedSolanaWallet();
 
   const [twitterProfile, setTwitterProfile] = useState<TwitterProfile | null>(null);
+  const [privyUserId, setPrivyUserId] = useState<string | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [tradingWalletAddress, setTradingWalletAddress] = useState<string | null>(null);
   const [walletLoading, setWalletLoading] = useState(false);
@@ -154,6 +167,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     userRef.current = user;
+    setPrivyUserId(typeof (user as any)?.id === "string" ? ((user as any).id as string) : null);
   }, [user]);
 
   useEffect(() => {
@@ -465,6 +479,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<WalletContextValue>(
     () => ({
+      privyUserId,
       twitterProfile,
       walletAddress,
       tradingWalletAddress,
@@ -480,6 +495,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       ensurePrivyWalletSynced,
     }),
     [
+      privyUserId,
       twitterProfile,
       walletAddress,
       tradingWalletAddress,

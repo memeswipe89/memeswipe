@@ -24,21 +24,26 @@ const DEXSCREENER_MULTI_TOKEN_URL =
   "https://api.dexscreener.com/tokens/v1/solana";
 const DEXSCREENER_LATEST_URL = "https://api.dexscreener.com/token-profiles/latest/v1";
 const BIRDEYE_URL = "https://public-api.birdeye.so/defi/v3/token/list";
+const BAGS_FEED_URL = "https://public-api-v2.bags.fm/api/v1/token-launch/feed";
+const BAGS_API_KEY = process.env.BAGS_API_KEY || "";
+const BAGS_FEED_TOKEN_LIMIT = Number(process.env.BAGS_FEED_TOKEN_LIMIT || 400);
 
 // Make filters less strict so you get more than 2-4 tokens
 // How many tokens the mobile app asks for per page
-const DEFAULT_PAGE_LIMIT = 50;
+const DEFAULT_PAGE_LIMIT = 100;
 // Multi-source feed config
-const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD || 20_000);
-const MIN_VOLUME_USD = Number(process.env.MIN_VOLUME_USD || 5_000);
+const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD || 10_000);
+const MIN_VOLUME_USD = Number(process.env.MIN_VOLUME_USD || 2_000);
 const FALLBACK_MIN_LIQUIDITY_USD = Number(process.env.FALLBACK_MIN_LIQUIDITY_USD || 5_000);
-const FALLBACK_MIN_VOLUME_USD = Number(process.env.FALLBACK_MIN_VOLUME_USD || 1_000);
-const LENIENT_MIN_LIQUIDITY_USD = Number(process.env.LENIENT_MIN_LIQUIDITY_USD || 0);
-const LENIENT_MIN_VOLUME_USD = Number(process.env.LENIENT_MIN_VOLUME_USD || 0);
+const FALLBACK_MIN_VOLUME_USD = Number(process.env.FALLBACK_MIN_VOLUME_USD || 2_000);
+const LENIENT_MIN_LIQUIDITY_USD = Number(process.env.LENIENT_MIN_LIQUIDITY_USD || 5_000);
+const LENIENT_MIN_VOLUME_USD = Number(process.env.LENIENT_MIN_VOLUME_USD || 2_000);
 const MAX_TOKEN_AGE_HOURS = Number(process.env.MAX_TOKEN_AGE_HOURS || 72);
 const GRADUATED_ADDRESS_FETCH_LIMIT = 400;
 const MAX_GRADUATED_FEED_TOKENS = 400;
 const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || "";
+const FEED_SOURCE_ORDER = ["pumpfun", "bags", "birdeye", "dexscreener"];
+const MIN_BAGS_VISIBLE = 50;
 
 // Cache
 const CACHE_TIME_MS = 20 * 1000;
@@ -50,6 +55,13 @@ let graduatedLastGoodFeed = null;
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const SUPABASE_SERVICE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || "";
+const SUPABASE_HOST = (() => {
+  try {
+    return SUPABASE_URL ? new URL(SUPABASE_URL).host : "";
+  } catch {
+    return "";
+  }
+})();
 
 async function supabaseRequest(path, options = {}) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -82,6 +94,8 @@ const crypto = require("crypto");
 // In-memory Twitter connection store and auth state (demo/dev).
 const twitterConnections = new Map();
 const twitterAuthStates = new Map();
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /*
 ==============================
@@ -108,7 +122,8 @@ function normalizeAddress(item) {
   );
 }
 
-function formatPair(pair) {
+function formatPair(pair, options = {}) {
+  const { source = "graduated", tradeRoute = "jupiter" } = options;
   return {
     id: pair.baseToken?.address || pair.pairAddress || "",
     name: pair.baseToken?.name || "",
@@ -138,7 +153,8 @@ function formatPair(pair) {
     url: pair.url || "",
 
     chain: "solana",
-    source: "graduated",
+    source,
+    tradeRoute,
   };
 }
 
@@ -226,6 +242,119 @@ function formatDollar(value) {
   return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 }
 
+const BAGS_STATUS_PATTERNS = ["TRADE", "GRAD", "LIVE"];
+
+function isBagsStatusTradable(status) {
+  if (!status) return false;
+  const normalized = String(status).toUpperCase();
+  return BAGS_STATUS_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+function logBagsAccepted(token, liquidityUsd) {
+  const label = token?.name || token?.symbol || token?.mint || "Unknown";
+  const symbol = token?.symbol ? ` (${token.symbol})` : "";
+  console.log(
+    `[BAGS][ACCEPTED] ${label}${symbol} - liquidity: ${formatDollar(liquidityUsd)} - address: ${token?.mint || "n/a"}`
+  );
+}
+
+function logBagsRejected(token, reason) {
+  const label = token?.name || token?.symbol || token?.mint || "Unknown";
+  console.log(`[BAGS][REJECTED] ${label} - ${reason}`);
+}
+
+function logBagsNotTradable(token, reason) {
+  const label = token?.name || token?.symbol || token?.mint || "Unknown";
+  const symbol = token?.symbol ? ` (${token.symbol})` : "";
+  console.log(`[BAGS][NOT_TRADABLE] ${label}${symbol} - ${reason}`);
+}
+
+function getStrictTradabilityReason(token) {
+  if (!token?.address) return "missing address";
+  const liquidity = Number(token.liquidityUsd || 0);
+  if (!Number.isFinite(liquidity) || liquidity <= 0) return "low liquidity";
+  if (liquidity < MIN_LIQUIDITY_USD) return "low liquidity";
+  const volume = Number(token.volume24hUsd || 0);
+  if (!Number.isFinite(volume) || volume <= 0) return "low volume";
+  if (volume < MIN_VOLUME_USD) return "low volume";
+  const price = Number(token.priceUsd || 0);
+  if (!Number.isFinite(price) || price <= 0) return "invalid price";
+  return null;
+}
+
+function ensureTokenSource(token) {
+  if (!token) return token;
+  const normalized = { ...token };
+  if (!normalized.source) normalized.source = "graduated";
+  if (!normalized.tradeRoute) normalized.tradeRoute = "jupiter";
+  return normalized;
+}
+
+function applySourceDefaults(tokens) {
+  if (!Array.isArray(tokens)) return [];
+  return tokens.map(ensureTokenSource);
+}
+
+function logFinalFeedTokens(tokens, limit = 10) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return;
+  const sampleCount = Math.min(tokens.length, limit);
+  for (let i = 0; i < sampleCount; i++) {
+    const token = tokens[i];
+    if (!token) continue;
+    console.log(
+      `[FINAL FEED] ${token.symbol || "unknown"} - ${token.source || "n/a"} - ${token.tradeRoute ||
+        "n/a"} - ${formatDollar(token.liquidityUsd)}`
+    );
+  }
+}
+
+function logFeedSourceBreakdown(tokens) {
+  if (!Array.isArray(tokens)) return;
+  const counts = tokens.reduce((acc, token) => {
+    const key = (token?.source || "unknown").toLowerCase();
+    if (!acc[key]) acc[key] = 0;
+    acc[key] += 1;
+    return acc;
+  }, {});
+  const segments = FEED_SOURCE_ORDER.map((key) => `${key}=${counts[key] || 0}`);
+  const otherCount = Object.entries(counts).reduce((acc, [key, value]) => {
+    if (!FEED_SOURCE_ORDER.includes(key)) {
+      acc += value;
+    }
+    return acc;
+  }, 0);
+  if (otherCount > 0) {
+    segments.push(`other=${otherCount}`);
+  }
+  console.log(`[FEED BREAKDOWN] ${segments.join(" | ")}`);
+}
+
+function ensureMinimumBagTokens(feed, bagTokens) {
+  if (!Array.isArray(bagTokens) || bagTokens.length === 0) return feed;
+  const bagCount = feed.filter((token) => token.source === "bags").length;
+  if (bagCount >= MIN_BAGS_VISIBLE) return feed;
+  const needed = MIN_BAGS_VISIBLE - bagCount;
+  const seen = new Set(
+    feed
+      .map((token) => (token.address ? token.address.toLowerCase() : null))
+      .filter(Boolean)
+  );
+  const extras = [];
+  for (const token of bagTokens) {
+    if (extras.length >= needed) break;
+    const address = token.address?.toLowerCase();
+    if (!address || seen.has(address)) continue;
+    extras.push(token);
+    seen.add(address);
+  }
+  if (extras.length > 0) {
+    console.log(
+      `[BAGS][FEED_FILL] added ${extras.length} extra bag token${extras.length === 1 ? '' : 's'} to reach minimum ${MIN_BAGS_VISIBLE}`
+    );
+  }
+  return extras.length > 0 ? feed.concat(extras) : feed;
+}
+
 function logTokensBySource(source, tokens, tier) {
   const label = source.toUpperCase();
   const prefix = tier ? `${label}-${tier.toUpperCase()}` : label;
@@ -289,18 +418,168 @@ function mergeTokensByAddress(tokens) {
       continue;
     }
     const existing = seen.get(address);
-    if (compareNormalizedTokens(token, existing) < 0) {
-      continue;
+    const comparison = compareNormalizedTokens(token, existing);
+    if (comparison < 0) {
+      seen.set(address, token);
     }
-    seen.set(address, token);
   }
   const merged = Array.from(seen.values());
   merged.sort(compareNormalizedTokens);
   return merged.slice(0, MAX_GRADUATED_FEED_TOKENS);
 }
 
+function buildBalancedFeed(sourceMap) {
+  const limit = MAX_GRADUATED_FEED_TOKENS;
+  const pointers = FEED_SOURCE_ORDER.reduce((acc, key) => {
+    acc[key] = 0;
+    return acc;
+  }, {});
+  const result = [];
+
+  const hasRemaining = () =>
+    FEED_SOURCE_ORDER.some((key) => {
+      const list = sourceMap[key] || [];
+      return pointers[key] < list.length;
+    });
+
+  let cycle = 0;
+  while (result.length < limit && hasRemaining()) {
+    const sourceKey = FEED_SOURCE_ORDER[cycle % FEED_SOURCE_ORDER.length];
+    cycle += 1;
+    const list = sourceMap[sourceKey] || [];
+    const idx = pointers[sourceKey];
+    if (idx < list.length) {
+      result.push(list[idx]);
+      pointers[sourceKey] += 1;
+    }
+  }
+
+  for (const key of FEED_SOURCE_ORDER) {
+    const list = sourceMap[key] || [];
+    let idx = pointers[key];
+    while (result.length < limit && idx < list.length) {
+      result.push(list[idx]);
+      idx += 1;
+    }
+  }
+
+  return result.slice(0, limit);
+}
+
 function base64UrlEncode(input) {
   return input.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function resolveTwitterConnection(userId) {
+  const normalized = String(userId || "").trim();
+  if (!normalized) return null;
+
+  // Prefer Supabase when configured.
+  if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+    try {
+      let resolvedUserId = null;
+
+      if (UUID_RE.test(normalized)) {
+        resolvedUserId = normalized;
+      } else {
+        const { res: walletRes, json: walletJson } = await supabaseRequest(
+          `user_wallets?privy_user_id=eq.${encodeURIComponent(normalized)}&select=user_id`,
+          { method: "GET" }
+        );
+        if (walletRes.ok && Array.isArray(walletJson) && walletJson.length > 0) {
+          resolvedUserId = walletJson[0].user_id;
+        }
+      }
+
+      if (resolvedUserId) {
+        const { res: twitterRes, json: twitterJson } = await supabaseRequest(
+          `twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}&select=user_id,twitter_user_id,twitter_username`,
+          { method: "GET" }
+        );
+        if (twitterRes.ok && Array.isArray(twitterJson) && twitterJson.length > 0) {
+          const row = twitterJson[0];
+          return {
+            twitterUserId: row.twitter_user_id,
+            twitterUsername: row.twitter_username,
+          };
+        }
+      }
+    } catch (error) {
+      console.error("resolveTwitterConnection supabase error:", error.message);
+    }
+  }
+
+  // Fallback to in-memory map (dev/demo).
+  const profile = twitterConnections.get(normalized);
+  if (!profile) return null;
+  return {
+    twitterUserId: profile.twitterUserId,
+    twitterUsername: profile.twitterUsername,
+  };
+}
+
+async function saveTwitterConnection(userId, twitterUserId, twitterUsername) {
+  const normalized = String(userId || "").trim();
+  if (!normalized) return;
+
+  // Prefer Supabase when configured.
+  if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+    try {
+      const payload = {
+        user_id: normalized,
+        twitter_user_id: twitterUserId,
+        twitter_username: twitterUsername,
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Try update by user_id first
+      const { res: byUserRes, json: byUserJson } = await supabaseRequest(
+        `twitter_connections?user_id=eq.${encodeURIComponent(normalized)}&select=user_id`,
+        { method: "GET" }
+      );
+
+      let target = "twitter_connections";
+      let method = "POST";
+      let body = payload;
+
+      if (byUserRes.ok && Array.isArray(byUserJson) && byUserJson.length > 0) {
+        target = `twitter_connections?user_id=eq.${encodeURIComponent(normalized)}`;
+        method = "PATCH";
+        body = { ...payload, twitter_user_id: undefined };
+      } else {
+        const { res: byTwitterRes, json: byTwitterJson } = await supabaseRequest(
+          `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitterUserId)}&select=user_id`,
+          { method: "GET" }
+        );
+        if (byTwitterRes.ok && Array.isArray(byTwitterJson) && byTwitterJson.length > 0) {
+          target = `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitterUserId)}`;
+          method = "PATCH";
+          body = { ...payload, twitter_user_id: undefined };
+        }
+      }
+
+      const { res: upsertRes, text: upsertText } = await supabaseRequest(target, {
+        method,
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      });
+      if (!upsertRes.ok) {
+        console.error("saveTwitterConnection supabase failed:", upsertText);
+      }
+      return;
+    } catch (error) {
+      console.error("saveTwitterConnection supabase error:", error.message);
+    }
+  }
+
+  // Fallback to in-memory map.
+  twitterConnections.set(normalized, {
+    connected: true,
+    twitterUsername,
+    twitterUserId,
+    connectedAt: new Date().toISOString(),
+  });
 }
 
 function sha256Base64Url(value) {
@@ -430,10 +709,119 @@ async function fetchPumpfunTokens() {
   for (const [, tokenPairs] of byToken.entries()) {
     const bestPair = pickBestPairForToken(tokenPairs);
     if (!bestPair) continue;
-    const formatted = {
-      ...formatPair(bestPair),
+    const formatted = formatPair(bestPair, {
       source: "pumpfun",
-    };
+      tradeRoute: "jupiter",
+    });
+    const reason = getStrictTradabilityReason(formatted);
+    if (reason) {
+      continue;
+    }
+    normalized.push(formatted);
+  }
+
+  return normalized;
+}
+
+async function fetchBagsTokens() {
+  if (!BAGS_API_KEY) {
+    console.log("[bags] skipped (BAGS_API_KEY missing)");
+    return [];
+  }
+
+  const response = await fetch(BAGS_FEED_URL, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "x-api-key": BAGS_API_KEY,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Bags feed failed: ${response.status} ${text}`);
+  }
+
+  const data = await response.json();
+  const rawItems = Array.isArray(data?.response) ? data.response : [];
+  if (!rawItems.length) return [];
+
+  const tokensByAddress = new Map();
+  for (const item of rawItems) {
+    const status = String(item?.status || "").trim();
+    if (!isBagsStatusTradable(status)) {
+      logBagsRejected(
+        { name: item?.name, symbol: item?.symbol, mint: item?.tokenMint, status },
+        `status ${status || "unknown"}`
+      );
+      continue;
+    }
+
+    const mint = String(item?.tokenMint || "").trim();
+    if (!mint) {
+      logBagsRejected(item, "missing token mint");
+      continue;
+    }
+
+    const symbol = String(item?.symbol || item?.tokenSymbol || "").trim();
+    if (!symbol) {
+      logBagsRejected({ mint, status }, "missing symbol");
+      continue;
+    }
+
+    const name = String(item?.name || symbol || "").trim() || symbol;
+    const key = mint.toLowerCase();
+    if (tokensByAddress.has(key)) continue;
+    tokensByAddress.set(key, { mint, name, symbol, status });
+    if (tokensByAddress.size >= BAGS_FEED_TOKEN_LIMIT) break;
+  }
+
+  if (!tokensByAddress.size) return [];
+
+  const tokenAddresses = Array.from(tokensByAddress.values()).map((token) => token.mint);
+  const pairs = await fetchDexscreenerPairsForAddresses(tokenAddresses);
+  const pairsByAddress = new Map();
+  for (const pair of pairs) {
+    const tokenAddress = pair?.baseToken?.address;
+    if (!tokenAddress) continue;
+    const addressKey = tokenAddress.toLowerCase();
+    if (!pairsByAddress.has(addressKey)) {
+      pairsByAddress.set(addressKey, []);
+    }
+    pairsByAddress.get(addressKey).push(pair);
+  }
+
+  const normalized = [];
+  for (const [address, metadata] of tokensByAddress.entries()) {
+    const tokenPairs = pairsByAddress.get(address);
+    if (!tokenPairs || tokenPairs.length === 0) {
+      logBagsRejected(metadata, "no dexscreener pairs found");
+      continue;
+    }
+
+    const bestPair = pickBestPairForToken(tokenPairs);
+    if (!bestPair) {
+      logBagsRejected(metadata, "no viable dexscreener pair");
+      continue;
+    }
+
+    const formatted = formatPair(bestPair, { source: "bags", tradeRoute: "jupiter" });
+    const reason = getStrictTradabilityReason(formatted);
+    const detail =
+      reason === "low liquidity"
+        ? `low liquidity ${Math.round(formatted.liquidityUsd || 0)} < ${MIN_LIQUIDITY_USD}`
+        : reason === "low volume"
+        ? `low volume ${Math.round(formatted.volume24hUsd || 0)} < ${MIN_VOLUME_USD}`
+        : reason === "invalid price"
+        ? `invalid price ${formatted.priceUsd ?? "n/a"}`
+        : reason;
+    const isTradable = !reason;
+    formatted.isTradable = isTradable;
+    formatted.tradableReason = detail || undefined;
+    if (!isTradable) {
+      logBagsNotTradable(metadata, detail || "tradability check failed");
+    } else {
+      logBagsAccepted(metadata, formatted.liquidityUsd);
+    }
     normalized.push(formatted);
   }
 
@@ -499,6 +887,7 @@ async function fetchBirdeyeTokens() {
           null,
         createdAt,
         source: "birdeye",
+        tradeRoute: "jupiter",
       };
     })
     .filter((token) => Boolean(token.address));
@@ -506,76 +895,54 @@ async function fetchBirdeyeTokens() {
 
 const SOURCE_FETCHERS = [
   { name: "pumpfun", fetcher: fetchPumpfunTokens },
+  { name: "bags", fetcher: fetchBagsTokens },
   { name: "birdeye", fetcher: fetchBirdeyeTokens },
   { name: "dexscreener", fetcher: fetchDexscreenerLatestTokens },
 ];
 async function buildGraduatedFeed() {
-  const preferredTokens = [];
-  const fallbackTokens = [];
-  const lenientTokens = [];
+  const sourceBuckets = FEED_SOURCE_ORDER.reduce((acc, key) => {
+    acc[key] = [];
+    return acc;
+  }, {});
 
   for (const source of SOURCE_FETCHERS) {
     try {
       const tokens = await source.fetcher();
-      const preferred = [];
-      const fallback = [];
-      const lenient = [];
-
-      for (const token of tokens) {
-        if (passesPreferredFilters(token)) {
-          preferred.push(token);
-        } else if (passesFallbackFilters(token)) {
-          fallback.push(token);
-        } else if (passesLenientFilters(token)) {
-          lenient.push(token);
-        }
+      if (sourceBuckets[source.name]) {
+        sourceBuckets[source.name].push(...tokens);
+      } else {
+        sourceBuckets[source.name] = [...tokens];
       }
-
-      logTokensBySource(source.name, preferred, "preferred");
-      logTokensBySource(source.name, fallback, "fallback");
-      logTokensBySource(source.name, lenient, "lenient");
-
-      preferredTokens.push(...preferred);
-      fallbackTokens.push(...fallback);
-      lenientTokens.push(...lenient);
+      logTokensBySource(source.name, tokens, "strict");
     } catch (error) {
       console.error(`[${source.name}] fetch failed: ${error.message}`);
     }
   }
 
-  const mergedPreferred = mergeTokensByAddress(preferredTokens);
-  const preferredAddresses = new Set(
-    mergedPreferred.map((token) => token.address?.toLowerCase?.())
-  );
+  const mergedBuckets = FEED_SOURCE_ORDER.reduce((acc, key) => {
+    const merged = mergeTokensByAddress(sourceBuckets[key]);
+    acc[key] = merged;
+    logTokensBySource(key, merged, "final");
+    return acc;
+  }, {});
 
-  const uniqueFallback = fallbackTokens.filter((token) => {
-    const address = token.address?.toLowerCase?.();
-    return address && !preferredAddresses.has(address);
-  });
-
-  const mergedFallback = mergeTokensByAddress(uniqueFallback);
-  const fallbackAddresses = new Set(preferredAddresses);
-  mergedFallback.forEach((token) => {
-    const addr = token.address?.toLowerCase?.();
-    if (addr) fallbackAddresses.add(addr);
-  });
-
-  const uniqueLenient = lenientTokens.filter((token) => {
-    const address = token.address?.toLowerCase?.();
-    return address && !fallbackAddresses.has(address);
-  });
-
-  const mergedLenient = mergeTokensByAddress(uniqueLenient);
-  const merged = [...mergedPreferred, ...mergedFallback, ...mergedLenient].slice(
-    0,
-    MAX_GRADUATED_FEED_TOKENS
-  );
-
-  if (merged.length > 0) {
-    graduatedLastGoodFeed = merged;
+  const balanced = ensureMinimumBagTokens(buildBalancedFeed(mergedBuckets), mergedBuckets.bags);
+  if (balanced.length > 0) {
+    const normalizedFeed = applySourceDefaults(balanced).slice(0, MAX_GRADUATED_FEED_TOKENS);
+    logFeedSourceBreakdown(normalizedFeed);
+    printTokenNamesToTerminal(normalizedFeed, 'FULL_FEED_TOKENS');
+    graduatedLastGoodFeed = normalizedFeed;
+    return normalizedFeed;
   }
 
-  return merged;
+  if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
+    console.log("[feed] returning last known good feed");
+    logFeedSourceBreakdown(graduatedLastGoodFeed);
+    printTokenNamesToTerminal(graduatedLastGoodFeed, 'FULL_FEED_TOKENS');
+    return graduatedLastGoodFeed;
+  }
+
+  return [];
 }
 
 async function getCachedGraduatedFeed() {
@@ -755,6 +1122,7 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const cursor = req.query.cursor ? Number(req.query.cursor) : 0;
 
     const fullFeed = await getCachedGraduatedFeed();
+    printTokenNamesToTerminal(fullFeed, 'FULL_FEED_TOKENS');
     const start = Number.isFinite(cursor) ? cursor : 0;
     const end = start + limit;
 
@@ -762,6 +1130,7 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const nextCursor = end < fullFeed.length ? String(end) : null;
 
     printTokenNamesToTerminal(pageTokens, "MOBILE GRADUATED FEED PAGE");
+    logFinalFeedTokens(pageTokens, 10);
 
     return res.json({
       tokens: pageTokens,
@@ -849,6 +1218,7 @@ async function fetchDexscreenerLatestTokens() {
           item.pairAddress || item.poolAddress || item.marketAddress || item.pair || null,
         createdAt,
         source: "dexscreener",
+        tradeRoute: "jupiter",
       };
     })
     .filter((token) => Boolean(token.address));
@@ -1067,16 +1437,20 @@ app.get("/api/twitter/connection/:userId", (req, res) => {
     return res.status(400).json({ error: "Missing userId" });
   }
 
-  const profile = twitterConnections.get(userId);
-  if (!profile) {
-    return res.status(404).json({ connected: false });
-  }
-
-  return res.json({
-    connected: true,
-    twitterUsername: profile.twitterUsername,
-    twitterUserId: profile.twitterUserId,
-  });
+  resolveTwitterConnection(userId)
+    .then((profile) => {
+      if (!profile) {
+        return res.status(404).json({ connected: false });
+      }
+      return res.json({
+        connected: true,
+        twitterUsername: profile.twitterUsername,
+        twitterUserId: profile.twitterUserId,
+      });
+    })
+    .catch((error) => {
+      return res.status(500).json({ error: "Failed to resolve twitter connection", details: error.message });
+    });
 });
 
 app.delete("/api/twitter/connection/:userId", (req, res) => {
@@ -1085,8 +1459,34 @@ app.delete("/api/twitter/connection/:userId", (req, res) => {
     return res.status(400).json({ error: "Missing userId" });
   }
 
-  twitterConnections.delete(userId);
-  return res.json({ ok: true });
+  (async () => {
+    if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+      try {
+        let resolvedUserId = null;
+        if (UUID_RE.test(userId)) {
+          resolvedUserId = userId;
+        } else {
+          const { res: walletRes, json: walletJson } = await supabaseRequest(
+            `user_wallets?privy_user_id=eq.${encodeURIComponent(userId)}&select=user_id`,
+            { method: "GET" }
+          );
+          if (walletRes.ok && Array.isArray(walletJson) && walletJson.length > 0) {
+            resolvedUserId = walletJson[0].user_id;
+          }
+        }
+        if (resolvedUserId) {
+          await supabaseRequest(`twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}`, {
+            method: "DELETE",
+          });
+        }
+      } catch (error) {
+        console.error("delete twitter connection supabase error:", error.message);
+      }
+    }
+
+    twitterConnections.delete(userId);
+    return res.json({ ok: true });
+  })();
 });
 
 app.get("/api/twitter/auth/start", (req, res) => {
@@ -1227,7 +1627,7 @@ app.get("/api/twitter/auth/callback", async (req, res) => {
       twitterUserId: meJson.data.id,
       connectedAt: new Date().toISOString(),
     };
-    twitterConnections.set(stored.userId, profile);
+    await saveTwitterConnection(stored.userId, profile.twitterUserId, profile.twitterUsername);
 
     const redirectUrl = buildRedirectUrl(stored.returnUrl, {
       status: "success",
@@ -1400,6 +1800,187 @@ app.post("/api/users/privy-wallet", async (req, res) => {
   }
 });
 
+app.post("/api/onboard-user", async (req, res) => {
+  try {
+    const {
+      privy_user_id,
+      twitter_user_id,
+      twitter_username,
+      email,
+      wallet_address
+    } = req.body || {};
+
+    if (!privy_user_id || !twitter_user_id || !twitter_username || !email || !wallet_address) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const debugEnabled = process.env.DEBUG_ONBOARDING === "true";
+    const debug = debugEnabled ? { supabase_host: SUPABASE_HOST } : null;
+
+    // Try to find an existing user by Privy ID first
+    const { res: walletByPrivyRes, json: walletByPrivyJson } = await supabaseRequest(
+      `user_wallets?privy_user_id=eq.${encodeURIComponent(privy_user_id)}&select=user_id,privy_user_id`,
+      { method: "GET" }
+    );
+
+    if (!walletByPrivyRes.ok) {
+      return res.status(500).json({ error: "Failed to check existing wallets by Privy ID", details: walletByPrivyJson });
+    }
+    if (debug) {
+      debug.wallet_by_privy_count = Array.isArray(walletByPrivyJson) ? walletByPrivyJson.length : 0;
+    }
+
+    let userId;
+    let existingUser = false;
+    let foundByTwitter = false;
+
+    if (Array.isArray(walletByPrivyJson) && walletByPrivyJson.length > 0) {
+      existingUser = true;
+      userId = walletByPrivyJson[0].user_id;
+    } else {
+      // Check if Twitter account already exists
+      const { res: checkRes, json: checkJson } = await supabaseRequest(
+        `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}&select=user_id,twitter_user_id,twitter_username`,
+        { method: "GET" }
+      );
+
+      if (!checkRes.ok) {
+        return res.status(500).json({ error: "Failed to check existing connections", details: checkJson });
+      }
+      if (debug) {
+        debug.twitter_by_id_count = Array.isArray(checkJson) ? checkJson.length : 0;
+      }
+
+      if (Array.isArray(checkJson) && checkJson.length > 0) {
+        existingUser = true;
+        foundByTwitter = true;
+        userId = checkJson[0].user_id;
+      } else {
+        // Create new user
+        userId = crypto.randomUUID();
+      }
+    }
+
+    // Insert or update twitter_connection
+    const twitterPayload = {
+      user_id: userId,
+      twitter_user_id,
+      twitter_username,
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // Determine whether to PATCH or POST to avoid duplicate key errors
+    const { res: byUserRes, json: byUserJson } = await supabaseRequest(
+      `twitter_connections?user_id=eq.${encodeURIComponent(userId)}&select=user_id`,
+      { method: "GET" }
+    );
+
+    if (!byUserRes.ok) {
+      return res.status(500).json({ error: "Failed to check twitter connections by user_id", details: byUserJson });
+    }
+    const hasByUser = Array.isArray(byUserJson) && byUserJson.length > 0;
+    const hasByTwitter = foundByTwitter;
+
+    let twitterTarget = "twitter_connections";
+    let twitterMethod = "POST";
+    let twitterBody = twitterPayload;
+
+    if (hasByUser) {
+      twitterTarget = `twitter_connections?user_id=eq.${encodeURIComponent(userId)}`;
+      twitterMethod = "PATCH";
+      twitterBody = {
+        ...twitterPayload,
+        twitter_user_id: undefined, // avoid accidental change
+      };
+    } else if (hasByTwitter) {
+      twitterTarget = `twitter_connections?twitter_user_id=eq.${encodeURIComponent(twitter_user_id)}`;
+      twitterMethod = "PATCH";
+      twitterBody = {
+        ...twitterPayload,
+        twitter_user_id: undefined,
+      };
+    }
+    if (debug) {
+      debug.twitter_by_user_count = Array.isArray(byUserJson) ? byUserJson.length : 0;
+      debug.twitter_write_method = twitterMethod;
+      debug.twitter_write_target = twitterTarget;
+    }
+
+    const { res: twitterRes, json: twitterJson } = await supabaseRequest(twitterTarget, {
+      method: twitterMethod,
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(twitterBody),
+    });
+
+    if (!twitterRes.ok) {
+      return res.status(500).json({ error: "Failed to save Twitter connection", details: twitterJson });
+    }
+    if (debug) {
+      debug.twitter_write_status = twitterRes.status;
+      debug.twitter_write_rows = Array.isArray(twitterJson) ? twitterJson.length : 0;
+    }
+
+    // Check if wallet already exists for this user
+    const { res: walletCheckRes, json: walletCheckJson } = await supabaseRequest(
+      `user_wallets?or=(user_id.eq.${encodeURIComponent(userId)},privy_user_id.eq.${encodeURIComponent(privy_user_id)})&select=id,wallet_address,privy_user_id`,
+      { method: "GET" }
+    );
+
+    if (!walletCheckRes.ok) {
+      return res.status(500).json({ error: "Failed to check existing wallets", details: walletCheckJson });
+    }
+    if (debug) {
+      debug.wallet_check_count = Array.isArray(walletCheckJson) ? walletCheckJson.length : 0;
+    }
+
+    let walletExists = false;
+    if (Array.isArray(walletCheckJson) && walletCheckJson.length > 0) {
+      walletExists = walletCheckJson.some(w => w.wallet_address === wallet_address || w.privy_user_id === privy_user_id);
+    }
+
+    if (!walletExists) {
+      // Insert new wallet
+      const walletPayload = {
+        user_id: userId,
+        privy_user_id,
+        wallet_address,
+        email,
+        created_at: new Date().toISOString(),
+      };
+
+      const { res: walletRes, json: walletJson } = await supabaseRequest("user_wallets", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(walletPayload),
+      });
+
+      if (!walletRes.ok) {
+        return res.status(500).json({ error: "Failed to save wallet", details: walletJson });
+      }
+      if (debug) {
+        debug.wallet_write_status = walletRes.status;
+        debug.wallet_write_rows = Array.isArray(walletJson) ? walletJson.length : 0;
+      }
+    }
+
+    const responseBody = {
+      success: true,
+      user_id: userId,
+      existing_user: existingUser,
+      wallet_exists: walletExists,
+    };
+    if (debug) {
+      responseBody.debug = debug;
+    }
+    return res.json(responseBody);
+
+  } catch (error) {
+    console.error("POST /api/onboard-user error:", error.message);
+    return res.status(500).json({ error: "Failed to onboard user", details: error.message });
+  }
+});
+
 app.get("/tokens/graduated", async (req, res) => {
   try {
     const requestedLimit = Number(req.query.limit) || DEFAULT_PAGE_LIMIT;
@@ -1419,4 +2000,7 @@ app.get("/tokens/graduated", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Memeswipe API running on port ${PORT}`);
+  if (SUPABASE_HOST) {
+    console.log(`[supabase] host: ${SUPABASE_HOST}`);
+  }
 });

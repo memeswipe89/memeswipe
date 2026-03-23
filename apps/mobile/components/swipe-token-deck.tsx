@@ -13,7 +13,6 @@ import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
-  withRepeat,
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
@@ -27,7 +26,6 @@ const INTENTIONAL_EASING = Easing.bezier(0.22, 1, 0.36, 1);
 const MOTION = {
   quick: 220,
   medium: 300,
-  slow: 1300,
 };
 
 type SwipeDirection = 'left' | 'right';
@@ -43,6 +41,10 @@ export type SwipeToken = {
   change24hPct: number;
   chartData: number[];
   graduationTime?: string;
+  source?: string;
+  tradeRoute?: "jupiter" | "bags";
+  isTradable?: boolean;
+  tradableReason?: string;
 };
 
 type SwipeTokenDeckProps = {
@@ -175,48 +177,6 @@ const MomentumGraph = memo(function MomentumGraph({ data }: { data: number[] }) 
     <Animated.View style={[styles.graphContainer, animatedStyle]}>
       <TradeChart data={data.slice(-288)} />
     </Animated.View>
-  );
-});
-
-const ShimmerCard = memo(function ShimmerCard() {
-  const shimmerX = useSharedValue(-1);
-
-  useEffect(() => {
-    shimmerX.value = withRepeat(
-      withTiming(1, { duration: MOTION.slow, easing: INTENTIONAL_EASING }),
-      -1,
-      false
-    );
-  }, [shimmerX]);
-
-  const shimmerStyle = useAnimatedStyle(() => ({
-    transform: [
-      {
-        translateX: interpolate(shimmerX.value, [-1, 1], [-SCREEN_WIDTH, SCREEN_WIDTH]),
-      },
-    ],
-  }));
-
-  return (
-    <View style={styles.cardWrap}>
-      <BlurView intensity={30} tint="dark" style={styles.blurCard}>
-        <View style={styles.skeleton}>
-          <View style={[styles.skeletonCircle, styles.skeletonBlock]} />
-          <View style={[styles.skeletonLineWide, styles.skeletonBlock]} />
-          <View style={[styles.skeletonLineNarrow, styles.skeletonBlock]} />
-          <View style={[styles.skeletonLineWide, styles.skeletonBlock]} />
-          <View style={[styles.skeletonChart, styles.skeletonBlock]} />
-          <Animated.View style={[styles.shimmerStripe, shimmerStyle]}>
-            <ExpoLinearGradient
-              colors={['transparent', 'rgba(255,255,255,0.28)', 'transparent']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={StyleSheet.absoluteFill}
-            />
-          </Animated.View>
-        </View>
-      </BlurView>
-    </View>
   );
 });
 
@@ -504,7 +464,11 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
     return (
       <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
         <View style={styles.glowOrb} />
-        <ShimmerCard />
+        <DeckStatusCard
+          title="Loading Tokens..."
+          subtitle="Fetching live token data for this feed."
+          loading
+        />
       </ExpoLinearGradient>
     );
   }
@@ -593,7 +557,6 @@ const styles = StyleSheet.create({
     right: 0,
     width: '100%',
     alignItems: 'stretch',
-    touchAction: 'none',
   },
   nextCard: {
     transform: [{ scale: 0.95 }],
@@ -918,45 +881,5 @@ const styles = StyleSheet.create({
     color: '#9ca6c2',
     fontSize: 14,
     textAlign: 'center',
-  },
-  skeleton: {
-    flex: 1,
-    borderRadius: 34,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    paddingHorizontal: 22,
-    paddingTop: 24,
-    overflow: 'hidden',
-  },
-  skeletonBlock: {
-    backgroundColor: 'rgba(255,255,255,0.09)',
-  },
-  skeletonCircle: {
-    width: 86,
-    height: 86,
-    borderRadius: 43,
-    alignSelf: 'center',
-  },
-  skeletonLineWide: {
-    height: 18,
-    borderRadius: 9,
-    marginTop: 16,
-  },
-  skeletonLineNarrow: {
-    height: 14,
-    width: '60%',
-    borderRadius: 7,
-    marginTop: 10,
-    alignSelf: 'center',
-  },
-  skeletonChart: {
-    height: 120,
-    borderRadius: 14,
-    marginTop: 20,
-  },
-  shimmerStripe: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: SCREEN_WIDTH * 0.35,
   },
 });
