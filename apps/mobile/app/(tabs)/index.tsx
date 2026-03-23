@@ -81,6 +81,8 @@ type ApiToken = {
   graduationTime?: string;
   source?: string;
   tradeRoute?: "jupiter" | "bags";
+  isTradable?: boolean;
+  tradableReason?: string;
 };
 
 const toNumber = (value: unknown, fallback = 0) => {
@@ -116,8 +118,29 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
     graduationTime: token.graduationTime || token.graduatedAt || 'Live now',
     source: token.source,
     tradeRoute: token.tradeRoute,
+    isTradable: token.isTradable ?? true,
+    tradableReason: token.tradableReason || undefined,
   };
 };
+
+const SourceSwitch = ({
+  label,
+  enabled,
+  onPress,
+}: {
+  label: string;
+  enabled: boolean;
+  onPress: () => void;
+}) => (
+  <Pressable
+    onPress={onPress}
+    style={[styles.sourceToggle, enabled && styles.sourceToggleActive]}
+    android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
+  >
+    <Text style={[styles.sourceToggleText, enabled && styles.sourceToggleTextActive]}>{label}</Text>
+    <View style={[styles.sourceIndicator, enabled && styles.sourceIndicatorActive]} />
+  </Pressable>
+);
 
 const mergeLiveUpdate = (prev: SwipeToken, incoming: SwipeToken): SwipeToken => {
   const history = [...prev.chartData, incoming.priceUsd].slice(-288);
@@ -239,6 +262,8 @@ export default function HomeScreen() {
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [buyLoading, setBuyLoading] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
+  const [showPumpfun, setShowPumpfun] = useState(true);
+  const [showBags, setShowBags] = useState(false);
   const [appLoading, setAppLoading] = useState(true);
   const [showSwipeHint, setShowSwipeHint] = useState(true);
   const [segment, setSegment] = useState<FeedSegment>('trending');
@@ -282,6 +307,10 @@ export default function HomeScreen() {
   const lastFeedFetchRef = useRef(0);
   const blockedUntilRef = useRef(0);
   const retryDelayRef = useRef(10000);
+
+  useEffect(() => {
+    console.log('[FILTERS] pumpfun=', showPumpfun, 'bags=', showBags);
+  }, [showPumpfun, showBags]);
 
   const checkTwitterConnection = useCallback(
     async (resolvedUserId: string, options?: { background?: boolean; allowStale?: boolean }) => {
@@ -1275,6 +1304,13 @@ export default function HomeScreen() {
         Alert.alert("Set up wallet", "Please create your Privy wallet first.");
         return;
       }
+      if (token.source === 'bags' && token.isTradable === false) {
+        const reason = token.tradableReason || 'very low liquidity';
+        console.log('[BAGS][SWIPE_BLOCKED]', { symbol: token.symbol, address: token.address, reason });
+        hideToken(token.address);
+        Alert.alert('Token not tradable', 'Token not tradable. Very low liquidity.');
+        return;
+      }
       console.log('[TRADE][SWIPE_RIGHT] token selected', {
         symbol: token.symbol,
         address: token.address,
@@ -1415,8 +1451,13 @@ export default function HomeScreen() {
     }
 
     const visible = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address)));
-    setTokens(visible);
-  }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache]);
+    const filteredBySource = visible.filter((token) => {
+      const source = (token.source || 'pumpfun').toLowerCase();
+      if (source === 'bags') return showBags;
+      return showPumpfun;
+    });
+    setTokens(filteredBySource);
+  }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache, showPumpfun, showBags]);
 
   useEffect(() => {
     if (!tradeOpenPopup.visible) return;
@@ -1481,7 +1522,10 @@ export default function HomeScreen() {
               </View>
             </View>
           <View style={styles.filterRow}>
-            <Text style={styles.segmentLabel}>Trending</Text>
+            <View style={styles.sourceSwitchRow}>
+              <SourceSwitch label="Pump.fun" enabled={showPumpfun} onPress={() => setShowPumpfun((prev) => !prev)} />
+              <SourceSwitch label="Bags" enabled={showBags} onPress={() => setShowBags((prev) => !prev)} />
+            </View>
             <Pressable
               onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
               style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
@@ -1703,11 +1747,48 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  sourceSwitchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   segmentLabel: {
     color: '#f3f7ff',
     fontSize: 20,
     fontWeight: '800',
     letterSpacing: 0.2,
+  },
+  sourceToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    marginRight: 8,
+  },
+  sourceToggleActive: {
+    borderColor: 'rgba(81,168,255,0.8)',
+    backgroundColor: 'rgba(81,168,255,0.12)',
+  },
+  sourceToggleText: {
+    color: 'rgba(225,235,255,0.7)',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  sourceToggleTextActive: {
+    color: '#fefefe',
+  },
+  sourceIndicator: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginLeft: 8,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+  },
+  sourceIndicatorActive: {
+    backgroundColor: '#5ff7c1',
   },
   favoritesToggle: {
     borderRadius: 999,

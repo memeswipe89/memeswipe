@@ -43,6 +43,8 @@ export type SwipeToken = {
   graduationTime?: string;
   source?: string;
   tradeRoute?: "jupiter" | "bags";
+  isTradable?: boolean;
+  tradableReason?: string;
 };
 
 type SwipeTokenDeckProps = {

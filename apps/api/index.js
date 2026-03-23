@@ -42,6 +42,7 @@ const MAX_TOKEN_AGE_HOURS = Number(process.env.MAX_TOKEN_AGE_HOURS || 72);
 const GRADUATED_ADDRESS_FETCH_LIMIT = 400;
 const MAX_GRADUATED_FEED_TOKENS = 400;
 const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || "";
+const FEED_SOURCE_ORDER = ["pumpfun", "bags", "birdeye", "dexscreener"];
 
 // Cache
 const CACHE_TIME_MS = 20 * 1000;
@@ -261,6 +262,12 @@ function logBagsRejected(token, reason) {
   console.log(`[BAGS][REJECTED] ${label} - ${reason}`);
 }
 
+function logBagsNotTradable(token, reason) {
+  const label = token?.name || token?.symbol || token?.mint || "Unknown";
+  const symbol = token?.symbol ? ` (${token.symbol})` : "";
+  console.log(`[BAGS][NOT_TRADABLE] ${label}${symbol} - ${reason}`);
+}
+
 function getStrictTradabilityReason(token) {
   if (!token?.address) return "missing address";
   const liquidity = Number(token.liquidityUsd || 0);
@@ -312,6 +319,27 @@ function logFinalFeedTokens(tokens, limit = 10) {
         "n/a"} - ${formatDollar(token.liquidityUsd)}`
     );
   }
+}
+
+function logFeedSourceBreakdown(tokens) {
+  if (!Array.isArray(tokens)) return;
+  const counts = tokens.reduce((acc, token) => {
+    const key = (token?.source || "unknown").toLowerCase();
+    if (!acc[key]) acc[key] = 0;
+    acc[key] += 1;
+    return acc;
+  }, {});
+  const segments = FEED_SOURCE_ORDER.map((key) => `${key}=${counts[key] || 0}`);
+  const otherCount = Object.entries(counts).reduce((acc, [key, value]) => {
+    if (!FEED_SOURCE_ORDER.includes(key)) {
+      acc += value;
+    }
+    return acc;
+  }, 0);
+  if (otherCount > 0) {
+    segments.push(`other=${otherCount}`);
+  }
+  console.log(`[FEED BREAKDOWN] ${segments.join(" | ")}`);
 }
 
 function logTokensBySource(source, tokens, tier) {
@@ -378,58 +406,48 @@ function mergeTokensByAddress(tokens) {
     }
     const existing = seen.get(address);
     const comparison = compareNormalizedTokens(token, existing);
-    if (comparison >= 0) {
-      continue;
+    if (comparison < 0) {
+      seen.set(address, token);
     }
-    seen.set(address, token);
   }
   const merged = Array.from(seen.values());
   merged.sort(compareNormalizedTokens);
   return merged.slice(0, MAX_GRADUATED_FEED_TOKENS);
 }
 
-function buildBalancedFeed(pumpfunTokens, bagsTokens) {
+function buildBalancedFeed(sourceMap) {
   const limit = MAX_GRADUATED_FEED_TOKENS;
-  const pattern = ["pumpfun", "pumpfun", "bags"];
+  const pointers = FEED_SOURCE_ORDER.reduce((acc, key) => {
+    acc[key] = 0;
+    return acc;
+  }, {});
   const result = [];
-  let pumpIndex = 0;
-  let bagIndex = 0;
+
+  const hasRemaining = () =>
+    FEED_SOURCE_ORDER.some((key) => {
+      const list = sourceMap[key] || [];
+      return pointers[key] < list.length;
+    });
+
   let cycle = 0;
-
-  while (
-    result.length < limit &&
-    (pumpIndex < pumpfunTokens.length || bagIndex < bagsTokens.length)
-  ) {
-    const slot = pattern[cycle % pattern.length];
+  while (result.length < limit && hasRemaining()) {
+    const sourceKey = FEED_SOURCE_ORDER[cycle % FEED_SOURCE_ORDER.length];
     cycle += 1;
-
-    if (slot === "bags") {
-      if (bagIndex < bagsTokens.length) {
-        result.push(bagsTokens[bagIndex++]);
-        continue;
-      }
-    } else {
-      if (pumpIndex < pumpfunTokens.length) {
-        result.push(pumpfunTokens[pumpIndex++]);
-        continue;
-      }
-    }
-
-    if (pumpIndex < pumpfunTokens.length) {
-      result.push(pumpfunTokens[pumpIndex++]);
-      continue;
-    }
-    if (bagIndex < bagsTokens.length) {
-      result.push(bagsTokens[bagIndex++]);
-      continue;
+    const list = sourceMap[sourceKey] || [];
+    const idx = pointers[sourceKey];
+    if (idx < list.length) {
+      result.push(list[idx]);
+      pointers[sourceKey] += 1;
     }
   }
 
-  while (result.length < limit && pumpIndex < pumpfunTokens.length) {
-    result.push(pumpfunTokens[pumpIndex++]);
-  }
-  while (result.length < limit && bagIndex < bagsTokens.length) {
-    result.push(bagsTokens[bagIndex++]);
+  for (const key of FEED_SOURCE_ORDER) {
+    const list = sourceMap[key] || [];
+    let idx = pointers[key];
+    while (result.length < limit && idx < list.length) {
+      result.push(list[idx]);
+      idx += 1;
+    }
   }
 
   return result.slice(0, limit);
@@ -775,20 +793,23 @@ async function fetchBagsTokens() {
 
     const formatted = formatPair(bestPair, { source: "bags", tradeRoute: "jupiter" });
     const reason = getStrictTradabilityReason(formatted);
-    if (reason) {
-      const detail =
-        reason === "low liquidity"
-          ? `low liquidity ${Math.round(formatted.liquidityUsd || 0)} < ${MIN_LIQUIDITY_USD}`
-          : reason === "low volume"
-          ? `low volume ${Math.round(formatted.volume24hUsd || 0)} < ${MIN_VOLUME_USD}`
-          : reason === "invalid price"
-          ? `invalid price ${formatted.priceUsd ?? "n/a"}`
-          : reason;
-      logBagsRejected(metadata, detail);
-      continue;
+    const detail =
+      reason === "low liquidity"
+        ? `low liquidity ${Math.round(formatted.liquidityUsd || 0)} < ${MIN_LIQUIDITY_USD}`
+        : reason === "low volume"
+        ? `low volume ${Math.round(formatted.volume24hUsd || 0)} < ${MIN_VOLUME_USD}`
+        : reason === "invalid price"
+        ? `invalid price ${formatted.priceUsd ?? "n/a"}`
+        : reason;
+    const isTradable = !reason;
+    formatted.isTradable = isTradable;
+    formatted.tradableReason = detail || undefined;
+    if (!isTradable) {
+      logBagsNotTradable(metadata, detail || "tradability check failed");
+    } else {
+      logBagsAccepted(metadata, formatted.liquidityUsd);
     }
     normalized.push(formatted);
-    logBagsAccepted(metadata, formatted.liquidityUsd);
   }
 
   return normalized;
@@ -866,37 +887,47 @@ const SOURCE_FETCHERS = [
   { name: "dexscreener", fetcher: fetchDexscreenerLatestTokens },
 ];
 async function buildGraduatedFeed() {
-  const pumpfunTokens = [];
-  const bagsTokens = [];
+  const sourceBuckets = FEED_SOURCE_ORDER.reduce((acc, key) => {
+    acc[key] = [];
+    return acc;
+  }, {});
 
   for (const source of SOURCE_FETCHERS) {
     try {
       const tokens = await source.fetcher();
-      if (source.name === "pumpfun") {
-        pumpfunTokens.push(...tokens);
-      } else if (source.name === "bags") {
-        bagsTokens.push(...tokens);
+      const filteredTokens =
+        source.name === "birdeye" || source.name === "dexscreener"
+          ? filterStrictTokens(tokens, source.name)
+          : tokens;
+      if (sourceBuckets[source.name]) {
+        sourceBuckets[source.name].push(...filteredTokens);
+      } else {
+        sourceBuckets[source.name] = [...filteredTokens];
       }
-      logTokensBySource(source.name, tokens, "strict");
+      logTokensBySource(source.name, filteredTokens, "strict");
     } catch (error) {
       console.error(`[${source.name}] fetch failed: ${error.message}`);
     }
   }
 
-  const mergedPumpfun = mergeTokensByAddress(pumpfunTokens);
-  const mergedBags = mergeTokensByAddress(bagsTokens);
-  logTokensBySource("pumpfun", mergedPumpfun, "final");
-  logTokensBySource("bags", mergedBags, "final");
+  const mergedBuckets = FEED_SOURCE_ORDER.reduce((acc, key) => {
+    const merged = mergeTokensByAddress(sourceBuckets[key]);
+    acc[key] = merged;
+    logTokensBySource(key, merged, "final");
+    return acc;
+  }, {});
 
-  const balanced = buildBalancedFeed(mergedPumpfun, mergedBags);
+  const balanced = buildBalancedFeed(mergedBuckets);
   if (balanced.length > 0) {
     const normalizedFeed = applySourceDefaults(balanced).slice(0, MAX_GRADUATED_FEED_TOKENS);
+    logFeedSourceBreakdown(normalizedFeed);
     graduatedLastGoodFeed = normalizedFeed;
     return normalizedFeed;
   }
 
   if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
     console.log("[feed] returning last known good feed");
+    logFeedSourceBreakdown(graduatedLastGoodFeed);
     return graduatedLastGoodFeed;
   }
 
