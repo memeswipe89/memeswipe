@@ -123,7 +123,7 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
   };
 };
 
-const SourceSwitch = ({
+const SourceTab = ({
   label,
   enabled,
   onPress,
@@ -134,11 +134,10 @@ const SourceSwitch = ({
 }) => (
   <Pressable
     onPress={onPress}
-    style={[styles.sourceToggle, enabled && styles.sourceToggleActive]}
-    android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
+    style={[styles.sourceTab, enabled && styles.sourceTabActive]}
+    android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
   >
-    <Text style={[styles.sourceToggleText, enabled && styles.sourceToggleTextActive]}>{label}</Text>
-    <View style={[styles.sourceIndicator, enabled && styles.sourceIndicatorActive]} />
+    <Text style={[styles.sourceTabText, enabled && styles.sourceTabTextActive]}>{label}</Text>
   </Pressable>
 );
 
@@ -262,8 +261,7 @@ export default function HomeScreen() {
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [buyLoading, setBuyLoading] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
-  const [showPumpfun, setShowPumpfun] = useState(true);
-  const [showBags, setShowBags] = useState(false);
+  const [activeSource, setActiveSource] = useState<'pumpfun' | 'bags'>('pumpfun');
   const [appLoading, setAppLoading] = useState(true);
   const [showSwipeHint, setShowSwipeHint] = useState(true);
   const [segment, setSegment] = useState<FeedSegment>('trending');
@@ -309,8 +307,8 @@ export default function HomeScreen() {
   const retryDelayRef = useRef(10000);
 
   useEffect(() => {
-    console.log('[FILTERS] pumpfun=', showPumpfun, 'bags=', showBags);
-  }, [showPumpfun, showBags]);
+    console.log('[FILTERS] activeSource=', activeSource);
+  }, [activeSource]);
 
   const checkTwitterConnection = useCallback(
     async (resolvedUserId: string, options?: { background?: boolean; allowStale?: boolean }) => {
@@ -1453,11 +1451,10 @@ export default function HomeScreen() {
     const visible = segmentCache[segment].filter((t) => !(t.address && hiddenTokenAddresses.has(t.address)));
     const filteredBySource = visible.filter((token) => {
       const source = (token.source || 'pumpfun').toLowerCase();
-      if (source === 'bags') return showBags;
-      return showPumpfun;
+      return source === activeSource;
     });
     setTokens(filteredBySource);
-  }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache, showPumpfun, showBags]);
+  }, [activeChain, favoriteTokens, hiddenTokenAddresses, segment, segmentCache, activeSource]);
 
   useEffect(() => {
     if (!tradeOpenPopup.visible) return;
@@ -1522,18 +1519,23 @@ export default function HomeScreen() {
               </View>
             </View>
           <View style={styles.filterRow}>
-            <View style={styles.sourceSwitchRow}>
-              <SourceSwitch label="Pump.fun" enabled={showPumpfun} onPress={() => setShowPumpfun((prev) => !prev)} />
-              <SourceSwitch label="Bags" enabled={showBags} onPress={() => setShowBags((prev) => !prev)} />
+            <View style={styles.filterHeaderRow}>
+              <Text style={styles.segmentLabel}>Trending</Text>
+              <Pressable
+                onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
+                style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
+              >
+                <Text
+                  style={[styles.favoritesToggleText, segment === 'favorites' && styles.favoritesToggleTextActive]}
+                >
+                  Favorites
+                </Text>
+              </Pressable>
             </View>
-            <Pressable
-              onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
-              style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
-            >
-              <Text style={[styles.favoritesToggleText, segment === 'favorites' && styles.favoritesToggleTextActive]}>
-                Favorites
-              </Text>
-            </Pressable>
+            <View style={styles.sourceTabRow}>
+              <SourceTab label="Pump.fun" enabled={activeSource === 'pumpfun'} onPress={() => setActiveSource('pumpfun')} />
+              <SourceTab label="Bags" enabled={activeSource === 'bags'} onPress={() => setActiveSource('bags')} />
+            </View>
           </View>
           {activeChain === 'solana' ? (
             <View style={styles.swapBudgetRow}>
@@ -1743,13 +1745,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 6,
+    gap: 6,
+  },
+  filterHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  sourceSwitchRow: {
+  sourceTabRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   segmentLabel: {
     color: '#f3f7ff',
@@ -1757,38 +1767,25 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.2,
   },
-  sourceToggle: {
-    flexDirection: 'row',
+  sourceTab: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 10,
     alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    marginRight: 8,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
-  sourceToggleActive: {
-    borderColor: 'rgba(81,168,255,0.8)',
-    backgroundColor: 'rgba(81,168,255,0.12)',
+  sourceTabActive: {
+    borderColor: 'rgba(97,180,255,0.95)',
+    backgroundColor: 'rgba(97,180,255,0.2)',
   },
-  sourceToggleText: {
+  sourceTabText: {
     color: 'rgba(225,235,255,0.7)',
     fontSize: 13,
     fontWeight: '700',
   },
-  sourceToggleTextActive: {
-    color: '#fefefe',
-  },
-  sourceIndicator: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginLeft: 8,
-    backgroundColor: 'rgba(255,255,255,0.4)',
-  },
-  sourceIndicatorActive: {
-    backgroundColor: '#5ff7c1',
+  sourceTabTextActive: {
+    color: '#fff',
   },
   favoritesToggle: {
     borderRadius: 999,

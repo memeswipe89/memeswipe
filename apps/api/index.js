@@ -43,6 +43,7 @@ const GRADUATED_ADDRESS_FETCH_LIMIT = 400;
 const MAX_GRADUATED_FEED_TOKENS = 400;
 const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || "";
 const FEED_SOURCE_ORDER = ["pumpfun", "bags", "birdeye", "dexscreener"];
+const MIN_BAGS_VISIBLE = 50;
 
 // Cache
 const CACHE_TIME_MS = 20 * 1000;
@@ -281,20 +282,6 @@ function getStrictTradabilityReason(token) {
   return null;
 }
 
-function filterStrictTokens(tokens, sourceName) {
-  const accepted = [];
-  for (const token of tokens) {
-    const reason = getStrictTradabilityReason(token);
-    if (reason) {
-      const label = token?.symbol || token?.name || "Unknown";
-      console.log(`[${sourceName.toUpperCase()}][REJECTED] ${label} - ${reason}`);
-      continue;
-    }
-    accepted.push(token);
-  }
-  return accepted;
-}
-
 function ensureTokenSource(token) {
   if (!token) return token;
   const normalized = { ...token };
@@ -340,6 +327,32 @@ function logFeedSourceBreakdown(tokens) {
     segments.push(`other=${otherCount}`);
   }
   console.log(`[FEED BREAKDOWN] ${segments.join(" | ")}`);
+}
+
+function ensureMinimumBagTokens(feed, bagTokens) {
+  if (!Array.isArray(bagTokens) || bagTokens.length === 0) return feed;
+  const bagCount = feed.filter((token) => token.source === "bags").length;
+  if (bagCount >= MIN_BAGS_VISIBLE) return feed;
+  const needed = MIN_BAGS_VISIBLE - bagCount;
+  const seen = new Set(
+    feed
+      .map((token) => (token.address ? token.address.toLowerCase() : null))
+      .filter(Boolean)
+  );
+  const extras = [];
+  for (const token of bagTokens) {
+    if (extras.length >= needed) break;
+    const address = token.address?.toLowerCase();
+    if (!address || seen.has(address)) continue;
+    extras.push(token);
+    seen.add(address);
+  }
+  if (extras.length > 0) {
+    console.log(
+      `[BAGS][FEED_FILL] added ${extras.length} extra bag token${extras.length === 1 ? '' : 's'} to reach minimum ${MIN_BAGS_VISIBLE}`
+    );
+  }
+  return extras.length > 0 ? feed.concat(extras) : feed;
 }
 
 function logTokensBySource(source, tokens, tier) {
@@ -895,16 +908,12 @@ async function buildGraduatedFeed() {
   for (const source of SOURCE_FETCHERS) {
     try {
       const tokens = await source.fetcher();
-      const filteredTokens =
-        source.name === "birdeye" || source.name === "dexscreener"
-          ? filterStrictTokens(tokens, source.name)
-          : tokens;
       if (sourceBuckets[source.name]) {
-        sourceBuckets[source.name].push(...filteredTokens);
+        sourceBuckets[source.name].push(...tokens);
       } else {
-        sourceBuckets[source.name] = [...filteredTokens];
+        sourceBuckets[source.name] = [...tokens];
       }
-      logTokensBySource(source.name, filteredTokens, "strict");
+      logTokensBySource(source.name, tokens, "strict");
     } catch (error) {
       console.error(`[${source.name}] fetch failed: ${error.message}`);
     }
@@ -917,10 +926,11 @@ async function buildGraduatedFeed() {
     return acc;
   }, {});
 
-  const balanced = buildBalancedFeed(mergedBuckets);
+  const balanced = ensureMinimumBagTokens(buildBalancedFeed(mergedBuckets), mergedBuckets.bags);
   if (balanced.length > 0) {
     const normalizedFeed = applySourceDefaults(balanced).slice(0, MAX_GRADUATED_FEED_TOKENS);
     logFeedSourceBreakdown(normalizedFeed);
+    printTokenNamesToTerminal(normalizedFeed, 'FULL_FEED_TOKENS');
     graduatedLastGoodFeed = normalizedFeed;
     return normalizedFeed;
   }
@@ -928,6 +938,7 @@ async function buildGraduatedFeed() {
   if (graduatedLastGoodFeed && graduatedLastGoodFeed.length > 0) {
     console.log("[feed] returning last known good feed");
     logFeedSourceBreakdown(graduatedLastGoodFeed);
+    printTokenNamesToTerminal(graduatedLastGoodFeed, 'FULL_FEED_TOKENS');
     return graduatedLastGoodFeed;
   }
 
@@ -1111,6 +1122,7 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const cursor = req.query.cursor ? Number(req.query.cursor) : 0;
 
     const fullFeed = await getCachedGraduatedFeed();
+    printTokenNamesToTerminal(fullFeed, 'FULL_FEED_TOKENS');
     const start = Number.isFinite(cursor) ? cursor : 0;
     const end = start + limit;
 
