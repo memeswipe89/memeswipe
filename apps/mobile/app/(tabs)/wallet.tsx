@@ -17,7 +17,7 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
-import { useLinkEmail, usePrivy } from "@privy-io/expo";
+import { useLinkEmail, usePrivy } from "@/lib/privy-runtime";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
