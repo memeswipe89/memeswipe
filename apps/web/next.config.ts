@@ -2,7 +2,9 @@ import path from "path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  turbo: {},
+  turbo: {
+    root: ".",
+  },
   webpack(config) {
     config.resolve ??= {};
     config.resolve.alias ??= {};
