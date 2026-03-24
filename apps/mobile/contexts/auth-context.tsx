@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { usePrivy } from '@/lib/privy-runtime';
+import { usePrivy } from '@/lib/privy-hooks';
 import { getBalance } from '@/lib/checkBalance';
 
 type AuthUser = {

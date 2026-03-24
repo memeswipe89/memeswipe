@@ -10,9 +10,10 @@ import { Stack, usePathname, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
-import { Text, View } from "react-native";
-import { PrivyProviderWrapper, usePrivy } from "@/lib/privy-runtime";
+import { Text, View, Platform } from "react-native";
+import { PrivyProviderWrapper } from "@/lib/privy-runtime";
 import { OnboardingScreen } from '@/components/onboarding-screen';
+import { PrivyProvider } from '@privy-io/react-auth';
 import React from 'react';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
@@ -44,10 +45,17 @@ export default function RootLayout() {
   };
   const privyAppId = process.env.EXPO_PUBLIC_PRIVY_APP_ID || extra.privyAppId || "";
   const privyClientId = process.env.EXPO_PUBLIC_PRIVY_CLIENT_ID || extra.privyClientId;
+  const isWeb = Platform.OS === 'web';
 
   React.useEffect(() => {
     void initializeNotifications();
   }, []);
+
+  React.useEffect(() => {
+    if (isWeb) {
+      console.log('PrivyProvider mounted');
+    }
+  }, [isWeb]);
 
   console.log('Privy App ID:', privyAppId);
   console.log('Privy Client ID:', privyClientId);
@@ -64,7 +72,20 @@ export default function RootLayout() {
     );
   }
 
-  const content = (
+  const mainContent = (
+    <AuthProvider>
+      <WalletProvider>
+        <TradeSettingsProvider>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <AuthGatedApp />
+            <StatusBar style="auto" />
+          </ThemeProvider>
+        </TradeSettingsProvider>
+      </WalletProvider>
+    </AuthProvider>
+  );
+
+  const mobileContent = (
     <PrivyProviderWrapper
       appId={privyAppId}
       clientId={privyClientId}
@@ -89,20 +110,26 @@ export default function RootLayout() {
         },
       } as any}
     >
-      <AuthProvider>
-        <WalletProvider>
-          <TradeSettingsProvider>
-            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-              <AuthGatedApp />
-              <StatusBar style="auto" />
-            </ThemeProvider>
-          </TradeSettingsProvider>
-        </WalletProvider>
-      </AuthProvider>
+      {mainContent}
     </PrivyProviderWrapper>
   );
 
-  return content;
+  const webContent = (
+    <PrivyProvider
+      appId={privyAppId}
+      clientId={privyClientId || undefined}
+      config={{
+        loginMethods: ['twitter'],
+        appearance: {
+          theme: 'dark',
+        },
+      }}
+    >
+      {mainContent}
+    </PrivyProvider>
+  );
+
+  return isWeb ? webContent : mobileContent;
 }
 
 function AuthGatedApp() {

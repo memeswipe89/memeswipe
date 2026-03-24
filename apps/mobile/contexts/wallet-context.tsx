@@ -9,7 +9,7 @@ import React, {
 } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { EmbeddedSolanaWalletState } from "@privy-io/expo";
-import { useEmbeddedSolanaWallet, usePrivy } from "@/lib/privy-runtime";
+import { useEmbeddedSolanaWallet, usePrivy } from "@/lib/privy-hooks";
 import {
   Connection,
   PublicKey,

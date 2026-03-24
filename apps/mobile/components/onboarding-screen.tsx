@@ -12,7 +12,7 @@ import {
   Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { usePrivy, useLoginWithOAuth, useLinkWithOAuth, useLinkEmail } from "@/lib/privy-runtime";
+import { usePrivy, useLoginWithOAuth, useLinkWithOAuth, useLinkEmail } from "@/lib/privy-hooks";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { API_BASE } from "@/lib/api-base";
@@ -107,11 +107,8 @@ export function OnboardingScreen() {
   const hasWallet = Boolean(walletFromUser);
 
   useEffect(() => {
-    console.log('[Privy] Onboarding render', {
-      isReady,
-      userId: user?.id ?? null,
-    });
-  }, [isReady, user]);
+    console.log('OnboardingScreen mounted');
+  }, []);
 
   const completeOnboarding = useCallback(async (overrides?: {
     walletAddress?: string;

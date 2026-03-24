@@ -5,10 +5,12 @@ import type {
   OAuthFlowState,
   OtpFlowState,
 } from '@privy-io/expo';
+import { Platform } from 'react-native';
 
 type PrivyModuleType = typeof import('@privy-io/expo');
 
 let privyModule: PrivyModuleType | null = null;
+const isWeb = Platform.OS === 'web';
 
 type PrivyUseResult = ReturnType<PrivyModuleType['usePrivy']>;
 
@@ -38,13 +40,14 @@ const emptyLinkEmail: LinkWithEmailHookResult = {
 };
 
 const getPrivyModule = (): PrivyModuleType | null => {
+  if (isWeb) return null;
   if (privyModule) return privyModule;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     privyModule = require('@privy-io/expo');
   } catch (error) {
     if (process.env.NODE_ENV !== 'production') {
-      console.warn('Privy SDK could not be loaded.', error);
+      console.warn('Privy SDK could not be loaded (non-web).', error);
     }
     privyModule = null;
   }
@@ -104,13 +107,8 @@ type PrivyProviderProps = React.ComponentProps<
 export function PrivyProviderWrapper(props: PrivyProviderProps) {
   const mod = getPrivyModule();
   if (!mod || !mod.PrivyProvider) {
-    console.log('[Privy] Provider wrapper - PrivyProvider unavailable', {
-      privyModuleLoaded: Boolean(mod),
-      provider: Boolean(mod?.PrivyProvider),
-    });
     return <>{props.children}</>;
   }
   const Provider = mod.PrivyProvider;
-  console.log('[Privy] Provider wrapper - mounting PrivyProvider');
   return <Provider {...props} />;
 }
