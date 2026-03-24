@@ -100,3 +100,7 @@ CREATE POLICY "Users can insert own twitter connections" ON twitter_connections
 -- Policy: Users can update their own twitter connections
 CREATE POLICY "Users can update own twitter connections" ON twitter_connections
   FOR UPDATE USING (auth.uid()::text = user_id::text);
+
+-- Track protocol fees for swaps
+ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS fee_amount_usd numeric DEFAULT 0;
