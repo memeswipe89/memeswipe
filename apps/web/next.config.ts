@@ -1,7 +1,13 @@
 import path from "path";
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
+type NextConfigWithTurbo = NextConfig & {
+  turbo?: {
+    root?: string;
+  };
+};
+
+const nextConfig: NextConfigWithTurbo = {
   turbo: {
     root: ".",
   },
