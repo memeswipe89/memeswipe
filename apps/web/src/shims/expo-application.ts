@@ -17,3 +17,15 @@ export async function getAndroidApplicationIdAsync() {
 export function getApplicationIdAsync() {
   return Promise.resolve(applicationId);
 }
+
+const defaultExport = {
+  ios,
+  android,
+  applicationId,
+  nativeApplicationVersion,
+  getIosApplicationIdAsync,
+  getAndroidApplicationIdAsync,
+  getApplicationIdAsync,
+};
+
+export default defaultExport;
