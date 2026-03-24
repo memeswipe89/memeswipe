@@ -224,6 +224,22 @@ function safeNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function deriveOrderAmountUsd({ amountUsd, inAmountRaw, priceUsd }) {
+  const primary = safeNumber(amountUsd) || 0;
+  if (primary > 0) return primary;
+  const raw = safeNumber(inAmountRaw) || 0;
+  const price = safeNumber(priceUsd) || 0;
+  if (raw <= 0 || price <= 0) return 0;
+  const tokenAmount = raw / 1_000_000_000;
+  return tokenAmount * price;
+}
+
+function calculateFeeAmountUsd(amountUsd) {
+  const base = safeNumber(amountUsd) || 0;
+  if (base <= 0) return 0;
+  return Number((base * 0.002).toFixed(6));
+}
+
 function normalizeTimestamp(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return new Date(value * 1000).toISOString();
@@ -1671,16 +1687,23 @@ app.post("/api/orders", async (req, res) => {
     const body = req.body || {};
     const userId = String(body.userId || "").trim();
     if (!userId) return res.status(400).json({ error: "Missing userId" });
+    const amountUsdInput = safeNumber(body.amountUsd) || 0;
+    const priceUsd = safeNumber(body.priceUsd);
+    const resolvedAmountUsd = amountUsdInput > 0
+      ? amountUsdInput
+      : deriveOrderAmountUsd({ amountUsd: amountUsdInput, inAmountRaw: body.inAmountRaw, priceUsd });
+    const feeAmountUsd = calculateFeeAmountUsd(resolvedAmountUsd);
     const payload = {
       user_id: userId,
       chain: body.chain || "solana",
       token_address: body.tokenAddress || null,
       token_name: body.tokenName || null,
       token_symbol: body.tokenSymbol || null,
-      amount_usd: body.amountUsd || 0,
+      amount_usd: resolvedAmountUsd,
+      fee_amount_usd: feeAmountUsd,
       tp_roi: body.tpRoi || 0,
       stop_loss: body.stopLoss ?? null,
-      price_usd: body.priceUsd ?? null,
+      price_usd: priceUsd ?? null,
       liquidity_usd: body.liquidityUsd ?? null,
       volume_24h_usd: body.volume24hUsd ?? null,
       market_cap_usd: body.marketCapUsd ?? null,
@@ -1756,6 +1779,44 @@ app.patch("/api/orders/:id/close", async (req, res) => {
     return res.json({ success: true, order: Array.isArray(json) ? json[0] : json });
   } catch (error) {
     return res.status(500).json({ error: "Failed to close order", details: error.message });
+  }
+});
+
+app.get("/api/stats", async (req, res) => {
+  try {
+    const totalsQuery =
+      "orders?status=eq.filled&select=totalVolume:sum(amount_usd),totalFees:sum(fee_amount_usd),totalTrades:count(id)";
+    const { res: totalsRes, json: totalsJson, text: totalsText } = await supabaseRequest(totalsQuery, { method: "GET" });
+    if (!totalsRes.ok) {
+      return res.status(500).json({ error: "Failed to load stats", details: totalsText });
+    }
+    const totalsRow = Array.isArray(totalsJson) ? totalsJson[0] : totalsJson;
+    const totalVolume = Number(totalsRow?.totalVolume ?? 0);
+    const totalFees = Number(totalsRow?.totalFees ?? 0);
+    const totalTrades = Number(totalsRow?.totalTrades ?? 0);
+
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const activeQuery = `orders?status=eq.filled&created_at=gte.${encodeURIComponent(since.toISOString())}&select=user_id&limit=2000`;
+    const { res: activeRes, json: activeJson, text: activeText } = await supabaseRequest(activeQuery, {
+      method: "GET",
+    });
+    if (!activeRes.ok) {
+      return res.status(500).json({ error: "Failed to load stats", details: activeText });
+    }
+    const activeUsers = new Set(
+      (Array.isArray(activeJson) ? activeJson : [])
+        .map((row) => row?.user_id)
+        .filter(Boolean)
+    ).size;
+
+    return res.json({
+      totalVolume,
+      totalFees,
+      totalTrades,
+      activeUsers,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to load stats", details: error.message });
   }
 });
 
