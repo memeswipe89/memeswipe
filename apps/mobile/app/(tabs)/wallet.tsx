@@ -21,6 +21,7 @@ import { useLinkEmail, usePrivy } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
+import { getSafeAppId } from "@/lib/application-id";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
@@ -140,17 +141,7 @@ export default function WalletScreen() {
   }, []);
 
   const handleCreateWallet = async () => {
-    let applicationId = "unknown";
-    try {
-      // Avoid hard dependency crashes if expo-application is not installed in this environment.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Application = require("expo-application") as { applicationId?: string };
-      if (typeof Application?.applicationId === "string" && Application.applicationId.length > 0) {
-        applicationId = Application.applicationId;
-      }
-    } catch {
-      // ignore
-    }
+    const applicationId = getSafeAppId();
 
     try {
       console.log("[WALLET] Create Wallet clicked");

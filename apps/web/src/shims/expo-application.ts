@@ -26,8 +26,16 @@ export const applicationName = SAFE_APPLICATION_NAME;
 export const nativeApplicationVersion = SAFE_APP_VERSION;
 export const nativeBuildVersion = SAFE_BUILD_VERSION;
 
+export function getApplicationIdAsync(): Promise<string> {
+  return resolveAsync(applicationId);
+}
+
 export function getAndroidId(): string {
   return SAFE_ANDROID_ID;
+}
+
+export function getAndroidIdAsync(): Promise<string> {
+  return resolveAsync(SAFE_ANDROID_ID);
 }
 
 export function getInstallReferrerAsync(): Promise<string> {
@@ -60,6 +68,8 @@ const webApplicationShim = {
   nativeApplicationVersion,
   nativeBuildVersion,
   getAndroidId,
+  getAndroidIdAsync,
+  getApplicationIdAsync,
   getInstallReferrerAsync,
   getIosIdForVendorAsync,
   getIosApplicationReleaseTypeAsync,
