@@ -1520,7 +1520,7 @@ export default function HomeScreen() {
             </View>
           <View style={styles.filterRow}>
             <View style={styles.filterHeaderRow}>
-              <Text style={styles.segmentLabel}>Trending</Text>
+              <Text style={styles.segmentLabel}>Latest</Text>
               <Pressable
                 onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
                 style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
