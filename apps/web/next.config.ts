@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   webpack(config) {
     config.resolve.alias = {
       ...(config.resolve.alias || {}),
-      "expo-application$": path.resolve(
+      "expo-application": path.resolve(
         __dirname,
         "src/polyfills/expo-application.ts"
       ),
