@@ -42,8 +42,9 @@ export default function AdminPage() {
         activeUsers: Number(payload.activeUsers || 0),
       });
       setError(null);
-    } catch (err: any) {
-      setError(err?.message || 'Unable to load stats');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err ?? 'Unable to load stats');
+      setError(message || 'Unable to load stats');
     } finally {
       setLoading(false);
     }
