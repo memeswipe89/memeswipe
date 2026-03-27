@@ -3,19 +3,22 @@ import path from "path";
 
 const nextConfig: NextConfig = {
   webpack(config) {
-    const polyfillPath = path.resolve(
-      __dirname,
-      "src/polyfills/expo-application.ts"
-    );
+    // 🔥 PRIORITY override (this is key)
+    config.resolve.modules = [
+      path.resolve(__dirname, "src/shims"),
+      "node_modules",
+    ];
 
     config.resolve.alias = {
       ...(config.resolve.alias || {}),
-
-      // MAIN
-      "expo-application": polyfillPath,
-
-      // 🔥 CRITICAL (this is what you're missing)
-      "expo-application/build/Application": polyfillPath,
+      "expo-application": path.resolve(
+        __dirname,
+        "src/shims/expo-application.ts"
+      ),
+      "expo-application/build/Application": path.resolve(
+        __dirname,
+        "src/shims/expo-application.ts"
+      ),
     };
 
     return config;
