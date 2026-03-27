@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
+  turbopack: {}, // 👈 disables warning
   webpack(config) {
     // 🔥 PRIORITY override (this is key)
     config.resolve.modules = [
