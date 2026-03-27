@@ -1,17 +1,6 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { PwaInitializer } from "@/lib/pwa";
-
-const spaceGrotesk = Space_Grotesk({
-  variable: "--font-display",
-  subsets: ["latin"],
-});
-
-const jetBrainsMono = JetBrains_Mono({
-  variable: "--font-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Memeswipe",
@@ -36,9 +25,7 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <link rel="shortcut icon" href="/favicon.ico" />
       </head>
-      <body
-        className={`${spaceGrotesk.variable} ${jetBrainsMono.variable} antialiased`}
-      >
+        <body className="antialiased">
         <PwaInitializer />
         {children}
       </body>
