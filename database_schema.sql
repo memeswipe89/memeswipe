@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS user_wallets (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Ensure a simple users table exists so orders can reference its foreign key.
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Note: Foreign key constraint removed for flexibility
 -- The relationship between twitter_connections and user_wallets is managed in application code
 -- to allow for more complex user management scenarios
@@ -74,32 +80,86 @@ CREATE INDEX IF NOT EXISTS idx_twitter_connections_twitter_user_id ON twitter_co
 -- Adjust based on your authentication setup
 ALTER TABLE user_wallets ENABLE ROW LEVEL SECURITY;
 
--- Policy: Users can only see their own wallet data
-CREATE POLICY "Users can view own wallet" ON user_wallets
-  FOR SELECT USING (auth.uid()::text = privy_user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = current_schema()
+      AND tablename = 'user_wallets'
+      AND policyname = 'Users can view own wallet'
+  ) THEN
+    CREATE POLICY "Users can view own wallet" ON user_wallets
+      FOR SELECT USING (auth.uid()::text = privy_user_id);
+  END IF;
+END $$;
 
--- Policy: Only authenticated users can insert their own wallet
-CREATE POLICY "Users can insert own wallet" ON user_wallets
-  FOR INSERT WITH CHECK (auth.uid()::text = privy_user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = current_schema()
+      AND tablename = 'user_wallets'
+      AND policyname = 'Users can insert own wallet'
+  ) THEN
+    CREATE POLICY "Users can insert own wallet" ON user_wallets
+      FOR INSERT WITH CHECK (auth.uid()::text = privy_user_id);
+  END IF;
+END $$;
 
--- Policy: Users can update their own wallet
-CREATE POLICY "Users can update own wallet" ON user_wallets
-  FOR UPDATE USING (auth.uid()::text = privy_user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = current_schema()
+      AND tablename = 'user_wallets'
+      AND policyname = 'Users can update own wallet'
+  ) THEN
+    CREATE POLICY "Users can update own wallet" ON user_wallets
+      FOR UPDATE USING (auth.uid()::text = privy_user_id);
+  END IF;
+END $$;
 
 -- Enable RLS on twitter_connections too
 ALTER TABLE twitter_connections ENABLE ROW LEVEL SECURITY;
 
--- Policy: Users can view their own twitter connections
-CREATE POLICY "Users can view own twitter connections" ON twitter_connections
-  FOR SELECT USING (auth.uid()::text = user_id::text);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = current_schema()
+      AND tablename = 'twitter_connections'
+      AND policyname = 'Users can view own twitter connections'
+  ) THEN
+    CREATE POLICY "Users can view own twitter connections" ON twitter_connections
+      FOR SELECT USING (auth.uid()::text = user_id::text);
+  END IF;
+END $$;
 
--- Policy: Users can insert their own twitter connections
-CREATE POLICY "Users can insert own twitter connections" ON twitter_connections
-  FOR INSERT WITH CHECK (auth.uid()::text = user_id::text);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = current_schema()
+      AND tablename = 'twitter_connections'
+      AND policyname = 'Users can insert own twitter connections'
+  ) THEN
+    CREATE POLICY "Users can insert own twitter connections" ON twitter_connections
+      FOR INSERT WITH CHECK (auth.uid()::text = user_id::text);
+  END IF;
+END $$;
 
--- Policy: Users can update their own twitter connections
-CREATE POLICY "Users can update own twitter connections" ON twitter_connections
-  FOR UPDATE USING (auth.uid()::text = user_id::text);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = current_schema()
+      AND tablename = 'twitter_connections'
+      AND policyname = 'Users can update own twitter connections'
+  ) THEN
+    CREATE POLICY "Users can update own twitter connections" ON twitter_connections
+      FOR UPDATE USING (auth.uid()::text = user_id::text);
+  END IF;
+END $$;
 
 -- Track protocol fees for swaps
 ALTER TABLE orders

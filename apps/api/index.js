@@ -234,10 +234,66 @@ function deriveOrderAmountUsd({ amountUsd, inAmountRaw, priceUsd }) {
   return tokenAmount * price;
 }
 
-function calculateFeeAmountUsd(amountUsd) {
-  const base = safeNumber(amountUsd) || 0;
-  if (base <= 0) return 0;
-  return Number((base * 0.002).toFixed(6));
+async function ensureSupabaseUserRow(userId) {
+  if (!userId) return;
+
+  try {
+    const { res, json } = await supabaseRequest(
+      `users?id=eq.${encodeURIComponent(userId)}&select=id`,
+      { method: "GET" }
+    );
+    if (res.ok && Array.isArray(json) && json.length > 0) return;
+
+    const { res: insertRes, text } = await supabaseRequest("users", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({
+        id: userId,
+        created_at: new Date().toISOString(),
+      }),
+    });
+
+    if (!insertRes.ok) {
+      console.error("USER INSERT FAILED:", text);
+    }
+  } catch (error) {
+    console.error("Failed to ensure Supabase user row:", error?.message || error);
+  }
+}
+
+async function resolveUserId(inputId) {
+  const normalized = String(inputId || "").trim();
+  if (!normalized) {
+    console.log("Resolved userId: null (empty input)");
+    return null;
+  }
+
+  if (UUID_RE.test(normalized)) {
+    console.log("Resolved userId:", normalized, "from input:", inputId);
+    return normalized;
+  }
+
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    console.log("Resolved userId: null (Supabase disabled) from input:", inputId);
+    return null;
+  }
+
+  try {
+    const { res, json } = await supabaseRequest(
+      `user_wallets?privy_user_id=eq.${encodeURIComponent(normalized)}&select=user_id`,
+      { method: "GET" }
+    );
+    if (res.ok && Array.isArray(json) && json.length > 0) {
+      const resolved = json[0]?.user_id;
+      console.log("Resolved userId:", resolved, "from privy id:", normalized);
+      return resolved;
+    }
+  } catch (error) {
+    console.error("resolveUserId error:", error?.message || error);
+  }
+
+  console.log("Resolved userId: null (not found) from input:", inputId);
+  return null;
 }
 
 function normalizeTimestamp(value) {
@@ -487,38 +543,23 @@ function base64UrlEncode(input) {
 }
 
 async function resolveTwitterConnection(userId) {
-  const normalized = String(userId || "").trim();
-  if (!normalized) return null;
+  const resolvedUserId = await resolveUserId(userId);
+  const lookupId = resolvedUserId || String(userId || "").trim();
+  if (!lookupId) return null;
 
   // Prefer Supabase when configured.
   if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
     try {
-      let resolvedUserId = null;
-
-      if (UUID_RE.test(normalized)) {
-        resolvedUserId = normalized;
-      } else {
-        const { res: walletRes, json: walletJson } = await supabaseRequest(
-          `user_wallets?privy_user_id=eq.${encodeURIComponent(normalized)}&select=user_id`,
-          { method: "GET" }
-        );
-        if (walletRes.ok && Array.isArray(walletJson) && walletJson.length > 0) {
-          resolvedUserId = walletJson[0].user_id;
-        }
-      }
-
-      if (resolvedUserId) {
-        const { res: twitterRes, json: twitterJson } = await supabaseRequest(
-          `twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}&select=user_id,twitter_user_id,twitter_username`,
-          { method: "GET" }
-        );
-        if (twitterRes.ok && Array.isArray(twitterJson) && twitterJson.length > 0) {
-          const row = twitterJson[0];
-          return {
-            twitterUserId: row.twitter_user_id,
-            twitterUsername: row.twitter_username,
-          };
-        }
+      const { res: twitterRes, json: twitterJson } = await supabaseRequest(
+        `twitter_connections?user_id=eq.${encodeURIComponent(lookupId)}&select=user_id,twitter_user_id,twitter_username`,
+        { method: "GET" }
+      );
+      if (twitterRes.ok && Array.isArray(twitterJson) && twitterJson.length > 0) {
+        const row = twitterJson[0];
+        return {
+          twitterUserId: row.twitter_user_id,
+          twitterUsername: row.twitter_username,
+        };
       }
     } catch (error) {
       console.error("resolveTwitterConnection supabase error:", error.message);
@@ -526,7 +567,7 @@ async function resolveTwitterConnection(userId) {
   }
 
   // Fallback to in-memory map (dev/demo).
-  const profile = twitterConnections.get(normalized);
+  const profile = twitterConnections.get(lookupId);
   if (!profile) return null;
   return {
     twitterUserId: profile.twitterUserId,
@@ -1447,66 +1488,52 @@ app.get("/api/jupiter/health", async (req, res) => {
   }
 });
 
-app.get("/api/twitter/connection/:userId", (req, res) => {
-  const userId = String(req.params.userId || "").trim();
-  if (!userId) {
-    return res.status(400).json({ error: "Missing userId" });
+app.get("/api/twitter/connection/:userId", async (req, res) => {
+  const resolvedUserId = await resolveUserId(req.params.userId);
+  if (!resolvedUserId) {
+    return res.status(400).json({ error: "Invalid userId" });
   }
 
-  resolveTwitterConnection(userId)
-    .then((profile) => {
-      if (!profile) {
-        return res.status(404).json({ connected: false });
-      }
-      return res.json({
-        connected: true,
-        twitterUsername: profile.twitterUsername,
-        twitterUserId: profile.twitterUserId,
-      });
-    })
-    .catch((error) => {
-      return res.status(500).json({ error: "Failed to resolve twitter connection", details: error.message });
-    });
-});
-
-app.delete("/api/twitter/connection/:userId", (req, res) => {
-  const userId = String(req.params.userId || "").trim();
-  if (!userId) {
-    return res.status(400).json({ error: "Missing userId" });
-  }
-
-  (async () => {
-    if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
-      try {
-        let resolvedUserId = null;
-        if (UUID_RE.test(userId)) {
-          resolvedUserId = userId;
-        } else {
-          const { res: walletRes, json: walletJson } = await supabaseRequest(
-            `user_wallets?privy_user_id=eq.${encodeURIComponent(userId)}&select=user_id`,
-            { method: "GET" }
-          );
-          if (walletRes.ok && Array.isArray(walletJson) && walletJson.length > 0) {
-            resolvedUserId = walletJson[0].user_id;
-          }
-        }
-        if (resolvedUserId) {
-          await supabaseRequest(`twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}`, {
-            method: "DELETE",
-          });
-        }
-      } catch (error) {
-        console.error("delete twitter connection supabase error:", error.message);
-      }
+  try {
+    const profile = await resolveTwitterConnection(resolvedUserId);
+    if (!profile) {
+      return res.status(404).json({ connected: false });
     }
-
-    twitterConnections.delete(userId);
-    return res.json({ ok: true });
-  })();
+    return res.json({
+      connected: true,
+      twitterUsername: profile.twitterUsername,
+      twitterUserId: profile.twitterUserId,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      error: "Failed to resolve twitter connection",
+      details: error?.message || "unknown",
+    });
+  }
 });
 
-app.get("/api/twitter/auth/start", (req, res) => {
-  const userId = String(req.query.userId || "").trim();
+app.delete("/api/twitter/connection/:userId", async (req, res) => {
+  const resolvedUserId = await resolveUserId(req.params.userId);
+  if (!resolvedUserId) {
+    return res.status(400).json({ error: "Invalid userId" });
+  }
+
+  if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+    try {
+      await supabaseRequest(`twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}`, {
+        method: "DELETE",
+      });
+    } catch (error: any) {
+      console.error("delete twitter connection supabase error:", error.message || error);
+    }
+  }
+
+  twitterConnections.delete(resolvedUserId);
+  return res.json({ ok: true });
+});
+
+app.get("/api/twitter/auth/start", async (req, res) => {
+  const userIdRaw = String(req.query.userId || "").trim();
   const returnUrl = String(req.query.returnUrl || "").trim();
   const clientId = process.env.TWITTER_CLIENT_ID || "";
   const callbackUrl = process.env.TWITTER_CALLBACK_URL || "";
@@ -1514,8 +1541,12 @@ app.get("/api/twitter/auth/start", (req, res) => {
   if (!clientId || !callbackUrl) {
     return res.status(500).json({ error: "Twitter auth not configured on server" });
   }
-  if (!userId) {
+  if (!userIdRaw) {
     return res.status(400).json({ error: "Missing userId" });
+  }
+  const resolvedUserId = await resolveUserId(userIdRaw);
+  if (!resolvedUserId) {
+    return res.status(400).json({ error: "Invalid userId" });
   }
   if (!returnUrl) {
     return res.status(400).json({ error: "Missing returnUrl" });
@@ -1533,7 +1564,7 @@ app.get("/api/twitter/auth/start", (req, res) => {
   const codeChallenge = sha256Base64Url(codeVerifier);
 
   twitterAuthStates.set(state, {
-    userId,
+    userId: resolvedUserId,
     returnUrl: parsedReturn.toString(),
     codeVerifier,
     createdAt: Date.now(),
@@ -1666,9 +1697,9 @@ app.get("/api/twitter/auth/callback", async (req, res) => {
 
 app.get("/api/orders", async (req, res) => {
   try {
-    const userId = String(req.query.userId || "").trim();
+    const userId = await resolveUserId(req.query.userId);
     const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 500));
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    if (!userId) return res.status(400).json({ error: "Invalid userId" });
     const { res: sbRes, json, text } = await supabaseRequest(
       `orders?user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc&limit=${limit}`,
       { method: "GET" }
@@ -1685,14 +1716,14 @@ app.get("/api/orders", async (req, res) => {
 app.post("/api/orders", async (req, res) => {
   try {
     const body = req.body || {};
-    const userId = String(body.userId || "").trim();
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    const userId = await resolveUserId(body.userId);
+    if (!userId) return res.status(400).json({ error: "Invalid userId" });
+    await ensureSupabaseUserRow(userId);
     const amountUsdInput = safeNumber(body.amountUsd) || 0;
     const priceUsd = safeNumber(body.priceUsd);
     const resolvedAmountUsd = amountUsdInput > 0
       ? amountUsdInput
       : deriveOrderAmountUsd({ amountUsd: amountUsdInput, inAmountRaw: body.inAmountRaw, priceUsd });
-    const feeAmountUsd = calculateFeeAmountUsd(resolvedAmountUsd);
     const payload = {
       user_id: userId,
       chain: body.chain || "solana",
@@ -1700,7 +1731,6 @@ app.post("/api/orders", async (req, res) => {
       token_name: body.tokenName || null,
       token_symbol: body.tokenSymbol || null,
       amount_usd: resolvedAmountUsd,
-      fee_amount_usd: feeAmountUsd,
       tp_roi: body.tpRoi || 0,
       stop_loss: body.stopLoss ?? null,
       price_usd: priceUsd ?? null,
@@ -1735,9 +1765,9 @@ app.patch("/api/orders/:id/close", async (req, res) => {
   try {
     const orderId = String(req.params.id || "").trim();
     const body = req.body || {};
-    const userId = String(body.userId || "").trim();
+    const userId = await resolveUserId(body.userId);
     if (!orderId) return res.status(400).json({ error: "Missing order id" });
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    if (!userId) return res.status(400).json({ error: "Invalid userId" });
     if (!body.closeTxSignature && body.closeError) {
       const { res: existingRes, json: existingJson, text: existingText } = await supabaseRequest(
         `orders?id=eq.${encodeURIComponent(orderId)}&user_id=eq.${encodeURIComponent(userId)}&select=close_tx_signature`,
@@ -1785,14 +1815,13 @@ app.patch("/api/orders/:id/close", async (req, res) => {
 app.get("/api/stats", async (req, res) => {
   try {
     const totalsQuery =
-      "orders?status=eq.filled&select=totalVolume:sum(amount_usd),totalFees:sum(fee_amount_usd),totalTrades:count(id)";
+      "orders?status=eq.filled&select=totalVolume:sum(amount_usd),totalTrades:count(id)";
     const { res: totalsRes, json: totalsJson, text: totalsText } = await supabaseRequest(totalsQuery, { method: "GET" });
     if (!totalsRes.ok) {
       return res.status(500).json({ error: "Failed to load stats", details: totalsText });
     }
     const totalsRow = Array.isArray(totalsJson) ? totalsJson[0] : totalsJson;
     const totalVolume = Number(totalsRow?.totalVolume ?? 0);
-    const totalFees = Number(totalsRow?.totalFees ?? 0);
     const totalTrades = Number(totalsRow?.totalTrades ?? 0);
 
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -1811,7 +1840,6 @@ app.get("/api/stats", async (req, res) => {
 
     return res.json({
       totalVolume,
-      totalFees,
       totalTrades,
       activeUsers,
     });
@@ -1884,6 +1912,8 @@ app.post("/api/onboard-user", async (req, res) => {
         userId = crypto.randomUUID();
       }
     }
+
+    await ensureSupabaseUserRow(userId);
 
     // Insert or update twitter_connection
     const twitterPayload = {

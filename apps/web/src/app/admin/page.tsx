@@ -5,14 +5,12 @@ import { useCallback, useEffect, useState } from 'react';
 type StatsPayload = {
   totalVolume: number;
   totalTrades: number;
-  totalFees: number;
   activeUsers: number;
 };
 
 const EMPTY_STATS: StatsPayload = {
   totalVolume: 0,
   totalTrades: 0,
-  totalFees: 0,
   activeUsers: 0,
 };
 
@@ -38,7 +36,6 @@ export default function AdminPage() {
       setStats({
         totalVolume: Number(payload.totalVolume || 0),
         totalTrades: Number(payload.totalTrades || 0),
-        totalFees: Number(payload.totalFees || 0),
         activeUsers: Number(payload.activeUsers || 0),
       });
       setError(null);
@@ -66,7 +63,7 @@ export default function AdminPage() {
           <p className="text-xs uppercase tracking-[0.4em] text-white/60">Admin</p>
           <h1 className="text-4xl font-semibold">Protocol stats dashboard</h1>
           <p className="text-sm text-white/70">
-            Live roll-up of filled trades, swap volume, and 0.2% fee capture. Refreshes every 15 seconds.
+            Live roll-up of filled trades and swap volume. Refreshes every 15 seconds.
           </p>
         </header>
 
@@ -83,13 +80,7 @@ export default function AdminPage() {
                 icon: '⚡',
                 label: 'Total trades',
                 value: formatNumber(activeStats.totalTrades, 0),
-                description: 'spent via orders',
-              },
-              {
-                icon: '💰',
-                label: 'Total fees',
-                value: `$${formatNumber(activeStats.totalFees, 4)}`,
-                description: '0.2% capture',
+                description: 'filled orders',
               },
             ].map((item) => (
               <div key={item.label} className="rounded-2xl border border-white/10 bg-black/30 p-4">
@@ -108,7 +99,6 @@ export default function AdminPage() {
         </div>
 
         <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/70">
-          <p>0.2% protocol fee applied on every filled trade.</p>
           {loading && <p className="text-white/50">Fetching stats...</p>}
           {error && <p className="text-red-400">{error}</p>}
         </div>
