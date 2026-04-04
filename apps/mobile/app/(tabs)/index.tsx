@@ -285,9 +285,6 @@ export default function HomeScreen() {
   );
   const [isSwiping, setIsSwiping] = useState(false);
   const [balance, setBalanceState] = useState(0);
-  const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
-  const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
-  const [swapBudgetLoading, setSwapBudgetLoading] = useState(false);
   const [tradeOpenPopup, setTradeOpenPopup] = useState<TradeOpenPopupState>({
     visible: false,
     tokenName: '',
@@ -439,64 +436,6 @@ export default function HomeScreen() {
     }
     retryDelayRef.current = Math.min(retryDelayRef.current * 2, 60000);
   }, []);
-
-  const refreshSwapBudget = useCallback(
-    async (addressOverride?: string) => {
-      const targetAddress = addressOverride || tradingWalletAddress;
-      if (!targetAddress || activeChain !== 'solana') {
-        setWalletSolBalance(null);
-        setSolPriceUsd(null);
-        return;
-      }
-      try {
-        setSwapBudgetLoading(true);
-        const [balanceRes, priceRes] = await Promise.all([
-          fetch(SOLANA_MAINNET_RPC, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: 1,
-              method: 'getBalance',
-              params: [targetAddress],
-            }),
-          }),
-          fetch(`${API_BASE}/api/solana/price-usd`),
-        ]);
-        const balanceJson = await parseApiJson<{ result?: { value?: number } }>(balanceRes);
-        const priceJson = await parseApiJson<{ priceUsd?: number }>(priceRes);
-        const balanceLamports = Number(balanceJson?.result?.value || 0);
-        const priceUsd = Number(priceJson?.priceUsd || 0);
-        setWalletSolBalance(Number.isFinite(balanceLamports) ? lamportsToSol(balanceLamports) : 0);
-        setSolPriceUsd(Number.isFinite(priceUsd) && priceUsd > 0 ? priceUsd : null);
-      } catch (error) {
-        console.log('[SWAP_BUDGET] refresh failed', error);
-      } finally {
-        setSwapBudgetLoading(false);
-      }
-    },
-    [activeChain, tradingWalletAddress]
-  );
-
-  useEffect(() => {
-    void refreshSwapBudget();
-  }, [refreshSwapBudget, tradeAmount]);
-
-  const estimatedSwapInputSol = useMemo(() => {
-    if (!solPriceUsd || solPriceUsd <= 0) return null;
-    return Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount) / solPriceUsd;
-  }, [solPriceUsd, tradeAmount]);
-
-  const estimatedRequiredSol = useMemo(() => {
-    if (estimatedSwapInputSol === null) return null;
-    // Includes tx/priority and first-time token-account rent overhead.
-    return estimatedSwapInputSol + MIN_SOL_RESERVE_FOR_FEES;
-  }, [estimatedSwapInputSol]);
-
-  const swapShortfallSol = useMemo(() => {
-    if (walletSolBalance === null || estimatedRequiredSol === null) return null;
-    return Math.max(0, estimatedRequiredSol - walletSolBalance);
-  }, [estimatedRequiredSol, walletSolBalance]);
 
   useEffect(() => {
     const timer = setTimeout(() => setAppLoading(false), 1600);
@@ -1464,6 +1403,8 @@ export default function HomeScreen() {
     return () => clearTimeout(timer);
   }, [tradeOpenPopup.visible]);
 
+  const favoritesActive = segment === 'favorites';
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaView edges={['top']} style={styles.safeArea}>
@@ -1473,12 +1414,29 @@ export default function HomeScreen() {
               <View style={styles.brandWrap}>
                 <Text style={styles.brandText}>MemeSwipe</Text>
               </View>
-              <ProfileButton
-                onPress={() => profileSheetRef.current?.open()}
-                onLongPress={openDevWalletControls}
-                initials={(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}
-                disabled={appLoading}
-              />
+              <View style={styles.topActionsRow}>
+                <Pressable
+                  onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
+                  android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
+                  style={({ pressed }) => [
+                    styles.favoriteIconButton,
+                    favoritesActive && styles.favoriteIconButtonActive,
+                    pressed && styles.favoriteIconButtonPressed,
+                  ]}
+                >
+                  <FontAwesome
+                    name={favoritesActive ? 'heart' : 'heart-o'}
+                    size={20}
+                    color={favoritesActive ? '#ffd6df' : 'rgba(255,255,255,0.75)'}
+                  />
+                </Pressable>
+                <ProfileButton
+                  onPress={() => profileSheetRef.current?.open()}
+                  onLongPress={openDevWalletControls}
+                  initials={(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}
+                  disabled={appLoading}
+                />
+              </View>
             </View>
             <View style={styles.controlsRowWrap}>
               <View style={styles.controlsRow}>
@@ -1518,45 +1476,12 @@ export default function HomeScreen() {
                 </View>
               </View>
             </View>
-          <View style={styles.filterRow}>
-            <View style={styles.filterHeaderRow}>
-              <Text style={styles.segmentLabel}>Trending</Text>
-              <Pressable
-                onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
-                style={[styles.favoritesToggle, segment === 'favorites' && styles.favoritesToggleActive]}
-              >
-                <Text
-                  style={[styles.favoritesToggleText, segment === 'favorites' && styles.favoritesToggleTextActive]}
-                >
-                  Favorites
-                </Text>
-              </Pressable>
+            <View style={styles.sourceTabsWrap}>
+              <View style={styles.sourceTabRow}>
+                <SourceTab label="Pump.fun" enabled={activeSource === 'pumpfun'} onPress={() => setActiveSource('pumpfun')} />
+                <SourceTab label="Bags" enabled={activeSource === 'bags'} onPress={() => setActiveSource('bags')} />
+              </View>
             </View>
-            <View style={styles.sourceTabRow}>
-              <SourceTab label="Pump.fun" enabled={activeSource === 'pumpfun'} onPress={() => setActiveSource('pumpfun')} />
-              <SourceTab label="Bags" enabled={activeSource === 'bags'} onPress={() => setActiveSource('bags')} />
-            </View>
-          </View>
-          {activeChain === 'solana' ? (
-            <View style={styles.swapBudgetRow}>
-              <Text style={styles.swapBudgetText}>
-                Wallet: {walletSolBalance === null ? '--' : `${walletSolBalance.toFixed(6)} SOL`} | Est need:{' '}
-                {estimatedRequiredSol === null ? '--' : `${estimatedRequiredSol.toFixed(6)} SOL`}
-              </Text>
-              <Text
-                style={[
-                  styles.swapBudgetStatus,
-                  swapShortfallSol && swapShortfallSol > 0 ? styles.swapBudgetBad : styles.swapBudgetGood,
-                ]}
-              >
-                {swapBudgetLoading
-                  ? 'Checking...'
-                  : swapShortfallSol && swapShortfallSol > 0
-                    ? `Short ${swapShortfallSol.toFixed(6)} SOL`
-                    : 'Sufficient'}
-              </Text>
-            </View>
-          ) : null}
           </View>
 
           <View style={styles.deckArea}>
@@ -1707,6 +1632,11 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 8,
   },
+  topActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   brandWrap: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -1720,6 +1650,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0.25,
+  },
+  favoriteIconButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  favoriteIconButtonActive: {
+    borderColor: 'rgba(255,128,153,0.65)',
+    backgroundColor: 'rgba(255,107,129,0.18)',
+  },
+  favoriteIconButtonPressed: {
+    opacity: 0.85,
   },
   controlsRowWrap: {
     width: '100%',
@@ -1741,17 +1688,6 @@ const styles = StyleSheet.create({
   controlSlotCompact: {
     flex: 0.92,
   },
-  filterRow: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 6,
-    gap: 6,
-  },
-  filterHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
   sourceTabRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1760,12 +1696,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.05)',
     backgroundColor: 'rgba(255,255,255,0.02)',
-  },
-  segmentLabel: {
-    color: '#f3f7ff',
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: 0.2,
   },
   sourceTab: {
     flex: 1,
@@ -1787,48 +1717,10 @@ const styles = StyleSheet.create({
   sourceTabTextActive: {
     color: '#fff',
   },
-  favoritesToggle: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  favoritesToggleActive: {
-    borderColor: 'rgba(255,128,153,0.45)',
-    backgroundColor: 'rgba(255,107,129,0.16)',
-  },
-  favoritesToggleText: {
-    color: 'rgba(225,235,255,0.76)',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  favoritesToggleTextActive: {
-    color: '#ffd6df',
-  },
-  swapBudgetRow: {
+  sourceTabsWrap: {
     paddingHorizontal: 20,
+    paddingTop: 10,
     paddingBottom: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  swapBudgetText: {
-    color: '#99a9cd',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  swapBudgetStatus: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  swapBudgetGood: {
-    color: '#4ade80',
-  },
-  swapBudgetBad: {
-    color: '#ff8a8a',
   },
   deckArea: {
     flex: 1,

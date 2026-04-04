@@ -1,5 +1,5 @@
 import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
@@ -8,18 +8,27 @@ import { area, curveBasis, line } from 'd3-shape';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { API_BASE } from '@/lib/api-base';
+
+const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
+const MIN_TRADE_AMOUNT_USD = 0.0001;
+const MIN_SOL_RESERVE_FOR_FEES = 0.01;
+const lamportsToSol = (lamports: number) => lamports / 1_000_000_000;
 
 export default function TabTwoScreen() {
   const chartHeight = 190;
   const chartPadding = 12;
   const [chartWidth, setChartWidth] = useState(0);
-  const { twitterProfile, getOrCreateLocalUserId } = useWalletContext();
+  const { twitterProfile, getOrCreateLocalUserId, tradingWalletAddress } = useWalletContext();
+  const { activeChain, tradeAmount } = useTradeSettings();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
+  const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
+  const [swapBudgetLoading, setSwapBudgetLoading] = useState(false);
 
   const loadOrders = useCallback(async () => {
     if (!twitterProfile) {
@@ -56,11 +65,39 @@ export default function TabTwoScreen() {
     }
   }, [API_BASE]);
 
+  const refreshSwapBudget = useCallback(async () => {
+    if (!tradingWalletAddress || activeChain !== 'solana') {
+      setWalletSolBalance(null);
+      return;
+    }
+    try {
+      setSwapBudgetLoading(true);
+      const res = await fetch(SOLANA_MAINNET_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getBalance',
+          params: [tradingWalletAddress],
+        }),
+      });
+      const json = (await res.json()) as { result?: { value?: number } };
+      const lamports = Number(json?.result?.value || 0);
+      setWalletSolBalance(Number.isFinite(lamports) ? lamportsToSol(lamports) : 0);
+    } catch (error) {
+      console.log('[SWAP_BUDGET] refresh failed', error);
+    } finally {
+      setSwapBudgetLoading(false);
+    }
+  }, [activeChain, tradingWalletAddress]);
+
   useFocusEffect(
     useCallback(() => {
       void loadOrders();
       void loadSolPrice();
-    }, [loadOrders, loadSolPrice])
+      void refreshSwapBudget();
+    }, [loadOrders, loadSolPrice, refreshSwapBudget])
   );
 
   const toNumber = (value: any, fallback = 0) => {
@@ -117,6 +154,21 @@ export default function TabTwoScreen() {
         .slice(0, 3),
     };
   }, [orders, solPriceUsd]);
+
+  const estimatedSwapInputSol = useMemo(() => {
+    if (!solPriceUsd || solPriceUsd <= 0) return null;
+    return Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount) / solPriceUsd;
+  }, [solPriceUsd, tradeAmount]);
+
+  const estimatedRequiredSol = useMemo(() => {
+    if (estimatedSwapInputSol === null) return null;
+    return estimatedSwapInputSol + MIN_SOL_RESERVE_FOR_FEES;
+  }, [estimatedSwapInputSol]);
+
+  const swapShortfallSol = useMemo(() => {
+    if (walletSolBalance === null || estimatedRequiredSol === null) return null;
+    return Math.max(0, estimatedRequiredSol - walletSolBalance);
+  }, [estimatedRequiredSol, walletSolBalance]);
 
   const combinedSeries = metrics.profitSeries.map((value, index) => value - (metrics.lossSeries[index] || 0));
   const hasSeries = combinedSeries.some((value) => Math.abs(value) > 0.00001);
@@ -193,6 +245,27 @@ export default function TabTwoScreen() {
           </View>
         ))}
       </View>
+
+      {activeChain === 'solana' ? (
+        <View style={styles.swapBudgetRow}>
+          <Text style={styles.swapBudgetText}>
+            Wallet: {walletSolBalance === null ? '--' : `${walletSolBalance.toFixed(6)} SOL`} | Est need:{' '}
+            {estimatedRequiredSol === null ? '--' : `${estimatedRequiredSol.toFixed(6)} SOL`}
+          </Text>
+          <Text
+            style={[
+              styles.swapBudgetStatus,
+              swapShortfallSol && swapShortfallSol > 0 ? styles.swapBudgetBad : styles.swapBudgetGood,
+            ]}
+          >
+            {swapBudgetLoading
+              ? 'Checking...'
+              : swapShortfallSol && swapShortfallSol > 0
+                ? `Short ${swapShortfallSol.toFixed(6)} SOL`
+                : 'Sufficient'}
+          </Text>
+        </View>
+      ) : null}
 
       <ThemedView style={styles.sectionHeader}>
         <ThemedText type="defaultSemiBold" style={styles.sectionTitle}>PnL chart</ThemedText>
@@ -361,6 +434,34 @@ const styles = StyleSheet.create({
   },
   positive: {
     color: '#9bf28b',
+  },
+  swapBudgetRow: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(120,140,190,0.3)',
+    backgroundColor: '#0b0f1a',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  swapBudgetText: {
+    color: '#99a9cd',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  swapBudgetStatus: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  swapBudgetGood: {
+    color: '#4ade80',
+  },
+  swapBudgetBad: {
+    color: '#ff8a8a',
   },
   sectionHeader: {
     gap: 4,
