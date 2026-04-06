@@ -1504,7 +1504,7 @@ app.get("/api/twitter/connection/:userId", async (req, res) => {
       twitterUsername: profile.twitterUsername,
       twitterUserId: profile.twitterUserId,
     });
-  } catch (error: any) {
+  } catch (error) {
     return res.status(500).json({
       error: "Failed to resolve twitter connection",
       details: error?.message || "unknown",
@@ -1523,7 +1523,7 @@ app.delete("/api/twitter/connection/:userId", async (req, res) => {
       await supabaseRequest(`twitter_connections?user_id=eq.${encodeURIComponent(resolvedUserId)}`, {
         method: "DELETE",
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error("delete twitter connection supabase error:", error.message || error);
     }
   }
