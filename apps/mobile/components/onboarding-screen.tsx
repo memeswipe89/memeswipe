@@ -17,6 +17,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { API_BASE } from "@/lib/api-base";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
+import { persistUserIds } from "@/lib/local-user-id";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -146,15 +147,19 @@ export function OnboardingScreen() {
       });
 
       const responseText = await response.text();
+      let responseJson: { user_id?: string; error?: string } | null = null;
+      if (responseText) {
+        try {
+          responseJson = JSON.parse(responseText);
+        } catch {
+          responseJson = null;
+        }
+      }
       if (!response.ok) {
         throw new Error(`Onboarding failed (${response.status}): ${responseText}`);
       }
-      if (responseText) {
-        try {
-          JSON.parse(responseText);
-        } catch {
-          // ignore non-JSON response
-        }
+      if (responseJson?.user_id) {
+        await persistUserIds(responseJson.user_id, user.id);
       }
 
       setIsOnboarding(false);

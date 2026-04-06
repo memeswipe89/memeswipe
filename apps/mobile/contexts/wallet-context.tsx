@@ -16,6 +16,7 @@ import {
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
+import { LOCAL_USER_ID_KEY, USER_ID_MAP_PREFIX, UUID_RE } from "@/lib/local-user-id";
 
 export type TwitterProfile = {
   id: string;
@@ -47,12 +48,7 @@ type WalletContextValue = {
   ) => Promise<WithdrawResult>;
 };
 
-const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
-const USER_ID_MAP_PREFIX = "@memeswipe:userId:privy:";
 const SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const WalletContext = createContext<WalletContextValue | null>(null);
 
