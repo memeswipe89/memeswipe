@@ -1412,7 +1412,7 @@ export default function HomeScreen() {
           <View style={styles.topBarWrap}>
             <View style={styles.topProfileRow}>
               <View style={styles.brandWrap}>
-                <Text style={styles.brandText}>MemeSwipe</Text>
+                <Text style={styles.brandText}>Swipeit</Text>
               </View>
               <View style={styles.topActionsRow}>
                 <Pressable

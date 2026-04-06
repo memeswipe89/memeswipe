@@ -73,15 +73,15 @@ export default function WaitlistPage() {
 
       <section className="flex-1 flex flex-col items-center justify-center px-4 py-10 relative z-10">
         <div className="text-center max-w-2xl mx-auto space-y-6">
-          <div className="space-y-3">
-            <div className="w-12 h-12 bg-gradient-to-r from-cyan-400 to-lime-300 rounded-full mx-auto flex items-center justify-center text-black font-bold">
-              MS
+            <div className="space-y-3">
+              <div className="w-12 h-12 bg-gradient-to-r from-cyan-400 to-lime-300 rounded-full mx-auto flex items-center justify-center text-black font-bold">
+                MS
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-2xl font-bold text-white">Swipeit</h2>
+                <p className="text-xs text-gray-400 uppercase tracking-wider">Early Access</p>
+              </div>
             </div>
-            <div className="space-y-1">
-              <h2 className="text-2xl font-bold text-white">MemeSwipe</h2>
-              <p className="text-xs text-gray-400 uppercase tracking-wider">Early Access</p>
-            </div>
-          </div>
 
           <div className="space-y-2">
             <h1 className="text-2xl md:text-3xl font-light text-gray-200">
@@ -97,7 +97,7 @@ export default function WaitlistPage() {
               <form onSubmit={handleSubmit} className="space-y-4">
                 <input
                   type="text"
-                  placeholder="Twitter handle (e.g. @memeswipe)"
+                  placeholder="Twitter handle (e.g. @Swipeit)"
                   value={twitterHandle}
                   onChange={(e) => setTwitterHandle(e.target.value)}
                   required
@@ -124,7 +124,7 @@ export default function WaitlistPage() {
             </div>
           ) : (
             <div className="w-full max-w-md mx-auto space-y-3 text-center">
-              <h2 className="text-2xl font-bold text-lime-300">You&apos;re on the MemeSwipe waitlist.</h2>
+              <h2 className="text-2xl font-bold text-lime-300">You&apos;re on the Swipeit waitlist.</h2>
               <p className="text-gray-300">We&apos;ll notify you when early access opens.</p>
             </div>
           )}
