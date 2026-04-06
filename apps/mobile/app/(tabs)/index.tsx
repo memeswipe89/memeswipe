@@ -1411,8 +1411,9 @@ export default function HomeScreen() {
         <View style={styles.screen}>
           <View style={styles.topBarWrap}>
             <View style={styles.topProfileRow}>
+<<<<<<< HEAD
               <View style={styles.brandWrap}>
-                <Text style={styles.brandText}>MemeSwipe</Text>
+                <Text style={styles.brandText}>Swipeit</Text>
               </View>
               <View style={styles.topActionsRow}>
                 <Pressable
@@ -1437,6 +1438,17 @@ export default function HomeScreen() {
                   disabled={appLoading}
                 />
               </View>
+=======
+                <View style={styles.brandWrap}>
+                  <Text style={styles.brandText}>Swipeit</Text>
+                </View>
+              <ProfileButton
+                onPress={() => profileSheetRef.current?.open()}
+                onLongPress={openDevWalletControls}
+                initials={(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}
+                disabled={appLoading}
+              />
+>>>>>>> a63c3881 (memeswipe to swipeit)
             </View>
             <View style={styles.controlsRowWrap}>
               <View style={styles.controlsRow}>

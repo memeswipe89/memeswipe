@@ -10,15 +10,15 @@ export default function LandingPage() {
 
       <header className="relative z-10 px-6 pt-6">
         <div className="mx-auto flex max-w-6xl items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-5 py-3 backdrop-blur">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-lime-300 text-black font-bold">
-              MS
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-lime-300 text-black font-bold">
+                MS
+              </div>
+              <div>
+                <p className="text-sm uppercase tracking-[0.3em] text-cyan-200/70">Swipeit</p>
+                <p className="text-xs text-white/60">Swipe memecoins. Trade instantly.</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm uppercase tracking-[0.3em] text-cyan-200/70">Memeswipe</p>
-              <p className="text-xs text-white/60">Swipe memecoins. Trade instantly.</p>
-            </div>
-          </div>
           <div className="hidden items-center gap-6 text-sm text-white/70 md:flex">
             <a className="hover:text-white transition-colors" href="#how">How it works</a>
             <a className="hover:text-white transition-colors" href="#safety">Safety</a>
@@ -41,7 +41,7 @@ export default function LandingPage() {
               <span className="h-1.5 w-1.5 rounded-full bg-lime-300"></span>
             </div>
             <h1 className="text-balance text-4xl font-semibold leading-tight text-white md:text-5xl">
-              MemeSwipe is the fastest way to discover, swipe, and trade fresh memecoins.
+              Swipeit is the fastest way to discover, swipe, and trade fresh memecoins.
             </h1>
             <p className="text-balance text-lg text-white/70">
               Tinder-speed discovery plus one-tap swaps. Set TP/SL, track live PnL, and close in seconds. Built for Solana.
@@ -140,7 +140,7 @@ export default function LandingPage() {
             <p className="text-xs uppercase tracking-[0.35em] text-white/50">How it works</p>
             <h2 className="text-3xl font-semibold">Swipe. Route. Execute.</h2>
             <p className="text-white/60 text-balance max-w-2xl">
-              MemeSwipe keeps the loop tight: curated feeds, fast quotes, and on-chain settlement with your wallet.
+              Swipeit keeps the loop tight: curated feeds, fast quotes, and on-chain settlement with your wallet.
             </p>
           </div>
           <div className="mt-8 grid gap-6 md:grid-cols-3">
@@ -171,7 +171,7 @@ export default function LandingPage() {
             <p className="text-xs uppercase tracking-[0.35em] text-white/50">Safety & control</p>
             <h3 className="mt-3 text-2xl font-semibold">You stay in control of every trade.</h3>
             <p className="mt-3 text-sm text-white/60">
-              MemeSwipe uses non-custodial wallets, clear routing, and fail-safe exit paths. If a close fails, you can mark it and move on.
+              Swipeit uses non-custodial wallets, clear routing, and fail-safe exit paths. If a close fails, you can mark it and move on.
             </p>
             <div className="mt-6 grid gap-4">
               {[
@@ -227,7 +227,7 @@ export default function LandingPage() {
 
       <footer className="relative z-10 border-t border-white/10 px-6 py-8">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-sm text-white/60 md:flex-row">
-          <p>© 2026 MemeSwipe. Built for Solana traders.</p>
+          <p>© 2026 Swipeit. Built for Solana traders.</p>
           <div className="flex items-center gap-4">
             <a
               href="https://twitter.com/memeswipe89"

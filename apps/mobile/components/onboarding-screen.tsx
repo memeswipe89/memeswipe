@@ -301,7 +301,7 @@ export function OnboardingScreen() {
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
         <View style={styles.header}>
-          <Text style={styles.title}>Welcome to Memeswipe</Text>
+          <Text style={styles.title}>Welcome to Swipeit</Text>
           <Text style={styles.subtitle}>Trade memes, earn rewards</Text>
         </View>
 

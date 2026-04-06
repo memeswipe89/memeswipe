@@ -53,7 +53,7 @@ export const AppLoader = memo(function AppLoader({ visible }: AppLoaderProps) {
             style={styles.cardBorder}
           >
             <ActivityIndicator size="large" color="#9bc2ff" />
-            <Text style={styles.label}>Loading MemeSwipe...</Text>
+            <Text style={styles.label}>Loading Swipeit...</Text>
           </LinearGradient>
         </BlurView>
       </Animated.View>

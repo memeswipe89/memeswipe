@@ -14,7 +14,7 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Memeswipe",
+  title: "Swipeit",
   description: "Trade memecoins by swiping.",
 };
 
