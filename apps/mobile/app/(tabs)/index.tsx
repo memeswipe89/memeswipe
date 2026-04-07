@@ -47,11 +47,20 @@ const MAX_TRADE_AMOUNT_USD = 500;
 const MIN_PERCENT = 0.1;
 const TWITTER_CONNECTION_TIMEOUT_MS = 5000;
 const TWITTER_AUTH_START_TIMEOUT_MS = 10000;
+const MAX_FAVORITES = 12;
 type FavoriteToken = {
   address: string;
   name: string;
   symbol: string;
   chain: string;
+  likedAt: number;
+  priceUsd: number;
+  liquidityUsd: number;
+  volume24hUsd: number;
+  marketCapUsd: number;
+  change24hPct: number;
+  chartData: number[];
+  source?: string;
 };
 type TradeOpenPopupState = {
   visible: boolean;
@@ -97,6 +106,23 @@ const buildFallbackChart = (priceUsd: number) => {
   const base = priceUsd || Math.random() * 0.02 + 0.002;
   return [base * 0.96, base * 1.02, base, base * 1.08, base * 1.04, base * 1.12];
 };
+
+const favoriteTokenToSwipe = (item: FavoriteToken): SwipeToken => ({
+  name: item.name,
+  symbol: item.symbol,
+  address: item.address,
+  priceUsd: item.priceUsd,
+  liquidityUsd: item.liquidityUsd,
+  volume24hUsd: item.volume24hUsd,
+  marketCapUsd: item.marketCapUsd,
+  change24hPct: item.change24hPct,
+  chartData: item.chartData.length ? item.chartData : buildFallbackChart(item.priceUsd),
+  graduationTime: item.chain === 'base' ? 'Favorite • Base' : 'Favorite',
+  source: item.source || (item.chain === 'base' ? 'bags' : 'pumpfun'),
+  chain: item.chain,
+});
+
+const buildFavoriteDeckTokens = (items: FavoriteToken[]) => items.map(favoriteTokenToSwipe);
 
 const mapApiToken = (token: ApiToken): SwipeToken => {
   const price = toNumber(token.priceUsd, 0);
@@ -633,27 +659,52 @@ export default function HomeScreen() {
 
         if (favoritesRaw) {
           const parsed = JSON.parse(favoritesRaw) as (string | FavoriteToken)[];
+          const now = Date.now();
           const normalized: FavoriteToken[] = parsed
-          .map((item) => {
-            if (typeof item === 'string') {
+            .map((item, index) => {
+              const fallbackLikedAt = now - (parsed.length - index);
+              if (typeof item === 'string') {
+                return {
+                  address: item,
+                  name: item.slice(0, 6),
+                  symbol: 'FAV',
+                  chain: 'solana',
+                  likedAt: fallbackLikedAt,
+                  priceUsd: 0,
+                  liquidityUsd: 0,
+                  volume24hUsd: 0,
+                  marketCapUsd: 0,
+                  change24hPct: 0,
+                  chartData: buildFallbackChart(0),
+                };
+              }
+              if (!item?.address || !item?.symbol) return null;
+              const price = toNumber(item.priceUsd, 0);
+              const chart =
+                Array.isArray(item.chartData) && item.chartData.length > 1
+                  ? item.chartData.map((n) => toNumber(n, price || 0))
+                  : buildFallbackChart(price);
               return {
-                address: item,
-                name: item.slice(0, 6),
-                symbol: 'FAV',
-                chain: 'solana',
+                address: item.address,
+                name: item.name || item.symbol,
+                symbol: item.symbol,
+                chain: item.chain || 'solana',
+                likedAt: typeof item.likedAt === 'number' ? item.likedAt : fallbackLikedAt,
+                priceUsd: price,
+                liquidityUsd: toNumber(item.liquidityUsd, 0),
+                volume24hUsd: toNumber(item.volume24hUsd, 0),
+                marketCapUsd: toNumber(item.marketCapUsd, 0),
+                change24hPct: toNumber(item.change24hPct, 0),
+                chartData: chart,
+                source: item.source,
               };
-            }
-            if (!item?.address || !item?.symbol) return null;
-            return {
-              address: item.address,
-              name: item.name || item.symbol,
-              symbol: item.symbol,
-              chain: item.chain || 'solana',
-            };
-          })
-          .filter((item): item is FavoriteToken => Boolean(item));
-          setFavoriteTokens(normalized);
-          setFavoriteAddresses(new Set(normalized.map((f) => f.address)));
+            })
+            .filter((item): item is FavoriteToken => Boolean(item));
+          const trimmed = [...normalized]
+            .sort((a, b) => b.likedAt - a.likedAt)
+            .slice(0, MAX_FAVORITES);
+          setFavoriteTokens(trimmed);
+          setFavoriteAddresses(new Set(trimmed.map((f) => f.address)));
         }
 
         if (hiddenRaw) {
@@ -919,6 +970,34 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const applyFavoriteUpdate = useCallback(
+    (next: FavoriteToken[]) => {
+      const sorted = [...next].sort((a, b) => b.likedAt - a.likedAt);
+      const trimmed = sorted.slice(0, MAX_FAVORITES);
+      persistFavorites(trimmed);
+      setFavoriteAddresses(new Set(trimmed.map((f) => f.address)));
+      if (segment === 'favorites') {
+        setTokens(buildFavoriteDeckTokens(trimmed));
+      }
+      return trimmed;
+    },
+    [persistFavorites, segment]
+  );
+
+  const removeFavoriteToken = useCallback(
+    (address: string) => {
+      if (!address) return;
+      setFavoriteTokens((prev) => {
+        if (!prev.some((item) => item.address === address)) {
+          return prev;
+        }
+        const next = prev.filter((item) => item.address !== address);
+        return applyFavoriteUpdate(next);
+      });
+    },
+    [applyFavoriteUpdate]
+  );
+
   const hideToken = useCallback(
     (address: string) => {
       if (!address) return;
@@ -942,20 +1021,32 @@ export default function HomeScreen() {
   const handleToggleFavorite = useCallback(async (token: SwipeToken) => {
     setFavoriteTokens((prev) => {
       const exists = prev.some((item) => item.address === token.address);
-      const next = exists
-        ? prev.filter((item) => item.address !== token.address)
-        : [
-            ...prev,
-            {
-              address: token.address,
-              name: token.name,
-              symbol: token.symbol,
-              chain: activeChain,
-            },
-          ];
-      persistFavorites(next);
-      setFavoriteAddresses(new Set(next.map((f) => f.address)));
-      return next;
+      if (exists) {
+        const next = prev.filter((item) => item.address !== token.address);
+        return applyFavoriteUpdate(next);
+      }
+      const basePrice = toNumber(token.priceUsd, 0);
+      const next = [
+        ...prev.filter((item) => item.address !== token.address),
+        {
+          address: token.address,
+          name: token.name,
+          symbol: token.symbol,
+          chain: activeChain,
+          likedAt: Date.now(),
+          priceUsd: basePrice,
+          liquidityUsd: toNumber(token.liquidityUsd, 0),
+          volume24hUsd: toNumber(token.volume24hUsd, 0),
+          marketCapUsd: toNumber(token.marketCapUsd, 0),
+          change24hPct: toNumber(token.change24hPct, 0),
+          chartData:
+            Array.isArray(token.chartData) && token.chartData.length > 0
+              ? token.chartData.map((n) => toNumber(n, basePrice || 0))
+              : buildFallbackChart(basePrice),
+          source: token.source,
+        },
+      ];
+      return applyFavoriteUpdate(next);
     });
 
     try {
@@ -973,7 +1064,7 @@ export default function HomeScreen() {
     } catch (err) {
       console.log('Favorite API failed', err);
     }
-  }, [activeChain, getOrCreateLocalUserId, persistFavorites, twitterProfile?.id, twitterProfile?.username, userId]);
+  }, [activeChain, applyFavoriteUpdate, getOrCreateLocalUserId, twitterProfile?.id, twitterProfile?.username, userId]);
 
   const executeJupiterSwap = useCallback(
     async (token: SwipeToken) => {
@@ -1231,9 +1322,15 @@ export default function HomeScreen() {
     [activeChain, getOrCreateLocalUserId, stopLoss, tpROI, tradeAmount, twitterProfile?.id, twitterProfile?.username, userId]
   );
 
-  const handleReject = useCallback((token: SwipeToken) => {
-    hideToken(token.address);
-  }, [hideToken]);
+  const handleReject = useCallback(
+    (token: SwipeToken) => {
+      hideToken(token.address);
+      if (segment === 'favorites') {
+        removeFavoriteToken(token.address);
+      }
+    },
+    [hideToken, removeFavoriteToken, segment]
+  );
 
   const handleBuy = useCallback(
     (token: SwipeToken) => {
@@ -1305,19 +1402,13 @@ export default function HomeScreen() {
             txSignature: swapMeta?.signature || '',
           });
           hideToken(token.address);
-
-          setFavoriteTokens((prev) => {
-            const next = prev.filter((item) => item.address !== token.address);
-            persistFavorites(next);
-            setFavoriteAddresses(new Set(next.map((f) => f.address)));
-            return next;
-          });
+          removeFavoriteToken(token.address);
         } finally {
           setBuyLoading(false);
         }
       })();
     },
-    [createOrder, executeJupiterSwap, hideToken, persistFavorites, tpROI, tradeAmount, tradingWalletAddress]
+    [createOrder, executeJupiterSwap, hideToken, removeFavoriteToken, tpROI, tradeAmount, tradingWalletAddress]
   );
 
   const openDevWalletControls = useCallback(() => {
@@ -1369,21 +1460,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     if (segment === 'favorites') {
-      const filtered = favoriteTokens
-        .filter((item) => item.chain === activeChain && !hiddenTokenAddresses.has(item.address))
-        .map((item): SwipeToken => ({
-          name: item.name,
-          symbol: item.symbol,
-          address: item.address,
-          priceUsd: 0,
-          liquidityUsd: 0,
-          volume24hUsd: 0,
-          marketCapUsd: 0,
-          change24hPct: 0,
-          chartData: [1, 1.02, 1.01, 1.03],
-          graduationTime: 'Favorite',
-        }));
-      setTokens(filtered);
+      setTokens(buildFavoriteDeckTokens(favoriteTokens));
       return;
     }
 
