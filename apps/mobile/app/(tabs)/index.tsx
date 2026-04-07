@@ -107,6 +107,13 @@ const buildFallbackChart = (priceUsd: number) => {
   return [base * 0.96, base * 1.02, base, base * 1.08, base * 1.04, base * 1.12];
 };
 
+const matchesFavoriteSource = (item: FavoriteToken, source: 'pumpfun' | 'bags') => {
+  if (source === 'bags') {
+    return item.source === 'bags' || item.chain === 'base';
+  }
+  return item.source !== 'bags';
+};
+
 const favoriteTokenToSwipe = (item: FavoriteToken): SwipeToken => ({
   name: item.name,
   symbol: item.symbol,
@@ -122,7 +129,8 @@ const favoriteTokenToSwipe = (item: FavoriteToken): SwipeToken => ({
   chain: item.chain,
 });
 
-const buildFavoriteDeckTokens = (items: FavoriteToken[]) => items.map(favoriteTokenToSwipe);
+const buildFavoriteDeckTokens = (items: FavoriteToken[], source: 'pumpfun' | 'bags') =>
+  items.filter((item) => matchesFavoriteSource(item, source)).map(favoriteTokenToSwipe);
 
 const mapApiToken = (token: ApiToken): SwipeToken => {
   const price = toNumber(token.priceUsd, 0);
@@ -977,11 +985,11 @@ export default function HomeScreen() {
       persistFavorites(trimmed);
       setFavoriteAddresses(new Set(trimmed.map((f) => f.address)));
       if (segment === 'favorites') {
-        setTokens(buildFavoriteDeckTokens(trimmed));
+        setTokens(buildFavoriteDeckTokens(trimmed, activeSource));
       }
       return trimmed;
     },
-    [persistFavorites, segment]
+    [activeSource, persistFavorites, segment]
   );
 
   const removeFavoriteToken = useCallback(
@@ -1043,7 +1051,7 @@ export default function HomeScreen() {
             Array.isArray(token.chartData) && token.chartData.length > 0
               ? token.chartData.map((n) => toNumber(n, basePrice || 0))
               : buildFallbackChart(basePrice),
-          source: token.source,
+          source: token.source || (activeChain === 'base' ? 'bags' : 'pumpfun'),
         },
       ];
       return applyFavoriteUpdate(next);
@@ -1460,7 +1468,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     if (segment === 'favorites') {
-      setTokens(buildFavoriteDeckTokens(favoriteTokens));
+      setTokens(buildFavoriteDeckTokens(favoriteTokens, activeSource));
       return;
     }
 
