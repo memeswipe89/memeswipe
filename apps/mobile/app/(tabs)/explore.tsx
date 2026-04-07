@@ -447,15 +447,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 8,
+    flexWrap: 'wrap',
   },
   swapBudgetText: {
     color: '#99a9cd',
     fontSize: 11,
     fontWeight: '600',
+    flex: 1,
+    minWidth: 0,
+    flexWrap: 'wrap',
   },
   swapBudgetStatus: {
     fontSize: 11,
     fontWeight: '700',
+    flexShrink: 0,
   },
   swapBudgetGood: {
     color: '#4ade80',
