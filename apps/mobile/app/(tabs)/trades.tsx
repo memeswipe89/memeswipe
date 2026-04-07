@@ -221,8 +221,8 @@ const getDisplayedPnl = (trade: TradeItem) => {
 };
 
 export default function TradesScreen() {
-  const { twitterProfile } = useWalletContext();
-  const { getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider, getOrCreateLocalUserId } = useWalletContext();
+  const { getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider, getOrCreateLocalUserId } =
+    useWalletContext();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
@@ -238,12 +238,6 @@ export default function TradesScreen() {
 
   const loadTrades = useCallback(async () => {
     try {
-      if (!twitterProfile) {
-        setTrades([]);
-        setError(null);
-        setLoading(false);
-        return;
-      }
       setLoading(true);
       setError(null);
       const resolvedUserId = await getOrCreateLocalUserId();
@@ -354,21 +348,16 @@ export default function TradesScreen() {
     } finally {
       setLoading(false);
     }
-  }, [getOrCreateLocalUserId, solPriceUsd, twitterProfile]);
+  }, [getOrCreateLocalUserId, solPriceUsd]);
 
   useEffect(() => {
-    if (!twitterProfile) {
-      setLoading(false);
-      return;
-    }
     void loadTrades();
-  }, [loadTrades, twitterProfile]);
+  }, [loadTrades]);
 
   useFocusEffect(
     useCallback(() => {
-      if (!twitterProfile) return;
       void loadTrades();
-    }, [loadTrades, twitterProfile])
+    }, [loadTrades])
   );
 
   useEffect(() => {
@@ -661,7 +650,7 @@ export default function TradesScreen() {
   );
 
   useEffect(() => {
-    if (!twitterProfile || closingId) return;
+    if (closingId) return;
     const now = Date.now();
     const findTargets = (source: TradeItem[]) =>
       source
@@ -720,7 +709,7 @@ export default function TradesScreen() {
         // ignore and retry on next interval/effect run
       }
     })();
-  }, [closeTrade, closingId, trades, twitterProfile]);
+  }, [closeTrade, closingId, trades]);
 
   const filtered = useMemo(() => {
     return trades.filter((trade) => {
@@ -767,16 +756,6 @@ export default function TradesScreen() {
       await Linking.openURL(url);
     }
   }, []);
-
-  if (!twitterProfile) {
-    return (
-      <SafeAreaView style={styles.root}>
-        <View style={styles.centerState}>
-          <Text style={styles.muted}>Connect Twitter first to view your trades.</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.root}>
