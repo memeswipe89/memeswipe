@@ -261,6 +261,18 @@ export default function WalletScreen() {
     }
   };
 
+  const getFriendlyWithdrawErrorMessage = (error: unknown) => {
+    const text =
+      typeof error === "object" && error !== null && "message" in error
+        ? (error as { message?: string }).message
+        : String(error ?? "");
+    const normalized = (text ?? "").toLowerCase();
+    if (/\b(prior credit|insufficient funds|cannot debit|no record of a prior credit|attempt to debit)\b/i.test(normalized)) {
+      return "Insufficient balance. Please fund the embedded wallet before withdrawing.";
+    }
+    return text || "Failed to withdraw.";
+  };
+
   const handleWithdraw = async () => {
     try {
       const amount = Number(withdrawAmount);
@@ -279,8 +291,8 @@ export default function WalletScreen() {
       if (tradingWalletAddress) {
         await loadBalance(tradingWalletAddress);
       }
-    } catch (error: any) {
-      Alert.alert("Withdraw Failed", error?.message || "Failed to withdraw.");
+    } catch (error: unknown) {
+      Alert.alert("Withdraw Failed", getFriendlyWithdrawErrorMessage(error));
     } finally {
       setWithdrawing(false);
     }
