@@ -3,8 +3,6 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Line, Path, Stop } from 'react-native-svg';
-import { area, curveBasis, line } from 'd3-shape';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -18,9 +16,6 @@ const MIN_SOL_RESERVE_FOR_FEES = 0.01;
 const lamportsToSol = (lamports: number) => lamports / 1_000_000_000;
 
 export default function TabTwoScreen() {
-  const chartHeight = 190;
-  const chartPadding = 12;
-  const [chartWidth, setChartWidth] = useState(0);
   const { twitterProfile, getOrCreateLocalUserId, tradingWalletAddress } = useWalletContext();
   const { activeChain, tradeAmount } = useTradeSettings();
   const [loading, setLoading] = useState(false);
@@ -119,35 +114,10 @@ export default function TabTwoScreen() {
     });
     const totalPnlSol = solPriceUsd ? totalPnlUsd / solPriceUsd : 0;
 
-    const dayBuckets = new Map<string, { profit: number; loss: number }>();
-    const days: string[] = [];
-    for (let i = 6; i >= 0; i -= 1) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      dayBuckets.set(key, { profit: 0, loss: 0 });
-      days.push(key);
-    }
-    closed.forEach((o) => {
-      const closedAt = typeof o?.closed_at === 'string' ? o.closed_at : null;
-      if (!closedAt) return;
-      const key = new Date(closedAt).toISOString().slice(0, 10);
-      const bucket = dayBuckets.get(key);
-      if (!bucket) return;
-      const pnl = toNumber(o?.close_pnl_usd, 0);
-      if (o?.close_reason === 'tp') bucket.profit += Math.max(0, pnl);
-      if (o?.close_reason === 'sl') bucket.loss += Math.abs(Math.min(0, pnl));
-    });
-
-    const profitSeries = days.map((k) => dayBuckets.get(k)?.profit || 0);
-    const lossSeries = days.map((k) => dayBuckets.get(k)?.loss || 0);
-
     return {
       totalTrades,
       winRate,
       totalPnlSol,
-      profitSeries,
-      lossSeries,
       recentWins: closed
         .filter((o) => o?.close_reason === 'tp')
         .sort((a, b) => String(b?.closed_at || '').localeCompare(String(a?.closed_at || '')))
@@ -169,53 +139,6 @@ export default function TabTwoScreen() {
     if (walletSolBalance === null || estimatedRequiredSol === null) return null;
     return Math.max(0, estimatedRequiredSol - walletSolBalance);
   }, [estimatedRequiredSol, walletSolBalance]);
-
-  const combinedSeries = metrics.profitSeries.map((value, index) => value - (metrics.lossSeries[index] || 0));
-  const hasSeries = combinedSeries.some((value) => Math.abs(value) > 0.00001);
-  const cumulativeSeries = combinedSeries.reduce<number[]>((acc, value) => {
-    const prev = acc.length ? acc[acc.length - 1] : 0;
-    acc.push(prev + value);
-    return acc;
-  }, []);
-  const minSeries = Math.min(...cumulativeSeries, hasSeries ? 0 : -1);
-  const maxSeries = Math.max(...cumulativeSeries, hasSeries ? 1 : 1);
-  const yScale = (value: number) => {
-    const range = chartHeight - chartPadding * 2;
-    const min = Math.min(minSeries, maxSeries - 1);
-    const max = Math.max(maxSeries, minSeries + 1);
-    return chartPadding + ((max - value) / (max - min)) * range;
-  };
-  const xScale = (index: number) => {
-    if (combinedSeries.length <= 1) return chartPadding;
-    const usable = chartWidth - chartPadding * 2;
-    return chartPadding + (usable * index) / (combinedSeries.length - 1);
-  };
-
-  const linePath = useMemo(() => {
-    if (!chartWidth) return '';
-    if (!hasSeries) {
-      const midY = chartPadding + (chartHeight - chartPadding * 2) / 2;
-      return `M ${chartPadding} ${midY} L ${chartWidth - chartPadding} ${midY}`;
-    }
-    return (
-      line<number>()
-        .x((_, index) => xScale(index))
-        .y((value) => yScale(value))
-        .curve(curveBasis)(cumulativeSeries) || ''
-    );
-  }, [chartWidth, cumulativeSeries, minSeries, maxSeries, hasSeries]);
-
-  const areaPath = useMemo(() => {
-    if (!chartWidth) return '';
-    if (!hasSeries) return '';
-    return (
-      area<number>()
-        .x((_, index) => xScale(index))
-        .y0(chartHeight - chartPadding)
-        .y1((value) => yScale(value))
-        .curve(curveBasis)(cumulativeSeries) || ''
-    );
-  }, [chartWidth, cumulativeSeries, minSeries, maxSeries, chartHeight, chartPadding, hasSeries]);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -266,46 +189,6 @@ export default function TabTwoScreen() {
           </Text>
         </View>
       ) : null}
-
-      <ThemedView style={styles.sectionHeader}>
-        <ThemedText type="defaultSemiBold" style={styles.sectionTitle}>PnL chart</ThemedText>
-        <ThemedText style={styles.sectionHint}>Last 7 sessions</ThemedText>
-      </ThemedView>
-      <View style={styles.chartCard} onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}>
-        <View style={styles.chartGrid} />
-        {chartWidth > 0 ? (
-          <Svg width={chartWidth} height={chartHeight}>
-            <Defs>
-              <SvgLinearGradient id="pnlFill" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0%" stopColor="#6ee7ff" stopOpacity="0.35" />
-                <Stop offset="75%" stopColor="#1c2333" stopOpacity="0.05" />
-                <Stop offset="100%" stopColor="#101625" stopOpacity="0.01" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="pnlStroke" x1="0" y1="0" x2="1" y2="0">
-                <Stop offset="0%" stopColor="#6ee7ff" />
-                <Stop offset="100%" stopColor="#a4ff8c" />
-              </SvgLinearGradient>
-            </Defs>
-            {[0.2, 0.5, 0.8].map((t) => (
-              <Line
-                key={t}
-                x1={chartPadding}
-                y1={chartPadding + (chartHeight - chartPadding * 2) * t}
-                x2={chartWidth - chartPadding}
-                y2={chartPadding + (chartHeight - chartPadding * 2) * t}
-                stroke="rgba(120,140,190,0.16)"
-                strokeWidth={1}
-              />
-            ))}
-            <Path d={areaPath} fill="url(#pnlFill)" />
-            <Path d={linePath} stroke="url(#pnlStroke)" strokeWidth={3} fill="none" />
-          </Svg>
-        ) : null}
-        <View style={styles.chartLegend}>
-          <View style={styles.legendDot} />
-          <ThemedText style={styles.legendText}>Cumulative PnL (USD)</ThemedText>
-        </View>
-      </View>
 
       <ThemedView style={styles.sectionHeader}>
         <ThemedText type="defaultSemiBold" style={styles.sectionTitle}>Recent wins</ThemedText>
@@ -480,37 +363,6 @@ const styles = StyleSheet.create({
   sectionHint: {
     color: '#7f8dad',
     fontSize: 11,
-  },
-  chartCard: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(120,140,190,0.2)',
-    backgroundColor: '#0c111f',
-    padding: 12,
-    marginBottom: 16,
-    minHeight: 240,
-  },
-  chartGrid: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(120,140,190,0.08)',
-  },
-  chartLegend: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-  },
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#7bffb4',
-  },
-  legendText: {
-    fontSize: 11,
-    color: '#9aa6c4',
   },
   listWrap: {
     gap: 10,
