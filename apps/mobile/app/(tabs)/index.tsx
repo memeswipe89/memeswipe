@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -1535,44 +1535,12 @@ export default function HomeScreen() {
               </View>
             </View>
             <View style={styles.controlsRowWrap}>
-              <View style={styles.controlsRow}>
-                <View style={[styles.controlSlot, styles.controlSlotAmount]}>
-                  <GlassControlPill
-                    label="AMT"
-                    value={tradeAmount}
-                    suffix="$"
-                    onMinus={() => updateTradeAmount(-0.1)}
-                    onPlus={() => updateTradeAmount(0.1)}
-                    onCommit={(v) =>
-                      setTradeAmount(
-                        Number(Math.max(MIN_TRADE_AMOUNT_USD, Math.min(MAX_TRADE_AMOUNT_USD, v)).toFixed(4))
-                      )
-                    }
-                  />
-                </View>
-                <View style={[styles.controlSlot, styles.controlSlotCompact]}>
-                  <GlassControlPill
-                    label="ROI"
-                    value={tpROI}
-                    suffix="%"
-                    onMinus={() => updateTpRoi(-0.1)}
-                    onPlus={() => updateTpRoi(0.1)}
-                    onCommit={(v) => setTpROI(Math.max(MIN_PERCENT, Math.min(200, v)))}
-                  />
-                </View>
-                <View style={[styles.controlSlot, styles.controlSlotCompact]}>
-                  <GlassControlPill
-                    label="SL"
-                    icon="paper-plane"
-                    value={stopLoss}
-                    suffix="%"
-                    onMinus={() => updateStopLoss(-0.1)}
-                    onPlus={() => updateStopLoss(0.1)}
-                    onCommit={(v) => setStopLoss(Math.max(MIN_PERCENT, Math.min(50, v)))}
-                  />
-                </View>
-              </View>
+            <View style={styles.simplePillRow}>
+              <SimplePill label="AMT" value={`$${tradeAmount.toFixed(2)}`} />
+              <SimplePill label="ROI" value={`${tpROI.toFixed(1)}%`} />
+              <SimplePill label="SL" value={`${stopLoss.toFixed(0)}%`} />
             </View>
+          </View>
             <View style={styles.sourceTabsWrap}>
               <View style={styles.sourceTabRow}>
                 <SourceTab label="Pump.fun" enabled={activeSource === 'pumpfun'} onPress={() => setActiveSource('pumpfun')} />
@@ -1795,6 +1763,13 @@ const styles = StyleSheet.create({
   controlSlotCompact: {
     flex: 0.92,
   },
+  simplePillRow: {
+    flexDirection: 'row',
+    gap: 8,
+    width: '100%',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+  },
   sourceTabRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1838,70 +1813,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  controlRing: {
-    borderRadius: 999,
-    padding: 1,
-    width: '100%',
-  },
-  controlInner: {
-    minHeight: 48,
-    borderRadius: 999,
-    paddingHorizontal: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(15,15,20,0.8)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  controlButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-  },
-  controlButtonPressed: {
-    opacity: 0.7,
-  },
-  controlButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  controlValueWrap: {
+  simplePill: {
     flex: 1,
     flexDirection: 'row',
+    backgroundColor: '#1a1a1a',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginHorizontal: 8,
   },
-  controlLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  controlIcon: {
-    marginRight: 4,
-  },
-  controlLabel: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 11,
+  simplePillLabel: {
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: 10,
+    letterSpacing: 2,
     fontWeight: '700',
-    letterSpacing: 1.2,
   },
-  controlValue: {
+  simplePillValue: {
     color: '#fff',
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '800',
-  },
-  controlInput: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '800',
-    padding: 0,
-    textAlign: 'right',
-    minWidth: 64,
   },
   tradePopupOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -2066,74 +1999,9 @@ const styles = StyleSheet.create({
   },
 });
 
-const GlassControlPill = ({
-  label,
-  icon,
-  value,
-  suffix,
-  onMinus,
-  onPlus,
-  onCommit,
-}: {
-  label: string;
-  icon?: React.ComponentProps<typeof FontAwesome>['name'];
-  value: number;
-  suffix: string;
-  onMinus: () => void;
-  onPlus: () => void;
-  onCommit: (value: number) => void;
-}) => {
-  const [editing, setEditing] = useState(false);
-  const isDollar = suffix === '$';
-  const formatAmount = useCallback((n: number) => {
-    if (!Number.isFinite(n)) return '0';
-    if (isDollar) return n.toFixed(4).replace(/\.?0+$/, '');
-    return n.toFixed(2).replace(/\.?0+$/, '');
-  }, [isDollar]);
-  const [draft, setDraft] = useState(formatAmount(value));
-
-  useEffect(() => {
-    if (!editing) setDraft(formatAmount(value));
-  }, [editing, formatAmount, value]);
-
-  const commit = () => {
-    const normalizedDraft = isDollar ? draft.replace(/[^0-9.]/g, '') : draft;
-    const next = Number(normalizedDraft);
-    onCommit(Number.isFinite(next) ? next : isDollar ? MIN_TRADE_AMOUNT_USD : MIN_PERCENT);
-    setEditing(false);
-  };
-
-  return (
-    <LinearGradient colors={['#15151b', '#101014']} style={styles.controlRing}>
-      <BlurView intensity={24} tint="dark" style={styles.controlInner}>
-        <Pressable onPress={onMinus} style={({ pressed }) => [styles.controlButton, pressed && styles.controlButtonPressed]}>
-          <Text style={styles.controlButtonText}>-</Text>
-        </Pressable>
-        <Pressable style={styles.controlValueWrap} onPress={() => setEditing(true)}>
-          <View style={styles.controlLabelRow}>
-            {icon && <FontAwesome name={icon} size={12} color="rgba(255,255,255,0.65)" style={styles.controlIcon} />}
-            <Text style={styles.controlLabel}>{label}</Text>
-          </View>
-          {editing ? (
-            <TextInput
-              autoFocus
-              keyboardType={isDollar ? 'decimal-pad' : 'numeric'}
-              value={draft}
-              onChangeText={setDraft}
-              onBlur={commit}
-              onSubmitEditing={commit}
-              style={styles.controlInput}
-            />
-          ) : (
-            <Text style={styles.controlValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>
-              {isDollar ? `${suffix}${formatAmount(value)}` : `${formatAmount(value)}${suffix}`}
-            </Text>
-          )}
-        </Pressable>
-        <Pressable onPress={onPlus} style={({ pressed }) => [styles.controlButton, pressed && styles.controlButtonPressed]}>
-          <Text style={styles.controlButtonText}>+</Text>
-        </Pressable>
-      </BlurView>
-    </LinearGradient>
-  );
-};
+const SimplePill = ({ label, value }: { label: string; value: string }) => (
+  <View style={styles.simplePill}>
+    <Text style={styles.simplePillLabel}>{label}</Text>
+    <Text style={styles.simplePillValue}>{value}</Text>
+  </View>
+);
