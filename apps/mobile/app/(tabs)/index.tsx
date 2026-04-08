@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
@@ -12,6 +12,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
+import { useRouter } from 'expo-router';
 
 import { AppLoader } from '@/components/app-loader';
 import { LoadingOverlay } from '@/components/loading-overlay';
@@ -274,6 +275,7 @@ const normalizeJupiterError = (error: unknown) => {
 void WebBrowser.maybeCompleteAuthSession();
 
 export default function HomeScreen() {
+  const router = useRouter();
   const {
     privyUserId,
     twitterProfile,
@@ -1439,6 +1441,10 @@ export default function HomeScreen() {
     ]);
   }, [balance]);
 
+  const openWalletPage = useCallback(() => {
+    router.push('/wallet');
+  }, [router]);
+
   const updateTradeAmount = useCallback(
     (delta: number) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
@@ -1496,9 +1502,15 @@ export default function HomeScreen() {
         <View style={styles.screen}>
           <View style={styles.topBarWrap}>
             <View style={styles.topProfileRow}>
-              <View style={styles.brandWrap}>
-                <Text style={styles.brandText}>Swipeit</Text>
-              </View>
+              <Pressable
+                onPress={openWalletPage}
+                android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
+                style={({ pressed }) => [styles.brandAvatarButton, pressed && styles.brandAvatarButtonPressed]}
+              >
+                <View style={styles.brandAvatar}>
+                  <Text style={styles.brandAvatarText}>{(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}</Text>
+                </View>
+              </Pressable>
               <View style={styles.topActionsRow}>
                 <Pressable
                   onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
@@ -1512,13 +1524,12 @@ export default function HomeScreen() {
                   <FontAwesome
                     name={favoritesActive ? 'heart' : 'heart-o'}
                     size={20}
-                    color={favoritesActive ? '#ffd6df' : 'rgba(255,255,255,0.75)'}
+                    color={favoritesActive ? '#ffffff' : 'rgba(255,255,255,0.78)'}
                   />
                 </Pressable>
                 <ProfileButton
                   onPress={() => profileSheetRef.current?.open()}
                   onLongPress={openDevWalletControls}
-                  initials={(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}
                   disabled={appLoading}
                 />
               </View>
@@ -1721,35 +1732,45 @@ const styles = StyleSheet.create({
   topActionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
   },
-  brandWrap: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
+  brandAvatarButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  brandAvatarButtonPressed: {
+    opacity: 0.88,
+  },
+  brandAvatar: {
+    flex: 1,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3b3b3b',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderColor: 'rgba(255,255,255,0.08)',
   },
-  brandText: {
-    color: '#eaf1ff',
+  brandAvatarText: {
+    color: '#151515',
     fontSize: 13,
     fontWeight: '800',
-    letterSpacing: 0.25,
+    letterSpacing: 0.5,
   },
   favoriteIconButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: '#171717',
   },
   favoriteIconButtonActive: {
-    borderColor: 'rgba(255,128,153,0.65)',
-    backgroundColor: 'rgba(255,107,129,0.18)',
+    borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: '#171717',
   },
   favoriteIconButtonPressed: {
     opacity: 0.85,
