@@ -747,6 +747,17 @@ export default function TradesScreen() {
     return { totalProfit, totalLoss };
   }, [trades]);
 
+  const summary = useMemo(() => {
+    const closed = trades.filter((t) => t.status === 'closed');
+    const wins = closed.filter((t) => t.closeReason === 'tp').length;
+    const losses = closed.filter((t) => t.closeReason === 'sl').length;
+    const winRate = wins + losses > 0 ? Math.round((wins / (wins + losses)) * 100) : 0;
+
+    const totalPnlUsd = closed.reduce((acc, t) => acc + toNumber(t.closePnlUsd, 0), 0);
+    const totalPnlSol = solPriceUsd && solPriceUsd > 0 ? totalPnlUsd / solPriceUsd : 0;
+    return { totalTrades: trades.length, winRate, totalPnlSol };
+  }, [solPriceUsd, trades]);
+
   const paged = filtered.slice(0, page * pageSize);
   const hasMore = paged.length < filtered.length;
   const openSolscanTx = useCallback(async (signature: string) => {
@@ -766,6 +777,25 @@ export default function TradesScreen() {
             <Text style={styles.refreshText}>Refresh</Text>
           </Pressable>
         </View>
+      </View>
+
+      <View style={styles.summaryRow}>
+        {[
+          {
+            label: 'Total PnL',
+            value: `${summary.totalPnlSol >= 0 ? '+' : ''}${summary.totalPnlSol.toFixed(4)} SOL`,
+            tone: 'positive',
+          },
+          { label: 'Win Rate', value: `${summary.winRate}%`, tone: 'neutral' },
+          { label: 'Trades', value: String(summary.totalTrades), tone: 'neutral' },
+        ].map((item) => (
+          <View key={item.label} style={styles.summaryCard}>
+            <Text style={styles.summaryLabel}>{item.label}</Text>
+            <Text style={[styles.summaryValue, item.tone === 'positive' && styles.summaryPositive]}>
+              {item.value}
+            </Text>
+          </View>
+        ))}
       </View>
 
       <TextInput
@@ -933,6 +963,20 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: '#fff', fontSize: 24, fontWeight: '800' },
+  summaryRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  summaryCard: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  summaryLabel: { color: '#8794b4', fontSize: 9, fontWeight: '800' },
+  summaryValue: { marginTop: 5, color: '#f4f7ff', fontSize: 12, fontWeight: '800' },
+  summaryPositive: { color: '#4ade80' },
   refreshBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,

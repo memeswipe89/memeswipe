@@ -15,12 +15,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import QRCode from "react-native-qrcode-svg";
 import { useRouter } from "expo-router";
 import { useLinkEmail, usePrivy } from "@privy-io/expo";
+import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
+import { SolanaIcon } from "@/components/icons/SolanaIcon";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
@@ -335,9 +336,19 @@ export default function WalletScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-      <View style={{ marginTop: 6 }}>
-        <Text style={{ color: "#8aa0b6", fontSize: 12 }}>Twitter</Text>
-        <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>
+      <View
+        style={{
+          marginTop: 6,
+          borderRadius: 10,
+          paddingVertical: 10,
+          paddingHorizontal: 12,
+          borderWidth: 1,
+          borderColor: "#2a2a2a",
+          backgroundColor: "#111",
+        }}
+      >
+        <Text style={{ color: "#8aa0b6", fontSize: 12 }}>X.com</Text>
+        <Text style={{ color: "#fff", marginTop: 3, fontSize: 16, fontWeight: "600" }}>
           {twitterProfile?.username ? `@${twitterProfile.username}` : "Not connected"}
         </Text>
       </View>
@@ -376,31 +387,7 @@ export default function WalletScreen() {
             <Text style={{ color: "#0a1a33", textAlign: "center", fontWeight: "700" }}>Copy Address</Text>
           </Pressable>
 
-          <View style={{ marginTop: 10, marginBottom: 10, alignItems: "center", justifyContent: "center" }}>
-            <View style={{ backgroundColor: "#fff", padding: 10, borderRadius: 12 }}>
-              <QRCode value={tradingWalletAddress ?? undefined} size={qrSize} />
-            </View>
-          </View>
-
           <View style={{ marginTop: "auto", paddingBottom: 6 }}>
-            <Text style={{ color: "#bbb", fontWeight: "600" }}>Send from Phantom</Text>
-            <Pressable
-              onPress={openPhantom}
-              style={{
-                marginTop: 6,
-                backgroundColor: "#10233f",
-                borderRadius: 10,
-                paddingVertical: 10,
-                borderWidth: 1,
-                borderColor: "#254d78",
-              }}
-            >
-              <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Open Phantom</Text>
-            </Pressable>
-              <Text style={{ color: "#8f9ab7", marginTop: 6, fontSize: 12 }}>
-                Send SOL from Phantom or any Solana wallet to this address.
-              </Text>
-
             <View
               style={{
                 marginTop: 8,
@@ -412,7 +399,29 @@ export default function WalletScreen() {
                 backgroundColor: "#111",
               }}
             >
-              <Text style={{ color: "#bbb", fontSize: 12 }}>SOL Balance</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <SolanaIcon size={18} />
+                  <Text style={{ color: "#bbb", fontSize: 12 }}>SOL Balance</Text>
+                </View>
+                <Pressable
+                  onPress={() => (tradingWalletAddress ? void loadBalance(tradingWalletAddress) : undefined)}
+                  hitSlop={10}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    borderRadius: 10,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "#254d78",
+                    backgroundColor: "#10233f",
+                    opacity: tradingWalletAddress ? 1 : 0.5,
+                  }}
+                >
+                  <Ionicons name="refresh" size={16} color="#d7efff" />
+                </Pressable>
+              </View>
               {balanceLoading ? (
                 <View style={{ marginTop: 6 }}>
                   <ActivityIndicator />
@@ -424,20 +433,6 @@ export default function WalletScreen() {
               )}
               {balanceError ? <Text style={{ color: "#ff8a8a", marginTop: 6, fontSize: 11 }}>{balanceError}</Text> : null}
             </View>
-
-            <Pressable
-              onPress={() => (tradingWalletAddress ? void loadBalance(tradingWalletAddress) : undefined)}
-              style={{
-                marginTop: 6,
-                backgroundColor: "#10233f",
-                borderRadius: 10,
-                paddingVertical: 10,
-                borderWidth: 1,
-                borderColor: "#254d78",
-              }}
-            >
-              <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>Refresh Balance</Text>
-            </Pressable>
 
             <View
               style={{

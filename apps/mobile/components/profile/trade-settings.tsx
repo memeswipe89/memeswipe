@@ -1,7 +1,6 @@
-import React, { memo, useEffect, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { memo, useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { SafeSlider } from '@/components/safe-slider';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -27,6 +26,7 @@ const SettingRow = memo(function SettingRow({
   onChange,
   onFocusChange,
 }: SettingRowProps) {
+  const inputRef = useRef<TextInput>(null);
   const [text, setText] = useState(String(value));
 
   useEffect(() => {
@@ -34,11 +34,16 @@ const SettingRow = memo(function SettingRow({
   }, [value]);
 
   return (
-    <View style={styles.rowWrap}>
+    <Pressable
+      style={styles.rowWrap}
+      onPress={() => inputRef.current?.focus()}
+      hitSlop={6}
+    >
       <View style={styles.rowTop}>
         <Text style={styles.rowLabel}>{label}</Text>
         <View style={styles.valueInputWrap}>
           <TextInput
+            ref={inputRef}
             value={text}
             onChangeText={setText}
             onFocus={() => onFocusChange?.(true)}
@@ -54,17 +59,7 @@ const SettingRow = memo(function SettingRow({
           <Text style={styles.suffix}>{suffix}</Text>
         </View>
       </View>
-
-      <SafeSlider
-        label={label}
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        suffix={suffix}
-        onChange={onChange}
-      />
-    </View>
+    </Pressable>
   );
 });
 

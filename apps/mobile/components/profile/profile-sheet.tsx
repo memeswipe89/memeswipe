@@ -39,8 +39,8 @@ import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { useAuth } from '@/contexts/auth-context';
 import { useWalletContext } from '@/contexts/wallet-context';
 
-import { ChainSwitcher } from './chain-switcher';
 import { TradeSettings } from './trade-settings';
+import { SolanaIcon } from '../icons/SolanaIcon';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.8);
@@ -73,8 +73,6 @@ export const ProfileSheet = memo(
     const {
       profileName,
       setProfileName,
-      activeChain,
-      setActiveChain,
       tradeAmount,
       tpROI,
       stopLoss,
@@ -268,7 +266,10 @@ export const ProfileSheet = memo(
                   <View style={styles.section}>
                     <Text style={styles.sectionTitle}>User Info</Text>
                     <View style={styles.balanceTopWrap}>
-                      <Text style={styles.balanceTopLabel}>Balance (SOL)</Text>
+                      <View style={styles.balanceTopLabelRow}>
+                        <SolanaIcon size={26} />
+                        <Text style={styles.balanceTopLabel}>Balance (SOL)</Text>
+                      </View>
                       <Text style={styles.balanceTopValue}>
                         {walletSolBalance == null ? '--' : `${walletSolBalance.toFixed(4)} SOL`}
                       </Text>
@@ -297,9 +298,6 @@ export const ProfileSheet = memo(
                   <TradeSettings onInputFocusChange={setInputFocused} />
 
                   <View style={styles.actionsWrap}>
-                    <Text style={[styles.sectionTitle, styles.networkTitle]}>Network</Text>
-                    <ChainSwitcher value={activeChain} onChange={setActiveChain} />
-
                     <Text style={[styles.sectionTitle, styles.networkTitle]}>Actions</Text>
                     <Pressable style={styles.logoutButton} onPress={handleLogout}>
                       <Text style={styles.logoutIcon}>⇢</Text>
@@ -449,6 +447,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 10,
+  },
+  balanceTopLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   balanceTopLabel: {
     color: '#a7b4d5',
