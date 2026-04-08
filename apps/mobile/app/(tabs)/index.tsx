@@ -1527,7 +1527,7 @@ export default function HomeScreen() {
               <View style={styles.controlsRow}>
                 <View style={[styles.controlSlot, styles.controlSlotAmount]}>
                   <GlassControlPill
-                    label="Amount"
+                    label="AMT"
                     value={tradeAmount}
                     suffix="$"
                     onMinus={() => updateTradeAmount(-0.1)}
@@ -1552,6 +1552,7 @@ export default function HomeScreen() {
                 <View style={[styles.controlSlot, styles.controlSlotCompact]}>
                   <GlassControlPill
                     label="SL"
+                    icon="paper-plane"
                     value={stopLoss}
                     suffix="%"
                     onMinus={() => updateStopLoss(-0.1)}
@@ -1822,56 +1823,64 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   controlInner: {
-    minHeight: 40,
+    minHeight: 48,
     borderRadius: 999,
-    paddingHorizontal: 5,
+    paddingHorizontal: 6,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(15,15,20,0.8)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   controlButton: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.08)',
   },
+  controlButtonPressed: {
+    opacity: 0.7,
+  },
   controlButtonText: {
-    color: '#f5f7ff',
-    fontSize: 15,
-    fontWeight: '700',
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '900',
   },
   controlValueWrap: {
-    minWidth: 0,
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 8,
+  },
+  controlLabelRow: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
+  controlIcon: {
+    marginRight: 4,
+  },
   controlLabel: {
-    color: 'rgba(214,224,255,0.72)',
-    fontSize: 9,
-    fontWeight: '600',
-    letterSpacing: 0.35,
-    textTransform: 'uppercase',
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.2,
   },
   controlValue: {
     color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
   },
   controlInput: {
-    minWidth: 56,
-    height: 26,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)',
     color: '#fff',
-    textAlign: 'center',
-    fontSize: 12,
-    fontWeight: '700',
-    paddingHorizontal: 6,
+    fontSize: 17,
+    fontWeight: '800',
+    padding: 0,
+    textAlign: 'right',
+    minWidth: 64,
   },
   tradePopupOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -2038,6 +2047,7 @@ const styles = StyleSheet.create({
 
 const GlassControlPill = ({
   label,
+  icon,
   value,
   suffix,
   onMinus,
@@ -2045,6 +2055,7 @@ const GlassControlPill = ({
   onCommit,
 }: {
   label: string;
+  icon?: React.ComponentProps<typeof FontAwesome>['name'];
   value: number;
   suffix: string;
   onMinus: () => void;
@@ -2072,13 +2083,16 @@ const GlassControlPill = ({
   };
 
   return (
-    <LinearGradient colors={['rgba(115,143,255,0.24)', 'rgba(92,245,190,0.12)']} style={styles.controlRing}>
+    <LinearGradient colors={['#15151b', '#101014']} style={styles.controlRing}>
       <BlurView intensity={24} tint="dark" style={styles.controlInner}>
-        <Pressable onPress={onMinus} style={styles.controlButton}>
+        <Pressable onPress={onMinus} style={({ pressed }) => [styles.controlButton, pressed && styles.controlButtonPressed]}>
           <Text style={styles.controlButtonText}>-</Text>
         </Pressable>
         <Pressable style={styles.controlValueWrap} onPress={() => setEditing(true)}>
-          <Text style={styles.controlLabel}>{label}</Text>
+          <View style={styles.controlLabelRow}>
+            {icon && <FontAwesome name={icon} size={12} color="rgba(255,255,255,0.65)" style={styles.controlIcon} />}
+            <Text style={styles.controlLabel}>{label}</Text>
+          </View>
           {editing ? (
             <TextInput
               autoFocus
@@ -2095,7 +2109,7 @@ const GlassControlPill = ({
             </Text>
           )}
         </Pressable>
-        <Pressable onPress={onPlus} style={styles.controlButton}>
+        <Pressable onPress={onPlus} style={({ pressed }) => [styles.controlButton, pressed && styles.controlButtonPressed]}>
           <Text style={styles.controlButtonText}>+</Text>
         </Pressable>
       </BlurView>
