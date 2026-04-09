@@ -659,34 +659,10 @@ export default function HomeScreen() {
 
   useEffect(() => {
     let mounted = true;
-    const hydrateLastInputs = async () => {
-      try {
-        const [amountRaw, roiRaw] = await Promise.all([
-          AsyncStorage.getItem(LAST_AMOUNT_KEY),
-          AsyncStorage.getItem(LAST_ROI_KEY),
-        ]);
-        if (!mounted) return;
-        const amount = Number(amountRaw);
-        const roi = Number(roiRaw);
-        if (Number.isFinite(amount) && amount > 0) setTradeAmount(amount);
-        if (Number.isFinite(roi) && roi > 0) setTpROI(roi);
-      } catch (err) {
-        console.log('failed to load last input values', err);
-      }
-    };
-    hydrateLastInputs();
     return () => {
       mounted = false;
     };
   }, [setTpROI, setTradeAmount]);
-
-  useEffect(() => {
-    void AsyncStorage.setItem(LAST_AMOUNT_KEY, String(Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount)));
-  }, [tradeAmount]);
-
-  useEffect(() => {
-    void AsyncStorage.setItem(LAST_ROI_KEY, String(Math.max(MIN_PERCENT, tpROI)));
-  }, [tpROI]);
 
   useEffect(() => {
     let active = true;
@@ -1296,7 +1272,7 @@ export default function HomeScreen() {
         return false;
       }
       const amount = Number.isFinite(tradeAmount)
-        ? Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount)
+        ? parseFloat(Math.max(MIN_TRADE_AMOUNT_USD, tradeAmount).toFixed(5))
         : MIN_TRADE_AMOUNT_USD;
       const targetRoi = Number.isFinite(tpROI) ? Math.max(MIN_PERCENT, tpROI) : MIN_PERCENT;
 
@@ -1552,11 +1528,9 @@ export default function HomeScreen() {
                     pressed && styles.favoriteIconButtonPressed,
                   ]}
                 >
-                  <FontAwesome
-                    name={favoritesActive ? 'heart' : 'heart-o'}
-                    size={20}
-                    color={favoritesActive ? '#ffffff' : 'rgba(255,255,255,0.78)'}
-                  />
+                  <Text style={[styles.topBarHeart, favoritesActive && styles.topBarHeartActive]}>
+                    {favoritesActive ? '♥' : '♡'}
+                  </Text>
                 </Pressable>
                 <ProfileButton
                   onPress={() => profileSheetRef.current?.open()}
@@ -1781,7 +1755,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
   },
   brandAvatarText: {
-    color: '#151515',
+    color: '#fff',
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0.5,
@@ -1802,6 +1776,13 @@ const styles = StyleSheet.create({
   },
   favoriteIconButtonPressed: {
     opacity: 0.85,
+  },
+  topBarHeart: {
+    fontSize: 20,
+    color: 'rgba(255,255,255,0.78)',
+  },
+  topBarHeartActive: {
+    color: '#fff',
   },
   controlsRowWrap: {
     width: '100%',
@@ -1833,36 +1814,35 @@ const styles = StyleSheet.create({
   sourceTabRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 999,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    backgroundColor: 'rgba(255,255,255,0.02)',
+    backgroundColor: '#1c1c1e',
+    padding: 3,
   },
   sourceTab: {
     flex: 1,
     minWidth: 0,
     paddingVertical: 10,
     alignItems: 'center',
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 999,
+    backgroundColor: 'transparent',
   },
   sourceTabActive: {
-    borderColor: 'rgba(74,222,128,0.95)',
-    backgroundColor: 'rgba(74,222,128,0.15)',
+    backgroundColor: '#3a3a3c',
   },
   sourceTabText: {
-    color: 'rgba(225,235,255,0.5)',
-    fontSize: 13,
-    fontWeight: '700',
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 14,
+    fontWeight: '600',
   },
   sourceTabTextActive: {
-    color: '#4ade80',
+    color: '#fff',
+    fontWeight: '700',
   },
   sourceTabsWrap: {
     paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 6,
+    paddingTop: 8,
+    paddingBottom: 8,
   },
   deckArea: {
     flex: 1,

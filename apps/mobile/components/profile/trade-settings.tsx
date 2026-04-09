@@ -28,9 +28,13 @@ const SettingRow = memo(function SettingRow({
 }: SettingRowProps) {
   const inputRef = useRef<TextInput>(null);
   const [text, setText] = useState(String(value));
+  const dirtyRef = useRef(false);
 
   useEffect(() => {
-    setText(String(value));
+    // Only sync from context if user hasn't started editing
+    if (!dirtyRef.current) {
+      setText(String(value));
+    }
   }, [value]);
 
   return (
@@ -45,13 +49,19 @@ const SettingRow = memo(function SettingRow({
           <TextInput
             ref={inputRef}
             value={text}
-            onChangeText={setText}
+            onChangeText={(t) => {
+              dirtyRef.current = true;
+              setText(t);
+            }}
             onFocus={() => onFocusChange?.(true)}
             onBlur={() => {
               onFocusChange?.(false);
-              const parsed = clamp(Number(text), min, max);
-              onChange(parsed);
-              setText(String(parsed));
+              if (dirtyRef.current) {
+                const parsed = clamp(Number(text), min, max);
+                onChange(parsed);
+                setText(String(parsed));
+              }
+              dirtyRef.current = false;
             }}
             keyboardType="decimal-pad"
             style={styles.valueInput}

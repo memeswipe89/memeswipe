@@ -55,8 +55,6 @@ export const LoadingOverlay = memo(function LoadingOverlay({
       />
 
       <View style={styles.centerWrap}>
-        <LinearGradient colors={['rgba(82,130,255,0.22)', 'rgba(35,224,178,0.13)']} style={styles.glowHalo} />
-
         <Animated.View style={[styles.loaderCard, cardStyle]}>
           <BlurView intensity={35} tint="dark" style={styles.cardBlur}>
             <LinearGradient

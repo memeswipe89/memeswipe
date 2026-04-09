@@ -20,6 +20,7 @@ import { useLinkEmail, usePrivy } from "@privy-io/expo";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
+import { useTradeSettings } from "@/contexts/trade-settings-context";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
 import { SolanaIcon } from "@/components/icons/SolanaIcon";
 
@@ -31,6 +32,7 @@ const LAST_AMOUNT_KEY = "@memeswipe:lastAmount";
 const LAST_ROI_KEY = "@memeswipe:lastROI";
 const BONUS_2000_APPLIED_KEY = "@memeswipe:bonus2000:applied";
 const LOCAL_USER_ID_KEY = "@memeswipe:userId:v1";
+const TRADE_SETTINGS_KEY = "@memeswipe:trade-settings:v1";
 
 const getSolBalance = async (address: string): Promise<number> => {
   const response = await fetch(MAINNET_RPC_URL, {
@@ -76,6 +78,7 @@ export default function WalletScreen() {
   const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
   const { sendCode, linkWithCode } = useLinkEmail();
+  const { profileName } = useTradeSettings();
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -100,6 +103,7 @@ export default function WalletScreen() {
       LAST_ROI_KEY,
       BONUS_2000_APPLIED_KEY,
       LOCAL_USER_ID_KEY,
+      TRADE_SETTINGS_KEY,
     ]);
   };
 
@@ -339,6 +343,23 @@ export default function WalletScreen() {
       <View
         style={{
           marginTop: 6,
+          borderRadius: 10,
+          paddingVertical: 10,
+          paddingHorizontal: 12,
+          borderWidth: 1,
+          borderColor: "#2a2a2a",
+          backgroundColor: "#111",
+        }}
+      >
+        <Text style={{ color: "#8aa0b6", fontSize: 12 }}>Profile</Text>
+        <Text style={{ color: "#fff", marginTop: 3, fontSize: 18, fontWeight: "700" }}>
+          {profileName || 'Trader'}
+        </Text>
+      </View>
+
+      <View
+        style={{
+          marginTop: 8,
           borderRadius: 10,
           paddingVertical: 10,
           paddingHorizontal: 12,

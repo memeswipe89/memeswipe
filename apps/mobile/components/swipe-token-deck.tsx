@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { BlurView } from 'expo-blur';
 import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import Svg, { Path, G } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
@@ -100,6 +101,25 @@ const tokenPalette = (symbol: string) => {
 
   return palettes[sum % palettes.length];
 };
+
+const LinkIcon = ({ size = 15, color = '#7e88a8' }: { size?: number; color?: string }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
+      stroke={color}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <Path
+      d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+      stroke={color}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </Svg>
+);
 
 const FavoriteHeart = memo(function FavoriteHeart({
   isFavorite,
@@ -198,11 +218,13 @@ const DeckStatusCard = memo(function DeckStatusCard({
 }) {
   return (
     <View style={styles.emptyStateWrap}>
-      <BlurView intensity={24} tint="dark" style={styles.emptyState}>
-        {loading ? <ActivityIndicator size="small" color="#9bc2ff" style={styles.emptySpinner} /> : null}
-        <Text style={styles.emptyTitle}>{title}</Text>
-        <Text style={styles.emptySub}>{subtitle}</Text>
-      </BlurView>
+      <View style={styles.emptyStateOuter}>
+        <BlurView intensity={24} tint="dark" style={styles.emptyState}>
+          {loading ? <ActivityIndicator size="small" color="#9bc2ff" style={styles.emptySpinner} /> : null}
+          <Text style={styles.emptyTitle}>{title}</Text>
+          <Text style={styles.emptySub}>{subtitle}</Text>
+        </BlurView>
+      </View>
     </View>
   );
 });
@@ -288,7 +310,7 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                             Linking.openURL(url).catch(() => undefined);
                           }}
                         >
-                          <Text style={styles.socialIcon}>🔗</Text>
+                          <LinkIcon size={15} color="#7e88a8" />
                         </Pressable>
                         <Pressable
                           hitSlop={12}
@@ -505,7 +527,6 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   if (isLoading) {
     return (
       <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
-        <View style={styles.glowOrb} />
         <DeckStatusCard
           title="Loading Tokens..."
           subtitle="Fetching live token data for this feed."
@@ -545,14 +566,6 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
             />
             <Animated.View pointerEvents="none" style={[styles.successBadge, successBadgeStyle]}>
               <Text style={styles.successBadgeText}>✓</Text>
-            </Animated.View>
-
-            <Animated.View style={[styles.overlayBadge, styles.overlayLeft, leftOverlayStyle]}>
-              <Text style={styles.overlayLeftText}>REJECT</Text>
-            </Animated.View>
-
-            <Animated.View style={[styles.overlayBadge, styles.overlayRight, rightOverlayStyle]}>
-              <Text style={styles.overlayRightText}>BUY</Text>
             </Animated.View>
           </Animated.View>
         </GestureDetector>
@@ -898,15 +911,19 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 25,
+  },
+  emptyStateOuter: {
+    width: SCREEN_WIDTH * 0.80,
+    borderRadius: 32,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
   },
   emptyState: {
-    width: SCREEN_WIDTH * 0.85,
+    width: '100%',
     backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 20,
     padding: 22,
-    borderColor: 'rgba(255,255,255,0.14)',
-    borderWidth: 1,
     alignItems: 'center',
   },
   emptySpinner: {
