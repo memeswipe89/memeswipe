@@ -32,17 +32,6 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'T & C',
-          tabBarIcon: ({ color, focused }) => (
-            <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
-              <MaterialIcons name="gavel" size={22} color={color} />
-            </View>
-          ),
-        }}
-      />
-      <Tabs.Screen
         name="trades"
         options={{
           title: 'Trades',
@@ -60,6 +49,17 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
               <MaterialIcons name="credit-card" size={22} color={color} />
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="explore"
+        options={{
+          title: 'T & C',
+          tabBarIcon: ({ color, focused }) => (
+            <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
+              <MaterialIcons name="gavel" size={22} color={color} />
             </View>
           ),
         }}
