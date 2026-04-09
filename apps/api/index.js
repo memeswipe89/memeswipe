@@ -148,6 +148,13 @@ function formatPair(pair, options = {}) {
     image: pair.info?.imageUrl || null,
     imageUrl: pair.info?.imageUrl || null,
 
+    website: (Array.isArray(pair.info?.websites) && pair.info.websites[0]?.url) || null,
+    twitter: (() => {
+      const socials = Array.isArray(pair.info?.socials) ? pair.info.socials : [];
+      const tw = socials.find((s) => s?.type === 'twitter');
+      return tw?.url || null;
+    })(),
+
     pairAddress: pair.pairAddress || "",
     dexId: pair.dexId || "",
     url: pair.url || "",

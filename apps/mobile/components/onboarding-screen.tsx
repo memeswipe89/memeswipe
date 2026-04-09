@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   Pressable,
@@ -93,6 +94,7 @@ export function OnboardingScreen() {
 
   const [currentStep, setCurrentStep] = useState<OnboardingStep>("twitter");
   const [isOnboarding, setIsOnboarding] = useState(false);
+  const [twitterLoading, setTwitterLoading] = useState(false);
   const [emailInput, setEmailInput] = useState("");
   const [codeInput, setCodeInput] = useState("");
   const [sendingCode, setSendingCode] = useState(false);
@@ -195,30 +197,27 @@ export function OnboardingScreen() {
   }, [completeOnboarding, hasEmail, hasTwitter, hasWallet, isLoggedIn, isReady, user, tradingWalletAddress]);
 
   const handleTwitterConnect = async () => {
-
     try {
       if (hasTwitter) {
         setCurrentStep("email");
         return;
       }
-
+      setTwitterLoading(true);
       if (user) {
         await link({ provider: "twitter" });
       } else {
         await login({ provider: "twitter" });
       }
-
     } catch (error) {
-
       console.error("Twitter login error:", error);
       const friendly = getUserFriendlyAuthError(error, {
         title: "Twitter connection failed",
         message: "Could not connect your Twitter account. Please try again.",
       });
       Alert.alert(friendly.title, friendly.message);
-
+    } finally {
+      setTwitterLoading(false);
     }
-
   };
 
   const handleSendCode = async () => {
@@ -319,8 +318,12 @@ export function OnboardingScreen() {
         <View style={styles.actionContainer}>
 
           {currentStep === "twitter" && (
-            <Pressable style={styles.primaryButton} onPress={handleTwitterConnect}>
-              <Text style={styles.primaryButtonText}>Connect Twitter</Text>
+            <Pressable style={[styles.primaryButton, twitterLoading && styles.primaryButtonDisabled]} onPress={handleTwitterConnect} disabled={twitterLoading}>
+              {twitterLoading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.primaryButtonText}>Connect Twitter</Text>
+              )}
             </Pressable>
           )}
 
@@ -419,10 +422,10 @@ const styles = StyleSheet.create({
   container:{flex:1,width:SCREEN_WIDTH,height:SCREEN_HEIGHT},
   keyboard:{flex:1},
   center:{justifyContent:"center",alignItems:"center"},
-  content:{flexGrow:1,paddingHorizontal:24,paddingTop:80,paddingBottom:40},
+  content:{flexGrow:1,paddingHorizontal:24,paddingTop:190,paddingBottom:40},
   header:{alignItems:"center",marginBottom:60},
-  title:{fontSize:32,fontWeight:"700",color:"#fff"},
-  subtitle:{fontSize:18,color:"#888"},
+  title:{fontSize:32,fontWeight:"700",color:"#fff",textAlign:"center"},
+  subtitle:{fontSize:18,color:"#888",textAlign:"center"},
   steps:{flex:1,justifyContent:"center",gap:24},
   step:{flexDirection:"row",alignItems:"center",padding:20,backgroundColor:"#1a1a1a",borderRadius:16,borderWidth:1,borderColor:"#333"},
   activeStep:{borderColor:"#007AFF",backgroundColor:"#001122"},
@@ -435,6 +438,7 @@ const styles = StyleSheet.create({
   activeStepTitle:{color:"#fff"},
   actionContainer:{marginTop:40},
   primaryButton:{backgroundColor:"#007AFF",paddingVertical:16,borderRadius:12,alignItems:"center"},
+  primaryButtonDisabled:{opacity:0.7},
   primaryButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
   secondaryButton:{backgroundColor:"#1a1a1a",paddingVertical:14,borderRadius:12,alignItems:"center",borderWidth:1,borderColor:"#333",marginTop:12},
   secondaryButtonText:{color:"#fff",fontSize:16,fontWeight:"600"},

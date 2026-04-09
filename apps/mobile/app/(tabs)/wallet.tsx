@@ -332,7 +332,7 @@ export default function WalletScreen() {
     <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={{ paddingBottom: 18 + keyboardHeight }}
+        contentContainerStyle={{ paddingBottom: 110 + keyboardHeight }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >

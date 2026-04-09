@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -220,10 +221,131 @@ const getDisplayedPnl = (trade: TradeItem) => {
   return { pnlPct: livePnlPct, pnlUsd: livePnlUsd };
 };
 
+function TradeCard({
+  item,
+  solPriceUsd,
+  closingId,
+  closeTrade,
+  markUncloseable,
+  openSolscanTx,
+}: {
+  item: TradeItem;
+  solPriceUsd: number | null;
+  closingId: string | null;
+  closeTrade: (trade: TradeItem) => void;
+  markUncloseable: (trade: TradeItem) => void;
+  openSolscanTx: (sig: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { pnlPct, pnlUsd } = getDisplayedPnl(item);
+  const pnlSol = solPriceUsd && solPriceUsd > 0 ? pnlUsd / solPriceUsd : null;
+  const isWin = item.closeReason === 'tp' || (pnlUsd > 0 && item.status === 'closed');
+  const isLoss = item.closeReason === 'sl' || (pnlUsd < 0 && item.status === 'closed');
+
+  return (
+    <Pressable style={styles.card} onPress={() => setExpanded((v) => !v)}>
+      {/* Collapsed row */}
+      <View style={styles.cardTop}>
+        <View style={styles.cardTopLeft}>
+          <Text style={styles.symbol}>{item.symbol}</Text>
+          <Text style={[styles.statusBadge, item.status === 'open' ? styles.statusOpen : styles.statusClosed]}>
+            {item.status.toUpperCase()}
+          </Text>
+        </View>
+        <View style={styles.cardTopRight}>
+          <Text style={styles.amountText}>${item.displayAmountUsd.toFixed(5)}</Text>
+          {item.status === 'closed' && pnlSol !== null ? (
+            <Text style={[styles.pnlText, isWin ? styles.green : styles.red]}>
+              {isWin ? '▲' : '▼'} {Math.abs(pnlSol).toFixed(10)} SOL
+            </Text>
+          ) : item.status === 'open' && pnlSol !== null ? (
+            <Text style={[styles.pnlText, pnlSol >= 0 ? styles.green : styles.red]}>
+              {pnlSol >= 0 ? '+' : ''}{pnlSol.toFixed(10)} SOL
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
+      {/* Expanded detail */}
+      {expanded && (
+        <View style={styles.expandedWrap}>
+          <View style={styles.divider} />
+          {item.createdAt ? <Text style={styles.meta}>Created: {new Date(item.createdAt).toLocaleString()}</Text> : null}
+          <Text style={styles.meta}>Entry Price: {item.entryPriceUsd ? `$${item.entryPriceUsd.toFixed(9)}` : '--'}</Text>
+          {item.status === 'closed' ? (
+            <Text style={styles.meta}>Close Price: {item.closePriceUsd ? `$${item.closePriceUsd.toFixed(9)}` : '--'}</Text>
+          ) : null}
+          <Text style={styles.meta}>Live Price: {item.livePriceUsd ? `$${item.livePriceUsd.toFixed(9)}` : '--'}</Text>
+          {item.status === 'closed' ? (
+            <>
+              {item.closedAt ? <Text style={styles.meta}>Closed: {new Date(item.closedAt).toLocaleString()}</Text> : null}
+              <Text style={[styles.meta, isWin ? styles.green : styles.red]}>
+                {isWin ? 'Win SOL' : 'Loss SOL'}: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
+              </Text>
+              {item.closeReason ? (
+                <Text style={styles.meta}>
+                  Closed by {item.closeReason.toUpperCase()}
+                  {Number.isFinite(item.closeTriggerPct ?? NaN) ? ` (${(item.closeTriggerPct! > 0 ? '+' : '')}${item.closeTriggerPct!.toFixed(2)}%)` : ''}
+                </Text>
+              ) : item.closeTxSignature ? (
+                <Text style={styles.meta}>Closed by MANUAL</Text>
+              ) : null}
+            </>
+          ) : (
+            <>
+              {item.entryPriceUsd && item.livePriceUsd ? (
+                <Text style={[styles.meta, item.livePriceUsd >= item.entryPriceUsd ? styles.green : styles.red]}>
+                  Change: {(((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100).toFixed(2)}%
+                </Text>
+              ) : null}
+              <Text style={[styles.meta, pnlPct !== null ? (pnlPct >= 0 ? styles.green : styles.red) : null]}>
+                PnL %: {pnlPct === null ? '--' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(4)}%`}
+              </Text>
+              <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
+                PnL SOL: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
+              </Text>
+            </>
+          )}
+          {item.closeError ? (
+            <Text style={[styles.meta, styles.red]}>Close failed. Try again or mark uncloseable.</Text>
+          ) : null}
+          {item.txSignature ? (
+            <Pressable onPress={() => openSolscanTx(item.txSignature!)} style={styles.linkBtn}>
+              <Text style={styles.linkBtnText}>View Open Tx</Text>
+            </Pressable>
+          ) : null}
+          {item.closeTxSignature ? (
+            <Pressable onPress={() => openSolscanTx(item.closeTxSignature!)} style={styles.linkBtn}>
+              <Text style={styles.linkBtnText}>View Close Tx</Text>
+            </Pressable>
+          ) : null}
+          {item.status === 'open' && !item.closeTxSignature && item.closeReason !== 'failed' ? (
+            <Pressable
+              onPress={() => closeTrade(item)}
+              disabled={closingId === item.id}
+              style={[styles.closeBtn, closingId === item.id && { opacity: 0.6 }]}
+            >
+              <Text style={styles.closeBtnText}>
+                {closingId === item.id ? 'Closing...' : item.closeError ? 'Retry Close' : 'Close Trade'}
+              </Text>
+            </Pressable>
+          ) : null}
+          {item.status === 'open' && !item.closeTxSignature && item.closeError && item.closeReason !== 'failed' ? (
+            <Pressable onPress={() => markUncloseable(item)} style={styles.closeBtnSecondary}>
+              <Text style={styles.closeBtnSecondaryText}>Mark Uncloseable</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
 export default function TradesScreen() {
   const { getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider, getOrCreateLocalUserId } =
     useWalletContext();
   const [query, setQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -773,6 +895,9 @@ export default function TradesScreen() {
       <View style={styles.headerRow}>
         <Text style={styles.title}>Trades</Text>
         <View style={styles.headerActions}>
+          <Pressable onPress={() => setShowSearch(v => !v)} style={styles.iconBtn}>
+            <MaterialIcons name={showSearch ? 'search-off' : 'search'} size={20} color="#fff" />
+          </Pressable>
           <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
             <Text style={styles.refreshText}>Refresh</Text>
           </Pressable>
@@ -783,13 +908,14 @@ export default function TradesScreen() {
         {[
           {
             label: 'Total PnL',
-            value: `${summary.totalPnlSol >= 0 ? '+' : ''}${summary.totalPnlSol.toFixed(4)} SOL`,
+            value: `${summary.totalPnlSol >= 0 ? '+' : ''}${summary.totalPnlSol.toFixed(10)} SOL`,
             tone: 'positive',
+            flex: 2,
           },
-          { label: 'Win Rate', value: `${summary.winRate}%`, tone: 'neutral' },
-          { label: 'Trades', value: String(summary.totalTrades), tone: 'neutral' },
+          { label: 'Win Rate', value: `${summary.winRate}%`, tone: 'neutral', flex: 1 },
+          { label: 'Trades', value: String(summary.totalTrades), tone: 'neutral', flex: 0.6 },
         ].map((item) => (
-          <View key={item.label} style={styles.summaryCard}>
+          <View key={item.label} style={[styles.summaryCard, { flex: item.flex }]}>
             <Text style={styles.summaryLabel}>{item.label}</Text>
             <Text style={[styles.summaryValue, item.tone === 'positive' && styles.summaryPositive]}>
               {item.value}
@@ -798,16 +924,19 @@ export default function TradesScreen() {
         ))}
       </View>
 
-      <TextInput
-        value={query}
-        onChangeText={(text) => {
-          setQuery(text);
-          setPage(1);
-        }}
-        placeholder="Search by token"
-        placeholderTextColor="#7f8cae"
-        style={styles.search}
-      />
+      {showSearch && (
+        <TextInput
+          value={query}
+          onChangeText={(text) => {
+            setQuery(text);
+            setPage(1);
+          }}
+          placeholder="Search by token"
+          placeholderTextColor="#7f8cae"
+          style={styles.search}
+          autoFocus
+        />
+      )}
 
       <View style={styles.filterRow}>
         {(['all', 'open', 'closed', 'profit', 'loss'] as Filter[]).map((item) => (
@@ -847,104 +976,14 @@ export default function TradesScreen() {
           data={paged}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
-            <View style={styles.card}>
-              {(() => {
-                const { pnlPct, pnlUsd } = getDisplayedPnl(item);
-                const pnlSol = solPriceUsd && solPriceUsd > 0 ? pnlUsd / solPriceUsd : null;
-                return (
-                  <>
-              <View style={styles.cardTop}>
-                <Text style={styles.symbol}>{item.symbol}</Text>
-                <Text style={styles.status}>{item.status}</Text>
-              </View>
-              <Text style={styles.meta}>Amount: ${item.displayAmountUsd.toFixed(6)}</Text>
-              {item.createdAt ? <Text style={styles.meta}>Created: {new Date(item.createdAt).toLocaleString()}</Text> : null}
-              <Text style={styles.meta}>
-                Entry Price: {item.entryPriceUsd ? `$${item.entryPriceUsd.toFixed(9)}` : '--'}
-              </Text>
-              {item.status === 'closed' ? (
-                <Text style={styles.meta}>
-                  Close Price: {item.closePriceUsd ? `$${item.closePriceUsd.toFixed(9)}` : '--'}
-                </Text>
-              ) : null}
-              <Text style={styles.meta}>
-                Live Price: {item.livePriceUsd ? `$${item.livePriceUsd.toFixed(9)}` : '--'}
-              </Text>
-              {item.status === 'closed' ? (
-                <>
-                  {item.closedAt ? (
-                    <Text style={styles.meta}>Closed: {new Date(item.closedAt).toLocaleString()}</Text>
-                  ) : null}
-                  <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
-                    {item.closeReason === 'tp' ? 'Win SOL' : 'Loss SOL'}:{' '}
-                    {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
-                  </Text>
-                </>
-              ) : (
-                <>
-                  {item.entryPriceUsd && item.livePriceUsd ? (
-                    <Text style={[styles.meta, item.livePriceUsd >= item.entryPriceUsd ? styles.green : styles.red]}>
-                      Change: {(((item.livePriceUsd - item.entryPriceUsd) / item.entryPriceUsd) * 100).toFixed(2)}%
-                    </Text>
-                  ) : null}
-                  <Text style={[styles.pnl, pnlUsd >= 0 ? styles.green : styles.red]}>
-                    {pnlUsd >= 0 ? '+' : ''}
-                    {pnlUsd.toFixed(6)} USDT
-                  </Text>
-                  <Text style={[styles.meta, pnlPct !== null ? (pnlPct >= 0 ? styles.green : styles.red) : null]}>
-                    PnL %: {pnlPct === null ? '--' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(4)}%`}
-                  </Text>
-                  <Text style={[styles.meta, pnlSol !== null ? (pnlSol >= 0 ? styles.green : styles.red) : null]}>
-                    PnL SOL: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
-                  </Text>
-                </>
-              )}
-              {item.status === 'closed' && item.closeReason ? (
-                <Text style={styles.meta}>
-                  CLOSED BY {item.closeReason.toUpperCase()}
-                  {Number.isFinite(item.closeTriggerPct || Number.NaN)
-                    ? ` (${(item.closeTriggerPct as number) > 0 ? '+' : ''}${(item.closeTriggerPct as number).toFixed(2)}%)`
-                    : ''}
-                </Text>
-              ) : null}
-              {item.status === 'closed' && !item.closeReason && item.closeTxSignature ? (
-                <Text style={styles.meta}>Closed by MANUAL</Text>
-              ) : null}
-              {item.closeError ? (
-                <Text style={[styles.meta, styles.red]}>
-                  Close failed. Try again later or mark as uncloseable.
-                </Text>
-              ) : null}
-              {item.txSignature ? (
-                <Pressable onPress={() => void openSolscanTx(item.txSignature as string)} style={styles.linkBtn}>
-                  <Text style={styles.linkBtnText}>View Open Tx</Text>
-                </Pressable>
-              ) : null}
-              {item.closeTxSignature ? (
-                <Pressable onPress={() => void openSolscanTx(item.closeTxSignature as string)} style={styles.linkBtn}>
-                  <Text style={styles.linkBtnText}>View Close Tx</Text>
-                </Pressable>
-              ) : null}
-              {item.status === 'open' && !item.closeTxSignature && item.closeReason !== 'failed' ? (
-                <Pressable
-                  onPress={() => void closeTrade(item)}
-                  disabled={closingId === item.id}
-                  style={[styles.closeBtn, closingId === item.id && { opacity: 0.6 }]}
-                >
-                  <Text style={styles.closeBtnText}>
-                    {closingId === item.id ? 'Closing...' : item.closeError ? 'Retry Close' : 'Close Trade'}
-                  </Text>
-                </Pressable>
-              ) : null}
-              {item.status === 'open' && !item.closeTxSignature && item.closeError && item.closeReason !== 'failed' ? (
-                <Pressable onPress={() => void markUncloseable(item)} style={styles.closeBtnSecondary}>
-                  <Text style={styles.closeBtnSecondaryText}>Mark Uncloseable</Text>
-                </Pressable>
-              ) : null}
-                  </>
-                );
-              })()}
-            </View>
+            <TradeCard
+              item={item}
+              solPriceUsd={solPriceUsd}
+              closingId={closingId}
+              closeTrade={(t) => void closeTrade(t)}
+              markUncloseable={(t) => void markUncloseable(t)}
+              openSolscanTx={(sig) => void openSolscanTx(sig)}
+            />
           )}
           contentContainerStyle={styles.listContent}
           onEndReached={() => {
@@ -985,6 +1024,16 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.18)',
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
+  iconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   refreshText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   search: {
     height: 42,
@@ -1011,7 +1060,7 @@ const styles = StyleSheet.create({
   centerState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   muted: { color: '#9db0db' },
   error: { color: '#ff8a8a' },
-  listContent: { paddingBottom: 40, gap: 10 },
+  listContent: { paddingBottom: 110, gap: 10 },
   card: {
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
@@ -1020,8 +1069,16 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardTopRight: { alignItems: 'flex-end', gap: 2 },
   symbol: { color: '#fff', fontWeight: '800', fontSize: 16 },
-  status: { color: '#9db0db', textTransform: 'uppercase', fontSize: 11, fontWeight: '700' },
+  statusBadge: { fontSize: 10, fontWeight: '700', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 999 },
+  statusOpen: { backgroundColor: 'rgba(74,222,128,0.15)', color: '#4ade80' },
+  statusClosed: { backgroundColor: 'rgba(255,255,255,0.08)', color: '#9db0db' },
+  amountText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  pnlText: { fontSize: 12, fontWeight: '700' },
+  expandedWrap: { marginTop: 10 },
+  divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginBottom: 8 },
   meta: { color: '#9db0db', marginTop: 4, fontSize: 12 },
   pnl: { marginTop: 8, fontWeight: '700' },
   green: { color: '#4ade80' },

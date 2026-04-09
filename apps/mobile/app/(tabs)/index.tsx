@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -62,6 +62,9 @@ type FavoriteToken = {
   change24hPct: number;
   chartData: number[];
   source?: string;
+  imageUrl?: string;
+  website?: string;
+  twitter?: string;
 };
 type TradeOpenPopupState = {
   visible: boolean;
@@ -93,6 +96,9 @@ type ApiToken = {
   tradeRoute?: "jupiter" | "bags";
   isTradable?: boolean;
   tradableReason?: string;
+  imageUrl?: string;
+  website?: string;
+  twitter?: string;
 };
 
 const toNumber = (value: unknown, fallback = 0) => {
@@ -127,7 +133,9 @@ const favoriteTokenToSwipe = (item: FavoriteToken): SwipeToken => ({
   chartData: item.chartData.length ? item.chartData : buildFallbackChart(item.priceUsd),
   graduationTime: item.chain === 'base' ? 'Favorite • Base' : 'Favorite',
   source: item.source || (item.chain === 'base' ? 'bags' : 'pumpfun'),
-  chain: item.chain,
+  imageUrl: item.imageUrl,
+  website: item.website,
+  twitter: item.twitter,
 });
 
 const buildFavoriteDeckTokens = (items: FavoriteToken[], source: 'pumpfun' | 'bags') =>
@@ -155,6 +163,9 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
     tradeRoute: token.tradeRoute,
     isTradable: token.isTradable ?? true,
     tradableReason: token.tradableReason || undefined,
+    imageUrl: token.imageUrl || undefined,
+    website: token.website || undefined,
+    twitter: token.twitter || undefined,
   };
 };
 
@@ -331,6 +342,26 @@ export default function HomeScreen() {
   });
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI, setStopLoss } =
     useTradeSettings();
+
+  type EditField = 'AMT' | 'ROI' | 'SL';
+  const [editField, setEditField] = useState<EditField | null>(null);
+  const [editInput, setEditInput] = useState('');
+
+  const openEdit = (field: EditField) => {
+    const current = field === 'AMT' ? String(tradeAmount) : field === 'ROI' ? String(tpROI) : String(stopLoss);
+    setEditInput(current);
+    setEditField(field);
+  };
+
+  const confirmEdit = () => {
+    const num = parseFloat(editInput);
+    if (Number.isFinite(num) && num > 0) {
+      if (editField === 'AMT') setTradeAmount(num);
+      else if (editField === 'ROI') setTpROI(num);
+      else if (editField === 'SL') setStopLoss(num);
+    }
+    setEditField(null);
+  };
   const loadedAddressRef = useRef<Record<RemoteSegment, Set<string>>>(makeSegmentMap(() => new Set<string>()));
   const initialRetryScheduledRef = useRef<Record<RemoteSegment, boolean>>(makeSegmentMap(() => false));
   const recoveredHiddenRef = useRef(false);
@@ -1536,9 +1567,9 @@ export default function HomeScreen() {
             </View>
             <View style={styles.controlsRowWrap}>
             <View style={styles.simplePillRow}>
-              <SimplePill label="AMT" value={`$${tradeAmount.toFixed(2)}`} />
-              <SimplePill label="ROI" value={`${tpROI.toFixed(1)}%`} />
-              <SimplePill label="SL" value={`${stopLoss.toFixed(0)}%`} />
+              <SimplePill label="AMT" value={`$${tradeAmount.toFixed(4)}`} onPress={() => openEdit('AMT')} />
+              <SimplePill label="ROI" value={`${tpROI.toFixed(4)}%`} onPress={() => openEdit('ROI')} />
+              <SimplePill label="SL" value={`${stopLoss.toFixed(4)}%`} onPress={() => openEdit('SL')} />
             </View>
           </View>
             <View style={styles.sourceTabsWrap}>
@@ -1666,6 +1697,35 @@ export default function HomeScreen() {
             </View>
           </View>
         ) : null}
+
+        <Modal visible={editField !== null} transparent animationType="fade" onRequestClose={() => setEditField(null)}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.editModalOverlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditField(null)} />
+            <View style={styles.editModalBox}>
+              <Text style={styles.editModalLabel}>
+                {editField === 'AMT' ? 'Trade Amount ($)' : editField === 'ROI' ? 'Take Profit ROI (%)' : 'Stop Loss (%)'}
+              </Text>
+              <TextInput
+                style={styles.editModalInput}
+                value={editInput}
+                onChangeText={setEditInput}
+                keyboardType="decimal-pad"
+                autoFocus
+                selectTextOnFocus
+                placeholderTextColor="rgba(255,255,255,0.3)"
+              />
+              <View style={styles.editModalActions}>
+                <Pressable style={styles.editModalCancel} onPress={() => setEditField(null)}>
+                  <Text style={styles.editModalCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable style={styles.editModalConfirm} onPress={confirmEdit}>
+                  <Text style={styles.editModalConfirmText}>Save</Text>
+                </Pressable>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+
       </SafeAreaView>
     </GestureHandlerRootView>
   );
@@ -1694,7 +1754,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 8,
+    paddingTop: 16,
     paddingBottom: 8,
   },
   topActionsRow: {
@@ -1788,16 +1848,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.04)',
   },
   sourceTabActive: {
-    borderColor: 'rgba(97,180,255,0.95)',
-    backgroundColor: 'rgba(97,180,255,0.2)',
+    borderColor: 'rgba(74,222,128,0.95)',
+    backgroundColor: 'rgba(74,222,128,0.15)',
   },
   sourceTabText: {
-    color: 'rgba(225,235,255,0.7)',
+    color: 'rgba(225,235,255,0.5)',
     fontSize: 13,
     fontWeight: '700',
   },
   sourceTabTextActive: {
-    color: '#fff',
+    color: '#4ade80',
   },
   sourceTabsWrap: {
     paddingHorizontal: 20,
@@ -1806,7 +1866,7 @@ const styles = StyleSheet.create({
   },
   deckArea: {
     flex: 1,
-    paddingBottom: 10,
+    paddingBottom: 88,
   },
   deckWrapper: {
     flex: 1,
@@ -1826,13 +1886,13 @@ const styles = StyleSheet.create({
   },
   simplePillLabel: {
     color: 'rgba(255,255,255,0.45)',
-    fontSize: 13,
+    fontSize: 10,
     letterSpacing: 1,
     fontWeight: '600',
   },
   simplePillValue: {
     color: '#fff',
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '700',
   },
   tradePopupOverlay: {
@@ -1996,11 +2056,77 @@ const styles = StyleSheet.create({
     color: 'rgba(170,165,180,0.5)',
     fontSize: 10,
   },
+  editModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 32,
+  },
+  editModalBox: {
+    width: '100%',
+    backgroundColor: '#1a1b22',
+    borderRadius: 20,
+    padding: 24,
+    gap: 16,
+  },
+  editModalLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  editModalInput: {
+    backgroundColor: '#25272f',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  editModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  editModalCancel: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 12,
+    backgroundColor: '#25272f',
+    alignItems: 'center',
+  },
+  editModalCancelText: {
+    color: 'rgba(255,255,255,0.5)',
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  editModalConfirm: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 12,
+    backgroundColor: '#4ade80',
+    alignItems: 'center',
+  },
+  editModalConfirmText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 15,
+  },
 });
 
-const SimplePill = ({ label, value }: { label: string; value: string }) => (
-  <View style={styles.simplePill}>
+const SimplePill = ({
+  label,
+  value,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  onPress: () => void;
+}) => (
+  <Pressable style={styles.simplePill} onPress={onPress}>
     <Text style={styles.simplePillLabel}>{label}</Text>
     <Text style={styles.simplePillValue}>{value}</Text>
-  </View>
+  </Pressable>
 );

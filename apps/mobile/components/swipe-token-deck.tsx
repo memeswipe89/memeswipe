@@ -1,8 +1,10 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Clipboard, Dimensions, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { BlurView } from 'expo-blur';
 import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
@@ -45,6 +47,9 @@ export type SwipeToken = {
   tradeRoute?: "jupiter" | "bags";
   isTradable?: boolean;
   tradableReason?: string;
+  imageUrl?: string;
+  website?: string;
+  twitter?: string;
 };
 
 type SwipeTokenDeckProps = {
@@ -137,10 +142,12 @@ const MetricRow = memo(function MetricRow({
   label,
   value,
   valueStyle,
+  isLast,
 }: {
   label: string;
   value: string;
   valueStyle?: object;
+  isLast?: boolean;
 }) {
   const flash = useSharedValue(0);
   const y = useSharedValue(0);
@@ -155,7 +162,7 @@ const MetricRow = memo(function MetricRow({
   }));
 
   return (
-    <View style={styles.metricRow}>
+    <View style={[styles.metricRow, isLast && { borderBottomWidth: 0 }]}>
       <Text style={styles.metricLabel}>{label}</Text>
       <Animated.Text style={[styles.metricValue, valueStyle, animatedStyle]}>{value}</Animated.Text>
     </View>
@@ -207,6 +214,7 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
       ? token.chartData[token.chartData.length - 1] >= token.chartData[0]
       : token.change24hPct >= 0;
   const [history, setHistory] = useState<number[]>(token.chartData || []);
+  const [copied, setCopied] = useState(false);
   const compactCurrency = useMemo(
     () =>
       new Intl.NumberFormat('en-US', {
@@ -249,71 +257,105 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
   return (
     <View style={styles.cardWrap}>
       <View style={styles.card}>
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.cardScrollContent}
-          keyboardShouldPersistTaps="handled"
-          bounces
-          decelerationRate="normal"
-          overScrollMode="auto"
-          scrollEventThrottle={16}
-        >
+        <View style={styles.cardScrollContent}>
             <FavoriteHeart isFavorite={isFavorite} onPress={() => onToggleFavorite(token)} />
             <View style={styles.contentWrapper}>
               <View style={styles.headerSection}>
                 <View style={styles.headerTopRow}>
                   <View style={styles.headerTokenRow}>
-                    <ExpoLinearGradient colors={palette} style={styles.logoCircle}>
-                      <Text style={styles.logoText}>{token.symbol.slice(0, 2).toUpperCase()}</Text>
-                    </ExpoLinearGradient>
+                    {token.imageUrl ? (
+                      <Image
+                        source={{ uri: token.imageUrl }}
+                        style={styles.logoCircle}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                      />
+                    ) : (
+                      <ExpoLinearGradient colors={palette} style={styles.logoCircle}>
+                        <Text style={styles.logoText}>{token.symbol.slice(0, 2).toUpperCase()}</Text>
+                      </ExpoLinearGradient>
+                    )}
                     <View style={styles.headerIdentity}>
-                      <Text style={styles.tokenName}>{token.name}</Text>
-                      <Text style={styles.tokenSymbol}>${token.symbol.toUpperCase()}</Text>
-                      <Text style={styles.tokenAddress}>{shortAddress(token.address)}</Text>
+                      <View style={styles.symbolRow}>
+                        <Text style={styles.tokenName}>{token.symbol.toUpperCase()}</Text>
+                        <Pressable
+                          hitSlop={8}
+                          onPress={() => {
+                            const isBase = token.source === 'bags';
+                            const url = isBase
+                              ? `https://basescan.org/token/${token.address}`
+                              : `https://solscan.io/token/${token.address}`;
+                            Linking.openURL(url).catch(() => undefined);
+                          }}
+                        >
+                          <Text style={styles.socialIcon}>🔗</Text>
+                        </Pressable>
+                        <Pressable
+                          hitSlop={12}
+                          onPress={() => {
+                            Clipboard.setString(token.address);
+                            setCopied(true);
+                            setTimeout(() => setCopied(false), 2000);
+                          }}
+                          style={styles.copyBtn}
+                        >
+                          <MaterialIcons
+                            name={copied ? 'check' : 'content-copy'}
+                            size={16}
+                            color={copied ? '#4ade80' : '#7e88a8'}
+                          />
+                        </Pressable>
+                        {token.website ? (
+                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.website!).catch(() => undefined)}>
+                            <MaterialIcons name="language" size={16} color="#7e88a8" />
+                          </Pressable>
+                        ) : null}
+                        {token.twitter ? (
+                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.twitter!).catch(() => undefined)}>
+                            <Text style={styles.socialIcon}>𝕏</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                      <View style={styles.addressRow}>
+                        <Text style={styles.tokenFullName} numberOfLines={1}>{token.name}</Text>
+                      </View>
                     </View>
                   </View>
-                  <Text style={[styles.changeBadge, token.change24hPct >= 0 ? styles.greenValue : styles.redValue]}>
-                    {formatPct(token.change24hPct)}
-                  </Text>
                 </View>
-                <Text style={styles.bigPrice}>{formatCurrency(token.priceUsd)}</Text>
-                <View style={styles.statPillsRow}>
-                  <View style={styles.statPill}>
-                    <Text style={styles.statPillLabel}>24h Vol</Text>
-                    <Text style={styles.statPillValue}>{compactCurrency.format(token.volume24hUsd || 0)}</Text>
+                <View style={styles.priceRow}>
+                  <Text style={styles.bigPrice}>{formatCurrency(token.priceUsd)}</Text>
+                  <View style={[styles.changePill, token.change24hPct >= 0 ? styles.changePillGreen : styles.changePillRed]}>
+                    <MaterialIcons
+                      name={token.change24hPct >= 0 ? 'arrow-circle-up' : 'arrow-circle-down'}
+                      size={15}
+                      color={token.change24hPct >= 0 ? '#4ade80' : '#ff6b81'}
+                    />
+                    <Text style={[styles.changePillText, token.change24hPct >= 0 ? styles.greenValue : styles.redValue]}>
+                      {Math.abs(token.change24hPct).toFixed(2)}%
+                    </Text>
                   </View>
-                  <View style={styles.statPill}>
-                    <Text style={styles.statPillLabel}>MCap</Text>
-                    <Text style={styles.statPillValue}>{compactCurrency.format(token.marketCapUsd || 0)}</Text>
-                  </View>
+                </View>
+                <View style={styles.statDotRow}>
+                  
+                 
+                  <Text style={styles.statDotText}>MC {compactCurrency.format(token.marketCapUsd || 0)}</Text>
+                  <Text style={styles.statDotSep}>•</Text>
+                  <Text style={styles.statDotText}>24h Vol {compactCurrency.format(token.volume24hUsd || 0)}</Text>
                 </View>
               </View>
 
               <MomentumGraph data={history.length ? history : token.chartData} />
 
-              <View style={styles.timeSelectorRow}>
-                <Text style={styles.timeOption}>1H</Text>
-                <Text style={[styles.timeOption, styles.timeOptionActive]}>1D</Text>
-                <Text style={styles.timeOption}>1W</Text>
-                <Text style={styles.timeOption}>1M</Text>
-                <Text style={styles.timeOption}>ALL</Text>
-              </View>
-
               <View style={styles.metricsWrap}>
-                <MetricRow label="Price" value={formatCurrency(token.priceUsd)} valueStyle={priceUp ? styles.greenValue : undefined} />
+                <MetricRow label="Price" value={formatCurrency(token.priceUsd)} valueStyle={styles.greenValue} />
                 <MetricRow label="Liquidity" value={formatCurrency(token.liquidityUsd)} />
                 <MetricRow label="24h Volume" value={formatCurrency(token.volume24hUsd)} />
-                <MetricRow label="Market Cap" value={formatCurrency(token.marketCapUsd)} />
-                <MetricRow
-                  label="24h Change"
-                  value={formatPct(token.change24hPct)}
-                  valueStyle={token.change24hPct >= 0 ? styles.greenValue : styles.redValue}
-                />
+                <MetricRow label="Market Cap" value={formatCurrency(token.marketCapUsd)} isLast />
               </View>
             </View>
 
             <View style={styles.bottomActionSpace} />
-        </ScrollView>
+        </View>
       </View>
     </View>
   );
@@ -475,7 +517,6 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
 
   return (
     <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
-      <View style={styles.glowOrb} />
       <Animated.View style={[styles.bgTintLayer, bgTintStyle]} />
       <Animated.View pointerEvents="none" style={[styles.successFlash, successFlashStyle]} />
 
@@ -660,15 +701,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   logoCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 19,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
+    overflow: 'hidden',
+    backgroundColor: '#1C1F26',
   },
   logoText: {
     color: '#f6f7ff',
@@ -681,97 +720,100 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
   },
-  tokenSymbol: {
+  tokenFullName: {
     color: '#a0abc4',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  tokenAddress: {
-    color: '#7e88a8',
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '500',
+    flexShrink: 1,
+  },
+  symbolRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  socialIcon: {
+    fontSize: 14,
+    color: '#7e88a8',
+  },
+  copyBtn: {
+    padding: 4,
+    borderRadius: 6,
   },
   bigPrice: {
     color: '#ffffff',
     fontSize: 34,
     fontWeight: '800',
-    marginTop: 10,
     letterSpacing: 0.2,
   },
-  changeBadge: {
-    position: 'absolute',
-    right: 0,
-    top: 44,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    fontSize: 12,
-    fontWeight: '700',
-    backgroundColor: '#1C1F26',
-  },
-  statPillsRow: {
+  priceRow: {
     flexDirection: 'row',
-    gap: 8,
+    alignItems: 'center',
+    gap: 10,
     marginTop: 10,
   },
-  statPill: {
+  changePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  changePillGreen: {
+    backgroundColor: 'rgba(74,222,128,0.15)',
+  },
+  changePillRed: {
+    backgroundColor: 'rgba(255,107,129,0.15)',
+  },
+  changePillText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  statDotRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    backgroundColor: '#1C1F26',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-  statPillLabel: {
-    color: '#A8B0C0',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  statPillValue: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  metricsWrap: {
-    marginTop: 8,
-    gap: 8,
-    marginBottom: 0,
-    minHeight: 6 * 40 + 5 * 8,
-  },
-  graphContainer: {
     marginTop: 6,
-    height: 140,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: '#1C1F26',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
   },
-  metricRow: {
-    borderRadius: 16,
-    height: 40,
-    paddingHorizontal: 14,
-    backgroundColor: '#1C1F26',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  metricLabel: {
-    color: '#A8B0C0',
+  statDotText: {
+    color: '#7e88a8',
     fontSize: 13,
     fontWeight: '500',
   },
+  statDotSep: {
+    color: '#7e88a8',
+    fontSize: 13,
+  },
+  metricsWrap: {
+    marginTop: 8,
+    marginBottom: 0,
+  },
+  graphContainer: {
+    marginTop: 6,
+    width: '100%',
+  },
+  metricRow: {
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  metricLabel: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
   metricValue: {
     color: '#ffffff',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
-    minWidth: 95,
     textAlign: 'right',
   },
   greenValue: {
