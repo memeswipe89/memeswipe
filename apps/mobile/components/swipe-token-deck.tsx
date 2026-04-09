@@ -304,11 +304,22 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                     <View style={styles.headerIdentity}>
                       <View style={styles.symbolRow}>
                         <Text style={styles.tokenName}>{token.symbol.toUpperCase()}</Text>
+                        {/* Link icon → opens DexScreener in browser */}
+                        <Pressable
+                          hitSlop={8}
+                          onPress={() => {
+                            const url = `https://dexscreener.com/solana/${token.address}`;
+                            Linking.openURL(url).catch(() => undefined);
+                          }}
+                        >
+                          <LinkIcon size={18} color="#7e88a8" />
+                        </Pressable>
+                        {/* Chart icon → opens live chart modal in-app */}
                         <Pressable
                           hitSlop={8}
                           onPress={() => setChartModalVisible(true)}
                         >
-                          <LinkIcon size={18} color="#7e88a8" />
+                          <MaterialIcons name="show-chart" size={18} color="#7e88a8" />
                         </Pressable>
                         <Pressable
                           hitSlop={12}
@@ -384,8 +395,6 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
         address={token.address}
         pairAddress={token.pairAddress}
         symbol={token.symbol}
-        chain={token.chain}
-        source={token.source}
       />
     </View>
   );

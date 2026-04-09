@@ -15,8 +15,6 @@ type Props = {
   address: string;
   pairAddress?: string;
   symbol: string;
-  chain?: string;
-  source?: string;
 };
 
 export default function LiveChartModal({
@@ -25,18 +23,11 @@ export default function LiveChartModal({
   address,
   pairAddress,
   symbol,
-  chain,
-  source,
 }: Props) {
-  // Build the DexScreener embed URL
-  // Use pairAddress if available (most reliable), else token address
-  const isBase = source === 'bags' || chain === 'base';
-  const chainSlug = isBase ? 'base' : 'solana';
+  // Always use solana — BAGS tokens are Solana-based
   const id = pairAddress || address;
-
-  // DexScreener embed — dark theme, hide info bar for cleaner look
   const embedUrl =
-    `https://dexscreener.com/${chainSlug}/${id}` +
+    `https://dexscreener.com/solana/${id}` +
     `?embed=1&theme=dark&trades=0&info=0`;
 
   return (
@@ -51,7 +42,7 @@ export default function LiveChartModal({
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.symbol}>{symbol}</Text>
-            <Text style={styles.chainBadge}>{isBase ? 'BASE' : 'SOL'}</Text>
+            <Text style={styles.chainBadge}>SOL</Text>
           </View>
           <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={12}>
             <Text style={styles.closeText}>✕</Text>
