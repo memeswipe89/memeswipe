@@ -20,6 +20,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import TradeChart from '@/components/trade-chart';
+import LiveChartModal from '@/components/live-chart-modal';
 import { getPriceHistory } from '@/lib/getPriceHistory';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -239,6 +240,7 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
       : token.change24hPct >= 0;
   const [history, setHistory] = useState<number[]>(token.chartData || []);
   const [copied, setCopied] = useState(false);
+  const [chartModalVisible, setChartModalVisible] = useState(false);
   const compactCurrency = useMemo(
     () =>
       new Intl.NumberFormat('en-US', {
@@ -304,12 +306,7 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                         <Text style={styles.tokenName}>{token.symbol.toUpperCase()}</Text>
                         <Pressable
                           hitSlop={8}
-                          onPress={() => {
-                            // Use DexScreener universal search — works for any chain/address
-                            const id = token.pairAddress || token.address;
-                            const url = `https://dexscreener.com/search?q=${encodeURIComponent(id)}`;
-                            Linking.openURL(url).catch(() => undefined);
-                          }}
+                          onPress={() => setChartModalVisible(true)}
                         >
                           <LinkIcon size={18} color="#7e88a8" />
                         </Pressable>
@@ -380,6 +377,16 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
             <View style={styles.bottomActionSpace} />
         </View>
       </View>
+
+      <LiveChartModal
+        visible={chartModalVisible}
+        onClose={() => setChartModalVisible(false)}
+        address={token.address}
+        pairAddress={token.pairAddress}
+        symbol={token.symbol}
+        chain={token.chain}
+        source={token.source}
+      />
     </View>
   );
 });
