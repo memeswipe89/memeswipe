@@ -90,6 +90,7 @@ type ApiToken = {
   change24hPct?: number | string;
   chartData?: number[];
   chain?: string;
+  pairAddress?: string;
   graduatedAt?: string;
   graduationTime?: string;
   source?: string;
@@ -152,6 +153,8 @@ const mapApiToken = (token: ApiToken): SwipeToken => {
     name: token.name || 'Unknown Token',
     symbol: token.symbol || 'MEME',
     address: getTokenAddress(token),
+    chain: token.chain || undefined,
+    pairAddress: token.pairAddress || undefined,
     priceUsd: price,
     liquidityUsd: toNumber(token.liquidityUsd, 0),
     volume24hUsd: toNumber(token.volume24hUsd, 0),

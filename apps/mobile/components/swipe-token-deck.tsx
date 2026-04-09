@@ -37,6 +37,8 @@ export type SwipeToken = {
   name: string;
   symbol: string;
   address: string;
+  chain?: string;
+  pairAddress?: string;
   priceUsd: number;
   liquidityUsd: number;
   volume24hUsd: number;
@@ -303,14 +305,15 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                         <Pressable
                           hitSlop={8}
                           onPress={() => {
-                            const isBase = token.source === 'bags';
-                            const url = isBase
-                              ? `https://basescan.org/token/${token.address}`
-                              : `https://solscan.io/token/${token.address}`;
+                            const isBags = token.source === 'bags' || token.chain === 'base';
+                            const chain = isBags ? 'base' : 'solana';
+                            // pairAddress gives a direct DexScreener pair URL that always resolves
+                            const id = token.pairAddress || token.address;
+                            const url = `https://dexscreener.com/${chain}/${id}`;
                             Linking.openURL(url).catch(() => undefined);
                           }}
                         >
-                          <LinkIcon size={15} color="#7e88a8" />
+                          <LinkIcon size={18} color="#7e88a8" />
                         </Pressable>
                         <Pressable
                           hitSlop={12}
@@ -323,7 +326,7 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                         >
                           <MaterialIcons
                             name={copied ? 'check' : 'content-copy'}
-                            size={16}
+                            size={18}
                             color={copied ? '#4ade80' : '#7e88a8'}
                           />
                         </Pressable>
