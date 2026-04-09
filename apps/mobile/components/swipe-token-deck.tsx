@@ -305,11 +305,9 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                         <Pressable
                           hitSlop={8}
                           onPress={() => {
-                            const isBags = token.source === 'bags' || token.chain === 'base';
-                            const chain = isBags ? 'base' : 'solana';
-                            // pairAddress gives a direct DexScreener pair URL that always resolves
+                            // Use DexScreener universal search — works for any chain/address
                             const id = token.pairAddress || token.address;
-                            const url = `https://dexscreener.com/${chain}/${id}`;
+                            const url = `https://dexscreener.com/search?q=${encodeURIComponent(id)}`;
                             Linking.openURL(url).catch(() => undefined);
                           }}
                         >

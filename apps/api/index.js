@@ -809,7 +809,8 @@ async function fetchBagsTokens() {
   const rawItems = Array.isArray(data?.response) ? data.response : [];
   if (!rawItems.length) return [];
 
-  const tokensByAddress = new Map();
+  // Collect tradable tokens from BAGS feed
+  const bagTokens = [];
   for (const item of rawItems) {
     const status = String(item?.status || "").trim();
     if (!isBagsStatusTradable(status)) {
@@ -833,60 +834,79 @@ async function fetchBagsTokens() {
     }
 
     const name = String(item?.name || symbol || "").trim() || symbol;
-    const key = mint.toLowerCase();
-    if (tokensByAddress.has(key)) continue;
-    tokensByAddress.set(key, { mint, name, symbol, status });
-    if (tokensByAddress.size >= BAGS_FEED_TOKEN_LIMIT) break;
+    bagTokens.push({ mint, name, symbol, status });
+    if (bagTokens.length >= BAGS_FEED_TOKEN_LIMIT) break;
   }
 
-  if (!tokensByAddress.size) return [];
+  if (!bagTokens.length) return [];
 
-  const tokenAddresses = Array.from(tokensByAddress.values()).map((token) => token.mint);
-  const pairs = await fetchDexscreenerPairsForAddresses(tokenAddresses);
-  const pairsByAddress = new Map();
-  for (const pair of pairs) {
-    const tokenAddress = pair?.baseToken?.address;
-    if (!tokenAddress) continue;
-    const addressKey = tokenAddress.toLowerCase();
-    if (!pairsByAddress.has(addressKey)) {
-      pairsByAddress.set(addressKey, []);
-    }
-    pairsByAddress.get(addressKey).push(pair);
-  }
-
+  // BAGS tokens are on Base chain. DexScreener's multi-token endpoint uses
+  // token addresses — since we only have Solana mints, use the search endpoint
+  // per token to find the Base chain pair.
   const normalized = [];
-  for (const [address, metadata] of tokensByAddress.entries()) {
-    const tokenPairs = pairsByAddress.get(address);
-    if (!tokenPairs || tokenPairs.length === 0) {
-      logBagsRejected(metadata, "no dexscreener pairs found");
-      continue;
-    }
 
-    const bestPair = pickBestPairForToken(tokenPairs);
-    if (!bestPair) {
-      logBagsRejected(metadata, "no viable dexscreener pair");
-      continue;
-    }
+  // Process in small concurrent batches to avoid rate limiting
+  const BATCH = 5;
+  for (let i = 0; i < bagTokens.length; i += BATCH) {
+    const batch = bagTokens.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map(async (token) => {
+        try {
+          // Search DexScreener by symbol to find the Base chain pair
+          const searchRes = await fetch(
+            `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(token.symbol)}`,
+            { headers: { Accept: "application/json" } }
+          );
+          if (!searchRes.ok) return null;
+          const searchJson = await searchRes.json();
+          const pairs = Array.isArray(searchJson?.pairs) ? searchJson.pairs : [];
 
-    const formatted = formatPair(bestPair, { source: "bags", tradeRoute: "jupiter" });
-    const reason = getStrictTradabilityReason(formatted);
-    const detail =
-      reason === "low liquidity"
-        ? `low liquidity ${Math.round(formatted.liquidityUsd || 0)} < ${MIN_LIQUIDITY_USD}`
-        : reason === "low volume"
-        ? `low volume ${Math.round(formatted.volume24hUsd || 0)} < ${MIN_VOLUME_USD}`
-        : reason === "invalid price"
-        ? `invalid price ${formatted.priceUsd ?? "n/a"}`
-        : reason;
-    const isTradable = !reason;
-    formatted.isTradable = isTradable;
-    formatted.tradableReason = detail || undefined;
-    if (!isTradable) {
-      logBagsNotTradable(metadata, detail || "tradability check failed");
-    } else {
-      logBagsAccepted(metadata, formatted.liquidityUsd);
-    }
-    normalized.push(formatted);
+          // Find the best Base chain pair matching this symbol
+          const basePairs = pairs.filter(
+            (p) =>
+              p.chainId === "base" &&
+              (p.baseToken?.symbol || "").toUpperCase() === token.symbol.toUpperCase()
+          );
+
+          if (!basePairs.length) {
+            logBagsRejected(token, "no Base chain pair found on DexScreener");
+            return null;
+          }
+
+          // Pick highest liquidity
+          basePairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+          const bestPair = basePairs[0];
+
+          const formatted = formatPair(bestPair, { source: "bags", tradeRoute: "jupiter" });
+          // Store the original Solana mint so the app can still reference it
+          formatted.solMint = token.mint;
+
+          const reason = getStrictTradabilityReason(formatted);
+          const detail =
+            reason === "low liquidity"
+              ? `low liquidity ${Math.round(formatted.liquidityUsd || 0)} < ${MIN_LIQUIDITY_USD}`
+              : reason === "low volume"
+              ? `low volume ${Math.round(formatted.volume24hUsd || 0)} < ${MIN_VOLUME_USD}`
+              : reason === "invalid price"
+              ? `invalid price ${formatted.priceUsd ?? "n/a"}`
+              : reason;
+
+          formatted.isTradable = !reason;
+          formatted.tradableReason = detail || undefined;
+
+          if (!formatted.isTradable) {
+            logBagsNotTradable(token, detail || "tradability check failed");
+          } else {
+            logBagsAccepted(token, formatted.liquidityUsd);
+          }
+          return formatted;
+        } catch (err) {
+          console.error(`[BAGS] search failed for ${token.symbol}:`, err.message);
+          return null;
+        }
+      })
+    );
+    results.forEach((r) => r && normalized.push(r));
   }
 
   return normalized;
