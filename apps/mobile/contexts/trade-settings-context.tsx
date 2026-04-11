@@ -39,10 +39,9 @@ async function mergePersist(patch: Partial<typeof DEFAULT_SETTINGS>) {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     const existing = raw ? (JSON.parse(raw) as Partial<typeof DEFAULT_SETTINGS>) : {};
     const merged = { ...DEFAULT_SETTINGS, ...existing, ...patch };
-    console.log('[TradeSettings] mergePersist patch:', patch, '=> merged:', merged);
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-  } catch (err) {
-    console.log('Failed to save settings', err);
+  } catch {
+    // ignore — settings will use in-memory values
   }
 }
 
@@ -60,7 +59,6 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
     const hydrate = async () => {
       try {
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        console.log('[TradeSettings] hydrate raw:', raw);
         if (!raw || !active) return;
         const parsed = JSON.parse(raw) as Partial<typeof DEFAULT_SETTINGS>;
         if (typeof parsed.profileName === 'string') setProfileName(parsed.profileName);
@@ -70,8 +68,8 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
         if (parsed.activeChain === 'solana' || parsed.activeChain === 'base') {
           setActiveChain(parsed.activeChain);
         }
-      } catch (err) {
-        console.log('Failed to load settings', err);
+      } catch {
+        // ignore — defaults will be used
       } finally {
         if (active) setHydrated(true);
       }

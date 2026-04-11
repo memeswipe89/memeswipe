@@ -25,6 +25,7 @@ import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
 import { API_BASE, JUP_API_KEY } from '@/lib/api-base';
+import { getFriendlySwapError, getFriendlyOrderError } from '@/lib/user-friendly-errors';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const MIN_SOL_RESERVE_FOR_FEES = 0.01;
@@ -1213,7 +1214,7 @@ export default function HomeScreen() {
           }
           const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
           const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-            skipPreflight: false,
+            skipPreflight: true,   // skip simulation — avoids stale-quote 0x1788 rejections
             maxRetries: 3,
           });
           await connection.confirmTransaction(signature, 'confirmed');
@@ -1267,11 +1268,11 @@ export default function HomeScreen() {
       }
     ) => {
       if (!token.address) {
-        Alert.alert('Error', 'Token address missing in API response');
+        Alert.alert('Token error', 'This token is missing required data. Please skip it and try another.');
         return false;
       }
       if (!swapMeta?.signature) {
-        Alert.alert('Order Failed', 'On-chain transaction signature missing. Trade not created.');
+        Alert.alert('Order failed', 'On-chain transaction signature missing. Your swap may have gone through — check your wallet.');
         return false;
       }
       const amount = Number.isFinite(tradeAmount)
@@ -1284,7 +1285,7 @@ export default function HomeScreen() {
         const resolvedUserId = (userId || '').trim() || (await getOrCreateLocalUserId());
 
         if (!resolvedUserId) {
-          Alert.alert('Order Failed', 'User session is missing. Please reopen the app and try again.');
+          Alert.alert('Session expired', 'Your session expired. Please reopen the app and try again.');
           return false;
         }
 
@@ -1326,14 +1327,14 @@ export default function HomeScreen() {
         console.log('[TRADE][SWIPE_RIGHT] order API response', { status: res.status, body: json });
 
         if (!res.ok) {
-          console.log('Order error:', json);
-          Alert.alert('Order Failed', json?.error || 'Unknown error');
+          const { title, message } = getFriendlyOrderError(new Error(json?.error || 'Unknown error'));
+          Alert.alert(title, message);
           return false;
         }
         return true;
       } catch (err: any) {
-        console.log(err);
-        Alert.alert('Order Failed', err?.message || 'Network error');
+        const { title, message } = getFriendlyOrderError(err);
+        Alert.alert(title, message);
         return false;
       } finally {
         setCreatingOrder(false);
@@ -1352,6 +1353,17 @@ export default function HomeScreen() {
     [hideToken, removeFavoriteToken, segment]
   );
 
+  const handleDeckRefresh = useCallback(() => {
+    if (!isRemoteSegment(segment)) return;
+    // Reset the segment so it fetches fresh data
+    setSegmentCache((prev) => ({ ...prev, [segment]: [] }));
+    setSegmentCursor((prev) => ({ ...prev, [segment]: null }));
+    setSegmentHasMore((prev) => ({ ...prev, [segment]: true }));
+    setSegmentDepleted((prev) => ({ ...prev, [segment]: false }));
+    loadedAddressRef.current[segment] = new Set();
+    void fetchNextPage(segment, true);
+  }, [fetchNextPage, segment]);
+
   const handleBuy = useCallback(
     (token: SwipeToken) => {
       if (!tradingWalletAddress) {
@@ -1359,10 +1371,8 @@ export default function HomeScreen() {
         return;
       }
       if (token.source === 'bags' && token.isTradable === false) {
-        const reason = token.tradableReason || 'very low liquidity';
-        console.log('[BAGS][SWIPE_BLOCKED]', { symbol: token.symbol, address: token.address, reason });
         hideToken(token.address);
-        Alert.alert('Token not tradable', 'Token not tradable. Very low liquidity.');
+        Alert.alert('Token unavailable', `${token.symbol.toUpperCase()} has very low liquidity and can't be traded right now.`);
         return;
       }
       console.log('[TRADE][SWIPE_RIGHT] token selected', {
@@ -1385,34 +1395,19 @@ export default function HomeScreen() {
           try {
             swapMeta = await executeJupiterSwap(token);
           } catch (error: any) {
-            const message = normalizeJupiterError(error);
+            const { title, message } = getFriendlySwapError(error);
             const isNotTradable =
-              message.includes('TOKEN_NOT_TRADABLE') ||
-              message.toLowerCase().includes('not tradable') ||
-              message.toLowerCase().includes('route not found') ||
-              message.toLowerCase().includes('no route') ||
-              message.toLowerCase().includes('no sell route') ||
-              message.includes('0x1788');
-            console.log('[TRADE][SWIPE_RIGHT] swap failed', {
-              symbol: token.symbol,
-              address: token.address,
-              message,
-              isNotTradable,
-            });
+              message.toLowerCase().includes('no swap route') ||
+              message.toLowerCase().includes('not tradable');
             if (isNotTradable) {
               hideToken(token.address);
-              Alert.alert('Token skipped', `${token.symbol.toUpperCase()} is not tradable right now.`);
-              return;
             }
-            Alert.alert('Swap Failed', message || 'Unable to execute on-chain swap.');
+            Alert.alert(title, message);
             return;
           }
 
           const ok = await createOrder(token, swapMeta);
-          if (!ok) {
-            Alert.alert('Order Failed', `Unable to execute ${token.symbol.toUpperCase()} order.`);
-            return;
-          }
+          if (!ok) return;
           setTradeOpenPopup({
             visible: true,
             tokenName: token.name,
@@ -1570,6 +1565,7 @@ export default function HomeScreen() {
               isInteractionLocked={appLoading || creatingOrder || buyLoading}
               onSwipeStateChange={setIsSwiping}
               onActiveCardChange={handleActiveCardChange}
+              onRefresh={isRemoteSegment(segment) ? handleDeckRefresh : undefined}
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'

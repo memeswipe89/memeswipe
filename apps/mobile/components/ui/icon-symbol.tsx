@@ -18,9 +18,9 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
-  'list.bullet.rectangle.fill': 'view-list', // chosen Material icon similar to list
+  'list.bullet.rectangle.fill': 'view-list',
   'creditcard.fill': 'credit_card',
-} as IconMapping;
+} as unknown as IconMapping;
 
 /**
  * An icon component that uses native SF Symbols on iOS, and Material Icons on Android and web.

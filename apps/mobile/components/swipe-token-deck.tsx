@@ -69,6 +69,7 @@ type SwipeTokenDeckProps = {
   emptySubtitle?: string;
   onSwipeStateChange?: (swiping: boolean) => void;
   onActiveCardChange?: (token: SwipeToken | null) => void;
+  onRefresh?: () => void;
 };
 
 type TokenCardProps = {
@@ -214,18 +215,38 @@ const DeckStatusCard = memo(function DeckStatusCard({
   title,
   subtitle,
   loading = false,
+  onRefresh,
 }: {
   title: string;
   subtitle: string;
   loading?: boolean;
+  onRefresh?: () => void;
 }) {
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    if (!onRefresh || refreshing) return;
+    setRefreshing(true);
+    await Promise.resolve(onRefresh());
+    // Keep spinner visible briefly so the user sees feedback
+    setTimeout(() => setRefreshing(false), 1200);
+  };
+
   return (
     <View style={styles.emptyStateWrap}>
       <View style={styles.emptyStateOuter}>
         <BlurView intensity={24} tint="dark" style={styles.emptyState}>
-          {loading ? <ActivityIndicator size="small" color="#9bc2ff" style={styles.emptySpinner} /> : null}
+          {loading || refreshing ? (
+            <ActivityIndicator size="small" color="#9bc2ff" style={styles.emptySpinner} />
+          ) : null}
           <Text style={styles.emptyTitle}>{title}</Text>
           <Text style={styles.emptySub}>{subtitle}</Text>
+          {onRefresh && !loading && !refreshing ? (
+            <Pressable onPress={handleRefresh} style={styles.reloadBtn}>
+              <MaterialIcons name="refresh" size={16} color="#9bc2ff" />
+              <Text style={styles.reloadBtnText}>Reload</Text>
+            </Pressable>
+          ) : null}
         </BlurView>
       </View>
     </View>
@@ -319,9 +340,23 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                           hitSlop={8}
                           onPress={() => setChartModalVisible(true)}
                         >
-                          <MaterialIcons name="show-chart" size={18} color="#7e88a8" />
+                          <MaterialIcons name="show-chart" size={20} color="#7e88a8" />
                         </Pressable>
-                        <Pressable
+                       
+                        {token.website ? (
+                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.website!).catch(() => undefined)}>
+                            <MaterialIcons name="language" size={18} color="#7e88a8" />
+                          </Pressable>
+                        ) : null}
+                        {token.twitter ? (
+                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.twitter!).catch(() => undefined)}>
+                            <Text style={styles.socialIcon}>𝕏</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                      <View style={styles.addressRow}>
+                        <Text style={styles.tokenFullName} numberOfLines={1}>{token.name}</Text>
+                         <Pressable
                           hitSlop={12}
                           onPress={() => {
                             Clipboard.setString(token.address);
@@ -336,19 +371,6 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                             color={copied ? '#4ade80' : '#7e88a8'}
                           />
                         </Pressable>
-                        {token.website ? (
-                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.website!).catch(() => undefined)}>
-                            <MaterialIcons name="language" size={16} color="#7e88a8" />
-                          </Pressable>
-                        ) : null}
-                        {token.twitter ? (
-                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.twitter!).catch(() => undefined)}>
-                            <Text style={styles.socialIcon}>𝕏</Text>
-                          </Pressable>
-                        ) : null}
-                      </View>
-                      <View style={styles.addressRow}>
-                        <Text style={styles.tokenFullName} numberOfLines={1}>{token.name}</Text>
                       </View>
                     </View>
                   </View>
@@ -413,6 +435,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   emptySubtitle = 'No more tokens in this segment.',
   onSwipeStateChange,
   onActiveCardChange,
+  onRefresh,
 }: SwipeTokenDeckProps) {
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -591,6 +614,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
           title={showLoadingState ? 'Loading Tokens...' : emptyTitle}
           subtitle={showLoadingState ? 'Fetching live token data for this feed.' : emptySubtitle}
           loading={showLoadingState}
+          onRefresh={!showLoadingState ? onRefresh : undefined}
         />
       )}
     </ExpoLinearGradient>
@@ -767,7 +791,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   socialIcon: {
-    fontSize: 14,
+    fontSize: 18,
     color: '#7e88a8',
   },
   copyBtn: {
@@ -957,5 +981,22 @@ const styles = StyleSheet.create({
     color: '#9ca6c2',
     fontSize: 14,
     textAlign: 'center',
+  },
+  reloadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(155,194,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(155,194,255,0.25)',
+  },
+  reloadBtnText: {
+    color: '#9bc2ff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

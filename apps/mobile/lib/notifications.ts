@@ -9,7 +9,7 @@ let Notifications: typeof import('expo-notifications') | null = null;
 if (!isWeb) {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   Notifications = require('expo-notifications');
-  Notifications.setNotificationHandler({
+  Notifications!.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
       shouldShowList: true,

@@ -49,10 +49,6 @@ export default function RootLayout() {
     void initializeNotifications();
   }, []);
 
-  console.log('Privy App ID:', privyAppId);
-  console.log('Privy Client ID:', privyClientId);
-  console.log('Privy OAuth Redirect URL:', Linking.createURL('/privy/oauth'));
-
   if (!privyAppId) {
     return (
       <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", padding: 24 }}>

@@ -12,6 +12,7 @@ import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
 import { API_BASE, JUP_API_KEY } from '@/lib/api-base';
+import { getFriendlyCloseError } from '@/lib/user-friendly-errors';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const JUPITER_BASE_URLS = ['https://api.jup.ag/swap/v1', 'https://lite-api.jup.ag/swap/v1'];
@@ -193,13 +194,13 @@ const normalizeTradeStatus = (status: unknown): TradeStatus => {
 
 const getLivePnl = (trade: TradeItem) => {
   const livePnlPct =
-    trade.entryPriceUsd && trade.livePriceUsd
+    trade.entryPriceUsd && trade.livePriceUsd && trade.entryPriceUsd > 0
       ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
-      : trade.tpRoi > 0
-        ? trade.tpRoi
-        : null;
+      : null;
   const livePnlUsd =
-    livePnlPct !== null ? (trade.displayAmountUsd * livePnlPct) / 100 : trade.fallbackPnlUsd;
+    livePnlPct !== null
+      ? (trade.displayAmountUsd * livePnlPct) / 100
+      : trade.fallbackPnlUsd;
   return { livePnlPct, livePnlUsd };
 };
 
@@ -508,14 +509,19 @@ export default function TradesScreen() {
     };
   }, []);
 
+  // Live price refresh — stable interval, reads latest trades via ref
+  const tradesRef = useRef<TradeItem[]>(trades);
+  useEffect(() => { tradesRef.current = trades; }, [trades]);
+
   useEffect(() => {
     let active = true;
     const refreshLivePrices = async () => {
       try {
+        const currentTrades = tradesRef.current;
         const addresses = Array.from(
           new Set(
-            trades
-              .filter((t) => t.chain === 'solana' && Boolean(t.tokenAddress))
+            currentTrades
+              .filter((t) => t.status === 'open' && t.chain === 'solana' && Boolean(t.tokenAddress))
               .map((t) => t.tokenAddress)
           )
         );
@@ -539,7 +545,7 @@ export default function TradesScreen() {
           })
         );
       } catch {
-        // ignore
+        // ignore and retry on next tick
       }
     };
     void refreshLivePrices();
@@ -548,7 +554,7 @@ export default function TradesScreen() {
       active = false;
       clearInterval(id);
     };
-  }, [trades]);
+  }, []); // stable — no deps, reads trades via ref
 
   const closeTrade = useCallback(
     async (trade: TradeItem, options?: { silent?: boolean; closeReason?: 'tp' | 'sl' | 'manual'; closeTriggerPct?: number | null }) => {
@@ -614,7 +620,7 @@ export default function TradesScreen() {
         }
         const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
         const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-          skipPreflight: false,
+          skipPreflight: true,   // skip simulation — avoids stale-quote 0x1788 rejections
           maxRetries: 3,
         });
         await connection.confirmTransaction(signature, 'confirmed');
@@ -632,15 +638,7 @@ export default function TradesScreen() {
             ? ((trade.livePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100
             : null;
         const closePnlUsd = closePnlPct !== null ? (trade.displayAmountUsd * closePnlPct) / 100 : null;
-        console.log('[TRADES] finalize close payload', {
-          orderId,
-          closeReason,
-          closeTriggerPct,
-          closePriceUsd: trade.livePriceUsd ?? null,
-          closePnlPct,
-          closePnlUsd,
-        });
-        const { response: res, json, url } = await fetchJsonWithFallback<{ error?: string; success?: boolean; byId?: boolean; skipped?: boolean }>(
+        const { response: res, json } = await fetchJsonWithFallback<{ error?: string; success?: boolean; byId?: boolean; skipped?: boolean }>(
           [`/api/orders/${encodeURIComponent(orderId)}/close`, `/orders/${encodeURIComponent(orderId)}/close`],
           {
             method: 'PATCH',
@@ -656,10 +654,14 @@ export default function TradesScreen() {
             }),
           }
         );
-        console.log('[TRADES] finalize close response', { orderId, url, status: res.status, body: json });
         if (!res.ok) throw new Error(json?.error || 'Failed to finalize close');
         const closeTxSignature = signature;
         recentlyClosedRef.current.add(orderId);
+        // Prune recentlyClosed set to avoid unbounded growth
+        if (recentlyClosedRef.current.size > 200) {
+          const arr = Array.from(recentlyClosedRef.current);
+          recentlyClosedRef.current = new Set(arr.slice(-100));
+        }
 
         setTrades((prev) =>
           prev.map((t) =>
@@ -688,7 +690,7 @@ export default function TradesScreen() {
           }
         }
       } catch (err: any) {
-        const message = err?.message || 'Failed to close trade';
+        const { title, message } = getFriendlyCloseError(err);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
         if (recentlyClosedRef.current.has(orderId) || trade.closeTxSignature) {
           return;
@@ -697,35 +699,21 @@ export default function TradesScreen() {
           if (!resolvedUserId) {
             resolvedUserId = await getOrCreateLocalUserId();
           }
-          const { response: fallbackRes, json: fallbackJson, url } = await fetchJsonWithFallback<{
-            error?: string;
-            success?: boolean;
-            byId?: boolean;
-            skipped?: boolean;
-          }>(
+          await fetchJsonWithFallback<{ error?: string }>(
             [`/api/orders/${encodeURIComponent(orderId)}/close`, `/orders/${encodeURIComponent(orderId)}/close`],
             {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                userId: resolvedUserId,
-                closeError: message,
-              }),
+              body: JSON.stringify({ userId: resolvedUserId, closeError: message }),
             }
           );
-          console.log('[TRADES] close error saved', {
-            orderId,
-            url,
-            status: fallbackRes.status,
-            body: fallbackJson,
-          });
         } catch {
           // ignore close-error persistence
         }
         if (options?.silent) {
           autoCloseRetryAfterRef.current[orderId] = Date.now() + 30_000;
         } else {
-          Alert.alert('Close Trade Failed', message);
+          Alert.alert(title, message);
         }
       } finally {
         setClosingId(null);
@@ -765,7 +753,7 @@ export default function TradesScreen() {
           )
         );
       } catch (err: any) {
-        Alert.alert('Update Failed', err?.message || 'Failed to mark as uncloseable');
+        Alert.alert('Update failed', "Couldn't update this trade. Please try again.");
       }
     },
     [getOrCreateLocalUserId]
@@ -778,14 +766,18 @@ export default function TradesScreen() {
       source
         .map((trade) => {
           if (trade.status !== 'open') return null;
-          if (trade.closeError) return null;
+          // Only skip if closeError AND retry window hasn't expired
           const retryAfter = autoCloseRetryAfterRef.current[trade.id] || 0;
           if (retryAfter > now) return null;
+          // If closeError exists but retry window has passed, allow retry
           const pnlPct = getRealtimePnlPct(trade);
           if (pnlPct === null) return null;
-          const tpHit = Number.isFinite(trade.tpRoi) && pnlPct >= trade.tpRoi;
+          const tpHit = Number.isFinite(trade.tpRoi) && trade.tpRoi > 0 && pnlPct >= trade.tpRoi;
           const slHit =
-            trade.stopLossPct !== null && Number.isFinite(trade.stopLossPct) && pnlPct <= -Math.abs(trade.stopLossPct);
+            trade.stopLossPct !== null &&
+            Number.isFinite(trade.stopLossPct) &&
+            trade.stopLossPct > 0 &&
+            pnlPct <= -Math.abs(trade.stopLossPct);
           if (!tpHit && !slHit) return null;
           return {
             trade,
@@ -802,8 +794,14 @@ export default function TradesScreen() {
       return;
     }
 
-    // If live prices are missing, refresh them on-demand so TP/SL can trigger reliably.
-    const openAddresses = Array.from(new Set(trades.filter((t) => t.status === 'open' && t.tokenAddress).map((t) => t.tokenAddress)));
+    // Refresh live prices for open trades only — skip already-closed ones
+    const openAddresses = Array.from(
+      new Set(
+        trades
+          .filter((t) => t.status === 'open' && t.tokenAddress && !recentlyClosedRef.current.has(t.id))
+          .map((t) => t.tokenAddress)
+      )
+    );
     if (!openAddresses.length) return;
     if (now - lastAutoClosePriceFetchRef.current < 5_000) return;
     lastAutoClosePriceFetchRef.current = now;
@@ -839,10 +837,10 @@ export default function TradesScreen() {
       if (query && !trade.symbol.toLowerCase().includes(query.toLowerCase())) return false;
       if (filter === 'open' && trade.status !== 'open') return false;
       if (filter === 'closed' && trade.status !== 'closed') return false;
-      if (filter === 'profit') {
+      if ((filter as string) === 'profit') {
         return trade.status === 'closed' && trade.closeReason === 'tp';
       }
-      if (filter === 'loss') {
+      if ((filter as string) === 'loss') {
         return trade.status === 'closed' && trade.closeReason === 'sl';
       }
       if (filter === 'profit' && livePnlUsd <= 0) return false;
