@@ -212,12 +212,28 @@ const getRealtimePnlPct = (trade: TradeItem) => {
 };
 
 const getDisplayedPnl = (trade: TradeItem) => {
-  if (trade.status === 'closed' && trade.closePnlPct !== null) {
-    return {
-      pnlPct: trade.closePnlPct,
-      pnlUsd: trade.closePnlUsd ?? (trade.displayAmountUsd * trade.closePnlPct) / 100,
-    };
+  if (trade.status === 'closed') {
+    // Priority 1: stored close PnL values (most accurate)
+    if (trade.closePnlPct !== null && trade.closePnlUsd !== null) {
+      return { pnlPct: trade.closePnlPct, pnlUsd: trade.closePnlUsd };
+    }
+    // Priority 2: derive from close price vs entry price
+    if (trade.closePriceUsd && trade.entryPriceUsd && trade.entryPriceUsd > 0) {
+      const pnlPct = ((trade.closePriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100;
+      const pnlUsd = (trade.displayAmountUsd * pnlPct) / 100;
+      return { pnlPct, pnlUsd };
+    }
+    // Priority 3: stored pct only
+    if (trade.closePnlPct !== null) {
+      return {
+        pnlPct: trade.closePnlPct,
+        pnlUsd: trade.closePnlUsd ?? (trade.displayAmountUsd * trade.closePnlPct) / 100,
+      };
+    }
+    // Closed but no price data — show zero, never use live price
+    return { pnlPct: null, pnlUsd: 0 };
   }
+  // Open trade — use live price
   const { livePnlPct, livePnlUsd } = getLivePnl(trade);
   return { pnlPct: livePnlPct, pnlUsd: livePnlUsd };
 };
@@ -239,7 +255,11 @@ function TradeCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const { pnlPct, pnlUsd } = getDisplayedPnl(item);
-  const pnlSol = solPriceUsd && solPriceUsd > 0 ? pnlUsd / solPriceUsd : null;
+  // Closed trades: show fixed USD PnL — never divide by a live-updating SOL price
+  // Open trades: show live SOL PnL
+  const pnlSol = item.status === 'open' && solPriceUsd && solPriceUsd > 0
+    ? pnlUsd / solPriceUsd
+    : null;
   const isWin = item.closeReason === 'tp' || (pnlUsd > 0 && item.status === 'closed');
   const isLoss = item.closeReason === 'sl' || (pnlUsd < 0 && item.status === 'closed');
 
@@ -255,11 +275,18 @@ function TradeCard({
         </View>
         <View style={styles.cardTopRight}>
           <Text style={styles.amountText}>${item.displayAmountUsd.toFixed(5)}</Text>
-          {item.status === 'closed' && pnlSol !== null ? (
-            <Text style={[styles.pnlText, isWin ? styles.green : styles.red]}>
-              {isWin ? '▲' : '▼'} {Math.abs(pnlSol).toFixed(10)} SOL
-            </Text>
-          ) : item.status === 'open' && pnlSol !== null ? (
+          {item.status === 'closed' ? (
+            <View style={styles.pnlStack}>
+              <Text style={[styles.pnlText, isWin ? styles.green : styles.red]}>
+                {isWin ? '▲' : '▼'} ${Math.abs(pnlUsd).toFixed(6)}
+              </Text>
+              {solPriceUsd && solPriceUsd > 0 ? (
+                <Text style={[styles.pnlSubText, isWin ? styles.green : styles.red]}>
+                  {(pnlUsd / solPriceUsd).toFixed(9)} SOL
+                </Text>
+              ) : null}
+            </View>
+          ) : pnlSol !== null ? (
             <Text style={[styles.pnlText, pnlSol >= 0 ? styles.green : styles.red]}>
               {pnlSol >= 0 ? '+' : ''}{pnlSol.toFixed(10)} SOL
             </Text>
@@ -281,7 +308,8 @@ function TradeCard({
             <>
               {item.closedAt ? <Text style={styles.meta}>Closed: {new Date(item.closedAt).toLocaleString()}</Text> : null}
               <Text style={[styles.meta, isWin ? styles.green : styles.red]}>
-                {isWin ? 'Win SOL' : 'Loss SOL'}: {pnlSol === null ? '--' : `${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(9)} SOL`}
+                {isWin ? 'Profit' : 'Loss'}: {pnlUsd >= 0 ? '+' : ''}${pnlUsd.toFixed(6)}
+                {pnlPct !== null ? ` (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)` : ''}
               </Text>
               {item.closeReason ? (
                 <Text style={styles.meta}>
@@ -540,6 +568,8 @@ export default function TradesScreen() {
         if (!active || !prices) return;
         setTrades((prev) =>
           prev.map((t) => {
+            // Never update live price for closed trades — their PnL is fixed
+            if (t.status === 'closed') return t;
             const live = Number(prices?.[t.tokenAddress]);
             return Number.isFinite(live) && live > 0 ? { ...t, livePriceUsd: live } : t;
           })
@@ -821,6 +851,8 @@ export default function TradesScreen() {
         if (!prices) return;
         setTrades((prev) =>
           prev.map((t) => {
+            // Never update live price for closed trades — their PnL is fixed
+            if (t.status === 'closed') return t;
             const live = Number(prices?.[t.tokenAddress]);
             return Number.isFinite(live) && live > 0 ? { ...t, livePriceUsd: live } : t;
           })
@@ -854,15 +886,9 @@ export default function TradesScreen() {
     let totalLoss = 0;
     for (const trade of trades) {
       if (trade.status !== 'closed') continue;
-      const pnl = trade.closePnlUsd ?? 0;
-      if (trade.closeReason === 'tp') {
-        totalProfit += Math.max(0, pnl);
-      } else if (trade.closeReason === 'sl') {
-        totalLoss += Math.max(0, Math.abs(pnl || 0));
-      } else {
-        if (pnl > 0) totalProfit += pnl;
-        if (pnl < 0) totalLoss += Math.abs(pnl);
-      }
+      const { pnlUsd } = getDisplayedPnl(trade);
+      if (pnlUsd > 0) totalProfit += pnlUsd;
+      if (pnlUsd < 0) totalLoss += Math.abs(pnlUsd);
     }
     return { totalProfit, totalLoss };
   }, [trades]);
@@ -872,11 +898,10 @@ export default function TradesScreen() {
     const wins = closed.filter((t) => t.closeReason === 'tp').length;
     const losses = closed.filter((t) => t.closeReason === 'sl').length;
     const winRate = wins + losses > 0 ? Math.round((wins / (wins + losses)) * 100) : 0;
-
-    const totalPnlUsd = closed.reduce((acc, t) => acc + toNumber(t.closePnlUsd, 0), 0);
-    const totalPnlSol = solPriceUsd && solPriceUsd > 0 ? totalPnlUsd / solPriceUsd : 0;
-    return { totalTrades: trades.length, winRate, totalPnlSol };
-  }, [solPriceUsd, trades]);
+    // totalPnlUsd is fixed for closed trades — don't convert to SOL (SOL price fluctuates)
+    const totalPnlUsd = closed.reduce((acc, t) => acc + getDisplayedPnl(t).pnlUsd, 0);
+    return { totalTrades: trades.length, winRate, totalPnlUsd };
+  }, [trades]);
 
   const paged = filtered.slice(0, page * pageSize);
   const hasMore = paged.length < filtered.length;
@@ -906,8 +931,8 @@ export default function TradesScreen() {
         {[
           {
             label: 'Total PnL',
-            value: `${summary.totalPnlSol >= 0 ? '+' : ''}${summary.totalPnlSol.toFixed(10)} SOL`,
-            tone: 'positive',
+            value: `${summary.totalPnlUsd >= 0 ? '+' : ''}$${Math.abs(summary.totalPnlUsd).toFixed(6)}`,
+            tone: summary.totalPnlUsd >= 0 ? 'positive' : 'negative',
             flex: 2,
           },
           { label: 'Win Rate', value: `${summary.winRate}%`, tone: 'neutral', flex: 1 },
@@ -915,7 +940,11 @@ export default function TradesScreen() {
         ].map((item) => (
           <View key={item.label} style={[styles.summaryCard, { flex: item.flex }]}>
             <Text style={styles.summaryLabel}>{item.label}</Text>
-            <Text style={[styles.summaryValue, item.tone === 'positive' && styles.summaryPositive]}>
+            <Text style={[
+              styles.summaryValue,
+              item.tone === 'positive' && styles.summaryPositive,
+              item.tone === 'negative' && styles.summaryNegative,
+            ]}>
               {item.value}
             </Text>
           </View>
@@ -1014,6 +1043,7 @@ const styles = StyleSheet.create({
   summaryLabel: { color: '#8794b4', fontSize: 9, fontWeight: '800' },
   summaryValue: { marginTop: 5, color: '#f4f7ff', fontSize: 12, fontWeight: '800' },
   summaryPositive: { color: '#4ade80' },
+  summaryNegative: { color: '#ef4444' },
   refreshBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -1075,6 +1105,8 @@ const styles = StyleSheet.create({
   statusClosed: { backgroundColor: 'rgba(255,255,255,0.08)', color: '#9db0db' },
   amountText: { color: '#fff', fontSize: 13, fontWeight: '600' },
   pnlText: { fontSize: 12, fontWeight: '700' },
+  pnlStack: { alignItems: 'flex-end', gap: 1 },
+  pnlSubText: { fontSize: 10, fontWeight: '500', opacity: 0.7 },
   expandedWrap: { marginTop: 10 },
   divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginBottom: 8 },
   meta: { color: '#9db0db', marginTop: 4, fontSize: 12 },

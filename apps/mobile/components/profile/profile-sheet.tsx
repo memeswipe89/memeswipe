@@ -38,9 +38,11 @@ import Animated, {
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { useAuth } from '@/contexts/auth-context';
 import { useWalletContext } from '@/contexts/wallet-context';
+import { API_BASE } from '@/lib/api-base';
 
 import { TradeSettings } from './trade-settings';
 import { SolanaIcon } from '../icons/SolanaIcon';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.8);
@@ -65,6 +67,8 @@ export const ProfileSheet = memo(
     const [inputFocused, setInputFocused] = useState(false);
     const scrollRef = useRef<ScrollView>(null);
     const [walletSolBalance, setWalletSolBalance] = useState<number | null>(null);
+    const [walletSolPriceUsd, setWalletSolPriceUsd] = useState<number | null>(null);
+    const [balanceRefreshing, setBalanceRefreshing] = useState(false);
     const [keyboardHeight, setKeyboardHeight] = useState(0);
 
     const openProgress = useSharedValue(0);
@@ -134,20 +138,28 @@ export const ProfileSheet = memo(
       let active = true;
       const refreshBalance = async () => {
         try {
-          const res = await fetch(SOLANA_MAINNET_RPC, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: 1,
-              method: 'getBalance',
-              params: [targetAddress],
+          const [res, priceRes] = await Promise.all([
+            fetch(SOLANA_MAINNET_RPC, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'getBalance',
+                params: [targetAddress],
+              }),
             }),
-          });
+            fetch(`${API_BASE}/api/solana/price-usd`).catch(() => null),
+          ]);
           const json = (await res.json()) as { result?: { value?: number } };
           const lamports = Number(json?.result?.value || 0);
           if (!active) return;
           setWalletSolBalance(Number.isFinite(lamports) ? lamports / 1_000_000_000 : null);
+          if (priceRes?.ok) {
+            const priceJson = (await priceRes.json()) as { priceUsd?: number };
+            const p = Number(priceJson?.priceUsd || 0);
+            if (Number.isFinite(p) && p > 0) setWalletSolPriceUsd(p);
+          }
         } catch {
           if (!active) return;
           setWalletSolBalance(null);
@@ -158,6 +170,36 @@ export const ProfileSheet = memo(
         active = false;
       };
     }, [open, tradingWalletAddress, walletAddress]);
+
+    const handleRefreshBalance = useCallback(async () => {
+      const targetAddress = tradingWalletAddress || walletAddress;
+      if (!targetAddress || balanceRefreshing) return;
+      setBalanceRefreshing(true);
+      try {
+        const [res, priceRes] = await Promise.all([
+          fetch(SOLANA_MAINNET_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0', id: 1, method: 'getBalance', params: [targetAddress],
+            }),
+          }),
+          fetch(`${API_BASE}/api/solana/price-usd`).catch(() => null),
+        ]);
+        const json = (await res.json()) as { result?: { value?: number } };
+        const lamports = Number(json?.result?.value || 0);
+        setWalletSolBalance(Number.isFinite(lamports) ? lamports / 1_000_000_000 : null);
+        if (priceRes?.ok) {
+          const priceJson = (await priceRes.json()) as { priceUsd?: number };
+          const p = Number(priceJson?.priceUsd || 0);
+          if (Number.isFinite(p) && p > 0) setWalletSolPriceUsd(p);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setBalanceRefreshing(false);
+      }
+    }, [balanceRefreshing, tradingWalletAddress, walletAddress]);
 
     useEffect(() => {
       const show = Keyboard.addListener('keyboardDidShow', (event) => {
@@ -269,10 +311,27 @@ export const ProfileSheet = memo(
                       <View style={styles.balanceTopLabelRow}>
                         <SolanaIcon size={26} />
                         <Text style={styles.balanceTopLabel}>Balance (SOL)</Text>
+                        <Pressable
+                          onPress={() => void handleRefreshBalance()}
+                          hitSlop={10}
+                          style={styles.balanceRefreshBtn}
+                          disabled={balanceRefreshing}
+                        >
+                          <MaterialIcons
+                            name="refresh"
+                            size={16}
+                            color={balanceRefreshing ? '#4a5568' : '#9bc2ff'}
+                          />
+                        </Pressable>
                       </View>
                       <Text style={styles.balanceTopValue}>
                         {walletSolBalance == null ? '--' : `${walletSolBalance.toFixed(4)} SOL`}
                       </Text>
+                      {walletSolBalance != null && walletSolPriceUsd != null && walletSolPriceUsd > 0 ? (
+                        <Text style={styles.balanceUsdValue}>
+                          ≈ ${(walletSolBalance * walletSolPriceUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        </Text>
+                      ) : null}
                     </View>
                     <View style={styles.userRow}>
                       <View style={styles.avatarPlaceholder}>
@@ -453,6 +512,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  balanceRefreshBtn: {
+    marginLeft: 'auto',
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(155,194,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(155,194,255,0.2)',
+  },
   balanceTopLabel: {
     color: '#a7b4d5',
     fontSize: 13,
@@ -462,6 +532,12 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 28,
     fontWeight: '800',
+    marginTop: 2,
+  },
+  balanceUsdValue: {
+    color: '#8794b4',
+    fontSize: 13,
+    fontWeight: '500',
     marginTop: 2,
   },
   balanceRow: {

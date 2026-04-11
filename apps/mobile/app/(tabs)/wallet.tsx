@@ -23,6 +23,7 @@ import { useWalletContext } from "@/contexts/wallet-context";
 import { useTradeSettings } from "@/contexts/trade-settings-context";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
 import { SolanaIcon } from "@/components/icons/SolanaIcon";
+import { API_BASE } from "@/lib/api-base";
 
 const MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com";
 const TWITTER_PROFILE_CACHE_KEY = "@memeswipe:twitterProfile:v1";
@@ -80,6 +81,7 @@ export default function WalletScreen() {
   const { sendCode, linkWithCode } = useLinkEmail();
   const { profileName } = useTradeSettings();
   const [solBalance, setSolBalance] = useState<number | null>(null);
+  const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [withdrawToAddress, setWithdrawToAddress] = useState("");
@@ -117,7 +119,16 @@ export default function WalletScreen() {
     try {
       setBalanceLoading(true);
       setBalanceError(null);
-      const next = await getSolBalance(address);
+      const [next] = await Promise.all([
+        getSolBalance(address),
+        fetch(`${API_BASE}/api/solana/price-usd`)
+          .then((r) => r.json())
+          .then((j) => {
+            const p = Number(j?.priceUsd || 0);
+            if (Number.isFinite(p) && p > 0) setSolPriceUsd(p);
+          })
+          .catch(() => undefined),
+      ]);
       setSolBalance(next);
     } catch (error: any) {
       setBalanceError(error?.message || "Failed to load SOL balance");
@@ -448,9 +459,16 @@ export default function WalletScreen() {
                   <ActivityIndicator />
                 </View>
               ) : (
-                <Text style={{ color: "#fff", marginTop: 4, fontSize: 18, fontWeight: "700" }}>
-                  {solBalance === null ? "--" : formatSol(solBalance)}
-                </Text>
+                <>
+                  <Text style={{ color: "#fff", marginTop: 4, fontSize: 18, fontWeight: "700" }}>
+                    {solBalance === null ? "--" : formatSol(solBalance)}
+                  </Text>
+                  {solBalance !== null && solPriceUsd !== null && solPriceUsd > 0 ? (
+                    <Text style={{ color: "#8794b4", marginTop: 2, fontSize: 12, fontWeight: "500" }}>
+                      ≈ ${(solBalance * solPriceUsd).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                    </Text>
+                  ) : null}
+                </>
               )}
               {balanceError ? <Text style={{ color: "#ff8a8a", marginTop: 6, fontSize: 11 }}>{balanceError}</Text> : null}
             </View>
