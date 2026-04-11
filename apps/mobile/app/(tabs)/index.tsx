@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { FontAwesome } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Connection, VersionedTransaction } from '@solana/web3.js';
+import { Connection, SendTransactionError, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { useRouter } from 'expo-router';
 
@@ -46,6 +46,8 @@ const FEED_FETCH_TIMEOUT_MS = 7000;
 const MIN_TRADE_AMOUNT_USD = 0.0001;
 const MAX_TRADE_AMOUNT_USD = 500;
 const MIN_PERCENT = 0.1;
+const ROUTE_CHECK_SLIPPAGE_BPS = 300;
+const MIN_SAFE_TRADE_LIQUIDITY_USD = 10000;
 const TWITTER_CONNECTION_TIMEOUT_MS = 5000;
 const TWITTER_AUTH_START_TIMEOUT_MS = 10000;
 const MAX_FAVORITES = 12;
@@ -141,6 +143,24 @@ const favoriteTokenToSwipe = (item: FavoriteToken): SwipeToken => ({
 
 const buildFavoriteDeckTokens = (items: FavoriteToken[], source: 'pumpfun' | 'bags') =>
   items.filter((item) => matchesFavoriteSource(item, source)).map(favoriteTokenToSwipe);
+
+const getTokenTradabilityIssue = (token: SwipeToken) => {
+  if (token.isTradable === false) {
+    return token.tradableReason || 'marked not tradable';
+  }
+  const liquidity = Number(token.liquidityUsd || 0);
+  if (!Number.isFinite(liquidity) || liquidity <= 0) {
+    return 'low liquidity';
+  }
+  if (liquidity < MIN_SAFE_TRADE_LIQUIDITY_USD) {
+    return `low liquidity ${Math.round(liquidity)} < ${MIN_SAFE_TRADE_LIQUIDITY_USD}`;
+  }
+  const price = Number(token.priceUsd || 0);
+  if (!Number.isFinite(price) || price <= 0) {
+    return 'invalid price';
+  }
+  return null;
+};
 
 const mapApiToken = (token: ApiToken): SwipeToken => {
   const price = toNumber(token.priceUsd, 0);
@@ -284,6 +304,39 @@ const normalizeJupiterError = (error: unknown) => {
     // ignore
   }
   return raw;
+};
+
+const ensureJupiterRoutesAvailable = async (token: SwipeToken, amountLamports: number) => {
+  const issues: string[] = [];
+  const buildParams = (inputMint: string, outputMint: string) =>
+    new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: String(amountLamports),
+      slippageBps: String(ROUTE_CHECK_SLIPPAGE_BPS),
+    });
+
+  const buyParams = buildParams(SOL_MINT, token.address);
+  try {
+    const { json: buyQuote } = await fetchJupiterJson(`/quote?${buyParams.toString()}`);
+    if (!buyQuote || !buyQuote.outAmount) {
+      throw new Error('buy quote missing output');
+    }
+  } catch (error) {
+    issues.push(`buy quote failed: ${normalizeJupiterError(error)}`);
+  }
+
+  const sellParams = buildParams(token.address, SOL_MINT);
+  try {
+    const { json: sellQuote } = await fetchJupiterJson(`/quote?${sellParams.toString()}`);
+    if (!sellQuote || !sellQuote.outAmount) {
+      throw new Error('sell quote missing output');
+    }
+  } catch (error) {
+    issues.push(`sell quote failed: ${normalizeJupiterError(error)}`);
+  }
+
+  return issues.length ? issues.join(' | ') : null;
 };
 
 void WebBrowser.maybeCompleteAuthSession();
@@ -1134,12 +1187,16 @@ export default function HomeScreen() {
 
       let lastError: any = null;
 
+      const amountSol = usdAmount / liveSolPriceUsd;
+      const amountLamports = Math.max(1, Math.floor(amountSol * 1_000_000_000));
+
+      const routeIssue = await ensureJupiterRoutesAvailable(token, amountLamports);
+      if (routeIssue) {
+        throw new Error(`Jupiter route check failed: ${routeIssue}`);
+      }
+
       for (const slippageBps of SWAP_SLIPPAGE_RETRY_BPS) {
         try {
-          const amountUsd = Math.max(MIN_TRADE_AMOUNT_USD, Number.isFinite(tradeAmount) ? tradeAmount : MIN_TRADE_AMOUNT_USD);
-          const amountSol = amountUsd / liveSolPriceUsd;
-          const amountLamports = Math.max(1, Math.floor(amountSol * 1_000_000_000));
-
           const quoteParams = new URLSearchParams({
             inputMint: SOL_MINT,
             outputMint: token.address,
@@ -1358,11 +1415,15 @@ export default function HomeScreen() {
         Alert.alert("Set up wallet", "Please create your Privy wallet first.");
         return;
       }
-      if (token.source === 'bags' && token.isTradable === false) {
-        const reason = token.tradableReason || 'very low liquidity';
-        console.log('[BAGS][SWIPE_BLOCKED]', { symbol: token.symbol, address: token.address, reason });
-        hideToken(token.address);
-        Alert.alert('Token not tradable', 'Token not tradable. Very low liquidity.');
+      const tradabilityIssue = getTokenTradabilityIssue(token);
+      if (tradabilityIssue) {
+        const prefix = token.source === 'bags' ? '[BAGS][SWIPE_BLOCKED]' : '[TRADE][BLOCKED]';
+        console.log(prefix, {
+          symbol: token.symbol,
+          address: token.address,
+          reason: tradabilityIssue,
+        });
+        Alert.alert('Token not tradable', 'This token is not tradable right now');
         return;
       }
       console.log('[TRADE][SWIPE_RIGHT] token selected', {
@@ -1392,6 +1453,7 @@ export default function HomeScreen() {
               message.toLowerCase().includes('route not found') ||
               message.toLowerCase().includes('no route') ||
               message.toLowerCase().includes('no sell route') ||
+              message.toLowerCase().includes('route check failed') ||
               message.includes('0x1788');
             console.log('[TRADE][SWIPE_RIGHT] swap failed', {
               symbol: token.symbol,

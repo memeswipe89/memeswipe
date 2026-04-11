@@ -348,6 +348,12 @@ function logBagsNotTradable(token, reason) {
   console.log(`[BAGS][NOT_TRADABLE] ${label}${symbol} - ${reason}`);
 }
 
+function logPumpfunSkipped(token, reason) {
+  const label = token?.name || token?.symbol || token?.address || "Unknown";
+  const symbol = token?.symbol ? ` (${token.symbol})` : "";
+  console.log(`[PUMPFUN][SKIPPED] ${label}${symbol} - ${reason}`);
+}
+
 function getStrictTradabilityReason(token) {
   if (!token?.address) return "missing address";
   const liquidity = Number(token.liquidityUsd || 0);
@@ -778,7 +784,16 @@ async function fetchPumpfunTokens() {
       tradeRoute: "jupiter",
     });
     const reason = getStrictTradabilityReason(formatted);
+    const detail =
+      reason === "low liquidity"
+        ? `low liquidity ${Math.round(formatted.liquidityUsd || 0)} < ${MIN_LIQUIDITY_USD}`
+        : reason === "low volume"
+        ? `low volume ${Math.round(formatted.volume24hUsd || 0)} < ${MIN_VOLUME_USD}`
+        : reason === "invalid price"
+        ? `invalid price ${formatted.priceUsd ?? "n/a"}`
+        : reason;
     if (reason) {
+      logPumpfunSkipped(formatted, detail || reason);
       continue;
     }
     normalized.push(formatted);

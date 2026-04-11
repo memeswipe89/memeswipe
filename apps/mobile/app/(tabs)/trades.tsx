@@ -8,7 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { addBalance } from '@/lib/devWallet';
 import { notifyTradeClosed } from '@/lib/notifications';
 import { useWalletContext } from '@/contexts/wallet-context';
-import { Connection, VersionedTransaction } from '@solana/web3.js';
+import { Connection, SendTransactionError, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
 import { API_BASE, JUP_API_KEY } from '@/lib/api-base';
@@ -613,11 +613,27 @@ export default function TradesScreen() {
           throw new Error('Embedded wallet could not sign close transaction.');
         }
         const connection = new Connection(SOLANA_MAINNET_RPC, 'confirmed');
-        const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-          skipPreflight: false,
-          maxRetries: 3,
-        });
-        await connection.confirmTransaction(signature, 'confirmed');
+        try {
+          const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+            skipPreflight: false,
+            maxRetries: 3,
+          });
+          await connection.confirmTransaction(signature, 'confirmed');
+        } catch (err: any) {
+          const isSendError = err instanceof SendTransactionError;
+          const logs =
+            typeof err?.getLogs === 'function'
+              ? await err.getLogs(connection).catch(() => null)
+              : err?.logs || null;
+          console.log('[TRADES] close transaction failed', {
+            orderId,
+            tokenAddress: trade.tokenAddress,
+            message: err?.message,
+            isSendError,
+            logs,
+          });
+          throw err;
+        }
 
         const closeReason = options?.closeReason ?? 'manual';
         const closeTriggerPct =
