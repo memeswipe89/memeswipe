@@ -57,11 +57,7 @@ export default function TabLayout() {
         name="explore"
         options={{
           title: 'T & C',
-          tabBarIcon: ({ color, focused }) => (
-            <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
-              <MaterialIcons name="gavel" size={22} color={color} />
-            </View>
-          ),
+          href: null, // hidden from tab bar — accessible via wallet sheet
         }}
       />
     </Tabs>

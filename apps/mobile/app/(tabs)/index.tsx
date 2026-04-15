@@ -19,6 +19,7 @@ import { LoadingOverlay } from '@/components/loading-overlay';
 import type { FeedSegment } from '@/components/feed-segmented-control';
 import { ProfileButton } from '@/components/profile/profile-button';
 import { ProfileSheet, type ProfileSheetRef } from '@/components/profile/profile-sheet';
+import { WalletSheet, type WalletSheetRef } from '@/components/wallet-sheet';
 import { SwipeHint } from '@/components/swipe-hint-overlay';
 import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
 import { useWalletContext } from '@/contexts/wallet-context';
@@ -302,6 +303,7 @@ export default function HomeScreen() {
   } =
     useWalletContext();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
+  const walletSheetRef = useRef<WalletSheetRef>(null);
   const connectInProgressRef = useRef(false);
   const [userId, setUserId] = useState<string>('');
   const [checkingTwitter, setCheckingTwitter] = useState(true);
@@ -1507,8 +1509,25 @@ export default function HomeScreen() {
         <View style={styles.screen}>
           <View style={styles.topBarWrap}>
             <View style={styles.topProfileRow}>
+              {/* Left: favorites heart */}
               <Pressable
-                onPress={openWalletPage}
+                onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
+                android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
+                style={({ pressed }) => [
+                  styles.favoriteIconButton,
+                  favoritesActive && styles.favoriteIconButtonActive,
+                  pressed && styles.favoriteIconButtonPressed,
+                ]}
+              >
+                <Text style={[styles.topBarHeart, favoritesActive && styles.topBarHeartActive]}>
+                  {favoritesActive ? '♥' : '♡'}
+                </Text>
+              </Pressable>
+
+              {/* Right: wallet only */}
+              <Pressable
+                onPress={() => walletSheetRef.current?.open()}
+                disabled={appLoading}
                 android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
                 style={({ pressed }) => [styles.brandAvatarButton, pressed && styles.brandAvatarButtonPressed]}
               >
@@ -1516,26 +1535,6 @@ export default function HomeScreen() {
                   <Text style={styles.brandAvatarText}>{(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}</Text>
                 </View>
               </Pressable>
-              <View style={styles.topActionsRow}>
-                <Pressable
-                  onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
-                  android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
-                  style={({ pressed }) => [
-                    styles.favoriteIconButton,
-                    favoritesActive && styles.favoriteIconButtonActive,
-                    pressed && styles.favoriteIconButtonPressed,
-                  ]}
-                >
-                  <Text style={[styles.topBarHeart, favoritesActive && styles.topBarHeartActive]}>
-                    {favoritesActive ? '♥' : '♡'}
-                  </Text>
-                </Pressable>
-                <ProfileButton
-                  onPress={() => profileSheetRef.current?.open()}
-                  onLongPress={openDevWalletControls}
-                  disabled={appLoading}
-                />
-              </View>
             </View>
             <View style={styles.controlsRowWrap}>
             <View style={styles.simplePillRow}>
@@ -1590,6 +1589,7 @@ export default function HomeScreen() {
         </View>
 
         <ProfileSheet ref={profileSheetRef} />
+        <WalletSheet ref={walletSheetRef} />
         <SwipeHint visible={showSwipeHint} />
         <AppLoader visible={appLoading} />
         <LoadingOverlay visible={creatingOrder || buyLoading} text="Executing trade..." />

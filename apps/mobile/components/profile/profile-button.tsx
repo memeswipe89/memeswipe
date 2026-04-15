@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
-import { FontAwesome } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 
 type ProfileButtonProps = {
   onPress: () => void;
@@ -17,7 +17,7 @@ export const ProfileButton = memo(function ProfileButton({ onPress, onLongPress,
       android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
       style={({ pressed }) => [styles.pressable, pressed && styles.pressed]}
     >
-      <FontAwesome name="cog" size={22} color="#f7f7f7" />
+      <Ionicons name="person-circle-outline" size={24} color="#f7f7f7" />
     </Pressable>
   );
 });

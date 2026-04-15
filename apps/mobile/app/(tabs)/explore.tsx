@@ -1,4 +1,7 @@
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <View style={styles.section}>
@@ -19,8 +22,21 @@ const Bullet = ({ children }: { children: string }) => (
 );
 
 export default function TandCScreen() {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      {/* Back button */}
+      <Pressable
+        onPress={() => router.back()}
+        hitSlop={12}
+        style={[styles.backBtn, { top: insets.top + 10 }]}
+      >
+        <Ionicons name="chevron-back" size={22} color="#fff" />
+        <Text style={styles.backText}>Wallet</Text>
+      </Pressable>
+
       <View style={styles.header}>
         <Text style={styles.appName}>Swipe It</Text>
         <Text style={styles.headerSub}>Terms &amp; Conditions</Text>
@@ -109,9 +125,24 @@ const styles = StyleSheet.create({
     paddingBottom: 110,
   },
   header: {
-    marginTop: 54,
+    marginTop: 64,
     marginBottom: 28,
     alignItems: 'center',
+  },
+  backBtn: {
+    position: 'absolute',
+    left: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    zIndex: 10,
+  },
+  backText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '500',
   },
   appName: {
     fontSize: 32,

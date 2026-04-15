@@ -918,9 +918,9 @@ export default function TradesScreen() {
       <View style={styles.headerRow}>
         <Text style={styles.title}>Trades</Text>
         <View style={styles.headerActions}>
-          <Pressable onPress={() => setShowSearch(v => !v)} style={styles.iconBtn}>
+          {/* <Pressable onPress={() => setShowSearch(v => !v)} style={styles.iconBtn}>
             <MaterialIcons name={showSearch ? 'search-off' : 'search'} size={20} color="#fff" />
-          </Pressable>
+          </Pressable> */}
           <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
             <Text style={styles.refreshText}>Refresh</Text>
           </Pressable>
