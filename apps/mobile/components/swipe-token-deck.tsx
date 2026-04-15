@@ -25,14 +25,16 @@ import { getPriceHistory } from '@/lib/getPriceHistory';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25;
+const SWIPE_UP_THRESHOLD = SCREEN_HEIGHT * 0.15;
 const SWIPE_OUT_DISTANCE = SCREEN_WIDTH * 1.3;
+const SWIPE_UP_DISTANCE = -SCREEN_HEIGHT * 0.8;
 const INTENTIONAL_EASING = Easing.bezier(0.22, 1, 0.36, 1);
 const MOTION = {
   quick: 220,
   medium: 300,
 };
 
-type SwipeDirection = 'left' | 'right';
+type SwipeDirection = 'left' | 'right' | 'up';
 
 export type SwipeToken = {
   name: string;
@@ -61,6 +63,7 @@ type SwipeTokenDeckProps = {
   onBuy: (token: SwipeToken) => void;
   onReject: (token: SwipeToken) => void;
   onToggleFavorite: (token: SwipeToken) => void;
+  onKeepFavorite?: (token: SwipeToken) => void;
   favoriteAddresses: Set<string>;
   isLoading?: boolean;
   isInteractionLocked?: boolean;
@@ -70,6 +73,8 @@ type SwipeTokenDeckProps = {
   onSwipeStateChange?: (swiping: boolean) => void;
   onActiveCardChange?: (token: SwipeToken | null) => void;
   onRefresh?: () => void;
+  isFavoritesMode?: boolean;
+  onFavoritePopup?: (token: SwipeToken) => void;
 };
 
 type TokenCardProps = {
@@ -427,6 +432,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   onBuy,
   onReject,
   onToggleFavorite,
+  onKeepFavorite,
   favoriteAddresses,
   isLoading = false,
   isInteractionLocked = false,
@@ -436,6 +442,8 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   onSwipeStateChange,
   onActiveCardChange,
   onRefresh,
+  isFavoritesMode = false,
+  onFavoritePopup,
 }: SwipeTokenDeckProps) {
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -468,6 +476,10 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
         buyBadge.value = 1;
         buyBadge.value = withTiming(0, { duration: 300, easing: Easing.out(Easing.cubic) });
         onBuy(token);
+      } else if (direction === 'up') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+        onKeepFavorite?.(token);
+        onFavoritePopup?.(token);
       } else {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
         onReject(token);
@@ -476,7 +488,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
       translateX.value = 0;
       translateY.value = 0;
     },
-    [buyBadge, buyFlash, currentToken, onBuy, onReject, translateX, translateY]
+    [buyBadge, buyFlash, currentToken, onBuy, onKeepFavorite, onReject, translateX, translateY]
   );
 
   const panGesture = useMemo(
@@ -489,10 +501,23 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
         })
         .onUpdate((event) => {
           translateX.value = event.translationX;
-          translateY.value = event.translationY * 0.08;
+          translateY.value = event.translationY;
         })
         .onEnd(() => {
           if (onSwipeStateChange) runOnJS(onSwipeStateChange)(false);
+          
+          // Check for up swipe first (negative Y)
+          if (translateY.value < -SWIPE_UP_THRESHOLD && Math.abs(translateX.value) < SWIPE_THRESHOLD) {
+            translateY.value = withTiming(SWIPE_UP_DISTANCE, {
+              duration: MOTION.quick,
+              easing: INTENTIONAL_EASING,
+            });
+            translateX.value = withTiming(0, { duration: MOTION.quick, easing: INTENTIONAL_EASING });
+            runOnJS(commitSwipe)('up');
+            return;
+          }
+          
+          // Check for horizontal swipes
           if (Math.abs(translateX.value) > SWIPE_THRESHOLD) {
             const direction: SwipeDirection = translateX.value > 0 ? 'right' : 'left';
             translateX.value = withTiming(translateX.value > 0 ? SWIPE_OUT_DISTANCE : -SWIPE_OUT_DISTANCE, {
@@ -504,6 +529,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
             return;
           }
 
+          // Return to center
           translateX.value = withTiming(0, { duration: MOTION.medium, easing: INTENTIONAL_EASING });
           translateY.value = withTiming(0, { duration: MOTION.medium, easing: INTENTIONAL_EASING });
         }),
@@ -535,6 +561,10 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
       opacity,
     };
   });
+
+  const upOverlayStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateY.value, [0, -SWIPE_UP_THRESHOLD], [0, 0.9], Extrapolation.CLAMP),
+  }));
 
   const rightOverlayStyle = useAnimatedStyle(() => ({
     opacity: interpolate(translateX.value, [0, SWIPE_THRESHOLD], [0, 0.9], Extrapolation.CLAMP),
@@ -604,6 +634,18 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
               isFavorite={favoriteAddresses.has(currentToken.address)}
               onToggleFavorite={onToggleFavorite}
             />
+            
+            {/* Swipe overlays */}
+            <Animated.View pointerEvents="none" style={[styles.overlayBadge, styles.overlayUp, upOverlayStyle]}>
+              <Text style={styles.overlayUpText}>♥</Text>
+            </Animated.View>
+            <Animated.View pointerEvents="none" style={[styles.overlayBadge, styles.overlayRight, rightOverlayStyle]}>
+              <Text style={styles.overlayRightText}>BUY</Text>
+            </Animated.View>
+            <Animated.View pointerEvents="none" style={[styles.overlayBadge, styles.overlayLeft, leftOverlayStyle]}>
+              <Text style={styles.overlayLeftText}>PASS</Text>
+            </Animated.View>
+            
             <Animated.View pointerEvents="none" style={[styles.successBadge, successBadgeStyle]}>
               <Text style={styles.successBadgeText}>✓</Text>
             </Animated.View>
@@ -896,21 +938,34 @@ const styles = StyleSheet.create({
   },
   overlayBadge: {
     position: 'absolute',
-    top: 32,
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
   },
+  overlayUp: {
+    top: 32,
+    alignSelf: 'center',
+    borderColor: '#ffd166',
+    backgroundColor: 'rgba(255,209,102,0.18)',
+  },
   overlayLeft: {
     left: 22,
+    top: 32,
     borderColor: '#ff4d67',
     backgroundColor: 'rgba(255,77,103,0.18)',
   },
   overlayRight: {
     right: 22,
+    top: 32,
     borderColor: '#36e67e',
     backgroundColor: 'rgba(54,230,126,0.18)',
+  },
+  overlayUpText: {
+    color: '#ffdd7a',
+    fontWeight: '800',
+    fontSize: 18,
+    letterSpacing: 1,
   },
   overlayLeftText: {
     color: '#ff788d',

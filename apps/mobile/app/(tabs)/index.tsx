@@ -39,6 +39,7 @@ const LAST_ROI_KEY = '@memeswipe:lastROI';
 const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
+const FAVORITE_POPUP_DISABLED_KEY = '@memeswipe:favoritePopupDisabled:v1';
 const PAGE_LIMIT = 50;
 const INITIAL_PAGE_LIMIT = 12;
 const LOW_DECK_THRESHOLD = 5;
@@ -75,6 +76,13 @@ type TradeOpenPopupState = {
   amountUsd: number;
   tpRoi: number;
   txSignature: string;
+};
+
+type FavoritePopupState = {
+  visible: boolean;
+  tokenName: string;
+  tokenSymbol: string;
+  neverShowAgain: boolean;
 };
 type RemoteSegment = Exclude<FeedSegment, 'favorites'>;
 
@@ -346,6 +354,13 @@ export default function HomeScreen() {
     tpRoi: 0,
     txSignature: '',
   });
+  const [favoritePopup, setFavoritePopup] = useState<FavoritePopupState>({
+    visible: false,
+    tokenName: '',
+    tokenSymbol: '',
+    neverShowAgain: false,
+  });
+  const [favoritePopupDisabled, setFavoritePopupDisabled] = useState(false);
   const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI, setStopLoss } =
     useTradeSettings();
 
@@ -674,11 +689,17 @@ export default function HomeScreen() {
     let active = true;
     const hydrateLocalState = async () => {
       try {
-        const [favoritesRaw, hiddenRaw] = await Promise.all([
+        const [favoritesRaw, hiddenRaw, favoritePopupDisabledRaw] = await Promise.all([
           AsyncStorage.getItem(FAVORITES_KEY),
           AsyncStorage.getItem(HIDDEN_TOKENS_KEY),
+          AsyncStorage.getItem(FAVORITE_POPUP_DISABLED_KEY),
         ]);
         if (!active) return;
+
+        // Load favorite popup preference
+        if (favoritePopupDisabledRaw === 'true') {
+          setFavoritePopupDisabled(true);
+        }
 
         if (favoritesRaw) {
           const parsed = JSON.parse(favoritesRaw) as (string | FavoriteToken)[];
@@ -1355,6 +1376,67 @@ export default function HomeScreen() {
     [hideToken, removeFavoriteToken, segment]
   );
 
+  const handleKeepFavorite = useCallback(
+    (token: SwipeToken) => {
+      // In favorites mode, swipe up moves the token to the end of favorites list
+      if (segment === 'favorites') {
+        setFavoriteTokens((prev) => {
+          const tokenExists = prev.find((item) => item.address === token.address);
+          if (!tokenExists) return prev;
+          
+          // Remove the token from current position and add it to the end with updated timestamp
+          const filtered = prev.filter((item) => item.address !== token.address);
+          const updatedToken = {
+            ...tokenExists,
+            likedAt: Date.now() - (24 * 60 * 60 * 1000), // Set timestamp to 24 hours ago to put it at end
+          };
+          const reordered = [...filtered, updatedToken];
+          
+          // Update the favorites and rebuild the deck
+          const sorted = reordered.sort((a, b) => b.likedAt - a.likedAt);
+          const trimmed = sorted.slice(0, MAX_FAVORITES);
+          persistFavorites(trimmed);
+          setFavoriteAddresses(new Set(trimmed.map((f) => f.address)));
+          
+          return trimmed;
+        });
+        
+        // Also hide from current deck so it doesn't appear immediately
+        hideToken(token.address);
+      } else {
+        // In other modes, swipe up adds to favorites and hides from deck
+        handleToggleFavorite(token);
+        hideToken(token.address);
+      }
+    },
+    [handleToggleFavorite, hideToken, segment, persistFavorites]
+  );
+
+  const handleFavoritePopup = useCallback(
+    (token: SwipeToken) => {
+      // Don't show popup if user has disabled it
+      if (favoritePopupDisabled) return;
+      
+      setFavoritePopup({
+        visible: true,
+        tokenName: token.name,
+        tokenSymbol: token.symbol.toUpperCase(),
+        neverShowAgain: false,
+      });
+    },
+    [favoritePopupDisabled]
+  );
+
+  const handleNeverShowAgain = useCallback(async () => {
+    try {
+      await AsyncStorage.setItem(FAVORITE_POPUP_DISABLED_KEY, 'true');
+      setFavoritePopupDisabled(true);
+      setFavoritePopup((prev) => ({ ...prev, visible: false }));
+    } catch (err) {
+      console.log('Failed to save favorite popup preference', err);
+    }
+  }, []);
+
   const handleDeckRefresh = useCallback(() => {
     if (!isRemoteSegment(segment)) return;
     // Reset the segment so it fetches fresh data
@@ -1501,6 +1583,15 @@ export default function HomeScreen() {
     return () => clearTimeout(timer);
   }, [tradeOpenPopup.visible]);
 
+  useEffect(() => {
+    if (!favoritePopup.visible) return;
+    // Auto-dismiss after 3 seconds if user doesn't interact
+    const timer = setTimeout(() => {
+      setFavoritePopup((prev) => ({ ...prev, visible: false }));
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [favoritePopup.visible]);
+
   const favoritesActive = segment === 'favorites';
 
   return (
@@ -1559,12 +1650,15 @@ export default function HomeScreen() {
                 onBuy={handleBuy}
                 onReject={handleReject}
                 onToggleFavorite={handleToggleFavorite}
+                onKeepFavorite={handleKeepFavorite}
+                onFavoritePopup={handleFavoritePopup}
               favoriteAddresses={favoriteAddresses}
               isLoading={loading || (isRemoteSegment(segment) && initialDeckPending && tokens.length === 0)}
               isInteractionLocked={appLoading || creatingOrder || buyLoading}
               onSwipeStateChange={setIsSwiping}
               onActiveCardChange={handleActiveCardChange}
               onRefresh={isRemoteSegment(segment) ? handleDeckRefresh : undefined}
+              isFavoritesMode={segment === 'favorites'}
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'
@@ -1666,6 +1760,31 @@ export default function HomeScreen() {
                 onPress={() => setTradeOpenPopup((prev) => ({ ...prev, visible: false }))}
               >
                 <Text style={styles.tradePopupButtonText}>Awesome</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {favoritePopup.visible ? (
+          <View style={styles.favoritePopupOverlay} pointerEvents="auto">
+            <View style={styles.favoritePopupCard}>
+              <LinearGradient
+                colors={['rgba(255,209,102,0.24)', 'rgba(255,128,180,0.16)']}
+                style={styles.favoritePopupGlow}
+              />
+              <Text style={styles.favoritePopupIcon}>♥</Text>
+              <Text style={styles.favoritePopupTitle}>Added to Favorites</Text>
+              <Text style={styles.favoritePopupText}>
+                {favoritePopup.tokenName} ({favoritePopup.tokenSymbol})
+              </Text>
+              <Pressable
+                style={styles.neverShowAgainRow}
+                onPress={handleNeverShowAgain}
+              >
+                <View style={styles.checkbox}>
+                  <Text style={styles.checkboxText}>✓</Text>
+                </View>
+                <Text style={styles.neverShowAgainText}>Never show again</Text>
               </Pressable>
             </View>
           </View>
@@ -1873,6 +1992,76 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  favoritePopupOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(3,7,12,0.58)',
+    paddingHorizontal: 20,
+    zIndex: 90,
+  },
+  favoritePopupCard: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,209,102,0.3)',
+    backgroundColor: 'rgba(8,14,28,0.98)',
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    gap: 8,
+    overflow: 'hidden',
+    alignItems: 'center',
+  },
+  favoritePopupGlow: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  favoritePopupIcon: {
+    fontSize: 32,
+    color: '#ffdd7a',
+    marginBottom: 4,
+  },
+  favoritePopupTitle: {
+    color: '#ffdd7a',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  favoritePopupText: {
+    color: '#e8f2ff',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  neverShowAgainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#ffdd7a',
+    backgroundColor: '#ffdd7a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxText: {
+    color: '#1a1a1a',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  neverShowAgainText: {
+    color: '#e8f2ff',
+    fontSize: 13,
+    fontWeight: '500',
   },
   tradePopupOverlay: {
     ...StyleSheet.absoluteFillObject,

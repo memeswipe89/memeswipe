@@ -158,7 +158,11 @@ export function OnboardingScreen() {
         }
       }
       if (!response.ok) {
-        throw new Error(`Onboarding failed (${response.status}): ${responseText}`);
+        const trimmed = responseText.trim();
+        if (trimmed.startsWith('<')) {
+          throw new Error(`Server returned HTML (${response.status}). The backend may be starting up — please try again in a moment.`);
+        }
+        throw new Error(responseJson?.error || `Onboarding failed (${response.status})`);
       }
       if (responseJson?.user_id) {
         await persistUserIds(responseJson.user_id, user.id);

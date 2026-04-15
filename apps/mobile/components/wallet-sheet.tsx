@@ -400,7 +400,7 @@ function WalletContent({ onClose }: { onClose: () => void }) {
               iconBg="#2a2a1a"
               label="Terms & Conditions"
               showChevron
-              onPress={() => { router.push('/(tabs)/explore'); }}
+              onPress={() => { router.push('/terms'); }}
             />
             <MenuRow icon="log-out-outline" iconBg="#3a1a1a" label={loggingOut ? 'Signing out…' : 'Sign Out'} onPress={handleLogout} destructive last />
           </MenuSection>

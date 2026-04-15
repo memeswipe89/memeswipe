@@ -134,6 +134,7 @@ function AuthGatedApp() {
     <>
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="terms" options={{ headerShown: false }} />
         <Stack.Screen name="deposit" options={{ title: 'Fund Wallet' }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>

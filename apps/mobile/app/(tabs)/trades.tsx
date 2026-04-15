@@ -137,9 +137,27 @@ const fetchJsonWithFallback = async <T,>(
     try {
       const response = await fetch(url, init);
       const raw = await response.text();
-      const isHtml404 = response.status === 404 && raw.trim().startsWith('<');
-      if (isHtml404) continue;
-      const json = JSON.parse(raw) as T;
+      
+      // Check if response is HTML (error page)
+      const isHtml = raw.trim().startsWith('<');
+      if (isHtml) {
+        if (response.status === 404) {
+          continue; // Try next endpoint
+        }
+        // For other HTML responses (502, 500, etc.), throw a user-friendly error
+        throw new Error(`Server returned HTML (${response.status}). The backend may be starting up — please try again in a moment.`);
+      }
+      
+      // Try to parse JSON
+      let json: T;
+      try {
+        json = JSON.parse(raw) as T;
+      } catch (parseError) {
+        // If JSON parsing fails, provide context about the response
+        const preview = raw.slice(0, 100);
+        throw new Error(`Invalid server response (${response.status}): ${preview || 'empty body'}`);
+      }
+      
       return { response, json, url };
     } catch (error) {
       lastError = error;
@@ -382,18 +400,19 @@ export default function TradesScreen() {
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
+  const [lastErrorTime, setLastErrorTime] = useState<number>(0);
   const autoCloseRetryAfterRef = useRef<Record<string, number>>({});
   const lastAutoClosePriceFetchRef = useRef(0);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
   const pageSize = 20;
 
-  const loadTrades = useCallback(async () => {
+  const loadTrades = useCallback(async (forceRefresh = false) => {
     try {
       setLoading(true);
       setError(null);
       const resolvedUserId = await getOrCreateLocalUserId();
       if (!resolvedUserId) {
-        throw new Error('User id not found');
+        throw new Error('User session not found. Please restart the app.');
       }
       const { response: res, json } = await fetchJsonWithFallback<{
         orders?: {
@@ -426,7 +445,7 @@ export default function TradesScreen() {
         `/orders?userId=${encodeURIComponent(resolvedUserId)}&limit=200`,
       ]);
       if (!res.ok) {
-        throw new Error(json?.error || 'Failed to load trades');
+        throw new Error(json?.error || `Server error (${res.status}). Please try again.`);
       }
       const sourceOrders = json.orders || [];
 
@@ -495,7 +514,20 @@ export default function TradesScreen() {
       });
       setTrades(mapped);
     } catch (err: any) {
-      setError(err?.message || 'Failed to load trades');
+      console.log('Failed to load trades:', err);
+      const now = Date.now();
+      setLastErrorTime(now);
+      
+      // Provide user-friendly error messages
+      let errorMessage = 'Failed to load trades';
+      if (err?.message?.includes('Server returned HTML')) {
+        errorMessage = 'Backend server is starting up. Please wait a moment and try again.';
+      } else if (err?.message?.includes('JSON Parse error')) {
+        errorMessage = 'Server error. Please try again in a moment.';
+      } else if (err?.message) {
+        errorMessage = err.message;
+      }
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -507,8 +539,12 @@ export default function TradesScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadTrades();
-    }, [loadTrades])
+      // Only auto-refresh if no recent error (within last 30 seconds)
+      const now = Date.now();
+      if (now - lastErrorTime > 30000) {
+        void loadTrades();
+      }
+    }, [loadTrades, lastErrorTime])
   );
 
   useEffect(() => {
@@ -921,7 +957,7 @@ export default function TradesScreen() {
           {/* <Pressable onPress={() => setShowSearch(v => !v)} style={styles.iconBtn}>
             <MaterialIcons name={showSearch ? 'search-off' : 'search'} size={20} color="#fff" />
           </Pressable> */}
-          <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
+          <Pressable onPress={() => void loadTrades(true)} style={styles.refreshBtn}>
             <Text style={styles.refreshText}>Refresh</Text>
           </Pressable>
         </View>
