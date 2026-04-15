@@ -578,6 +578,18 @@ export default function WalletScreen() {
               />
             </MenuSection>
 
+            {/* Terms & Conditions */}
+            <MenuSection>
+              <MenuRow
+                icon="document-text-outline"
+                iconBg="#2a2a1a"
+                label="Terms & Conditions"
+                onPress={() => router.push("/terms")}
+                rightElement={<Ionicons name="chevron-forward" size={18} color="#3a3a3a" />}
+                last
+              />
+            </MenuSection>
+
             {/* Sign out */}
             <MenuSection>
               <MenuRow

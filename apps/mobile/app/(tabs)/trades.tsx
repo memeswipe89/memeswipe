@@ -1033,6 +1033,12 @@ export default function TradesScreen() {
       ) : error ? (
         <View style={styles.centerState}>
           <Text style={styles.error}>{error}</Text>
+          <Pressable 
+            onPress={() => void loadTrades(true)} 
+            style={styles.retryButton}
+          >
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </Pressable>
         </View>
       ) : (
         <FlatList
@@ -1123,7 +1129,19 @@ const styles = StyleSheet.create({
   filterTextActive: { color: '#fff' },
   centerState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   muted: { color: '#9db0db' },
-  error: { color: '#ff8a8a' },
+  error: { color: '#ff8a8a', textAlign: 'center', paddingHorizontal: 20, marginBottom: 16 },
+  retryButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   listContent: { paddingBottom: 110, gap: 10 },
   card: {
     backgroundColor: 'rgba(255,255,255,0.06)',
