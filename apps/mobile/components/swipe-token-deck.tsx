@@ -501,7 +501,8 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
         })
         .onUpdate((event) => {
           translateX.value = event.translationX;
-          translateY.value = event.translationY;
+          // Only allow upward swipes (negative Y), prevent downward swipes
+          translateY.value = Math.min(0, event.translationY);
         })
         .onEnd(() => {
           if (onSwipeStateChange) runOnJS(onSwipeStateChange)(false);

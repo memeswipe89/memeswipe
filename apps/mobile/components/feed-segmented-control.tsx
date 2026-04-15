@@ -19,10 +19,12 @@ const SegmentChip = memo(function SegmentChip({
   label,
   active,
   onPress,
+  isFavorite,
 }: {
   label: string;
   active: boolean;
   onPress: () => void;
+  isFavorite?: boolean;
 }) {
   const scale = useSharedValue(1);
 
@@ -38,17 +40,24 @@ const SegmentChip = memo(function SegmentChip({
     transform: [{ scale: scale.value }],
   }));
 
+  // Use pink/red gradient for Favorites tab, blue for others
+  const gradientColors = isFavorite && active
+    ? ['rgba(255,99,132,0.92)', 'rgba(255,128,180,0.62)']
+    : ['rgba(106,142,255,0.72)', 'rgba(83,177,255,0.42)'];
+
+  const shadowColor = isFavorite && active ? '#ff6384' : '#82a0ff';
+
   return (
     <Animated.View style={animatedStyle}>
-      <Pressable onPress={handlePress} style={[styles.chip, active && styles.chipActive]}>
+      <Pressable onPress={handlePress} style={[styles.chip, active && styles.chipActive, active && isFavorite && { shadowColor }]}>
         {active ? (
           <LinearGradient
-            colors={['rgba(106,142,255,0.72)', 'rgba(83,177,255,0.42)']}
+            colors={gradientColors}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.activeFill}
           >
-            <Text style={styles.activeText}>{label}</Text>
+            <Text style={[styles.activeText, isFavorite && styles.favoriteActiveText]}>{label}</Text>
           </LinearGradient>
         ) : (
           <Text style={styles.inactiveText}>{label}</Text>
@@ -83,6 +92,7 @@ export const FeedSegmentedControl = memo(function FeedSegmentedControl({
               key={segment.key}
               label={segment.label}
               active={segment.key === value}
+              isFavorite={segment.key === 'favorites'}
               onPress={() => onChange(segment.key)}
             />
           ))}
@@ -142,5 +152,8 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '800',
+  },
+  favoriteActiveText: {
+    color: '#ffb3c6',
   },
 });

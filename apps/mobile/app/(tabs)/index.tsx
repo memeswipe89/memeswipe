@@ -1088,6 +1088,9 @@ export default function HomeScreen() {
               ? token.chartData.map((n) => toNumber(n, basePrice || 0))
               : buildFallbackChart(basePrice),
           source: token.source || (activeChain === 'base' ? 'bags' : 'pumpfun'),
+          imageUrl: token.imageUrl,
+          website: token.website,
+          twitter: token.twitter,
         },
       ];
       return applyFavoriteUpdate(next);
@@ -1904,7 +1907,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.78)',
   },
   topBarHeartActive: {
-    color: '#fff',
+    color: '#ff6b9d',
   },
   controlsRowWrap: {
     width: '100%',
