@@ -8,18 +8,18 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
 } from 'react-native-reanimated';
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Haptics from 'expo-haptics';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 
 const TAB_HEIGHT = 60;
 const BLOB_HEIGHT = 44;
 const BLOB_PADDING = 8;
 const BLOB_VERTICAL_PADDING = 8;
 
-const ICONS: Record<string, keyof typeof MaterialIcons.glyphMap> = {
-  index: 'home',
-  trades: 'view-list',
-  wallet: 'credit-card',
+const SF_ICONS: Record<string, string> = {
+  index: 'house.fill',
+  trades: 'list.bullet.rectangle.fill',
+  wallet: 'creditcard.fill',
 };
 
 const LABELS: Record<string, string> = {
@@ -103,7 +103,7 @@ export function LiquidTabBar({ state, descriptors, navigation }: BottomTabBarPro
           {/* Tab buttons */}
           {visibleRoutes.map((route) => {
             const isFocused = state.routes[state.index]?.key === route.key;
-            const iconName = ICONS[route.name] ?? 'circle';
+            const iconName = SF_ICONS[route.name] ?? 'circle.fill';
             const label = LABELS[route.name] ?? route.name;
 
             const onPress = () => {
@@ -127,10 +127,11 @@ export function LiquidTabBar({ state, descriptors, navigation }: BottomTabBarPro
                 accessibilityState={isFocused ? { selected: true } : {}}
               >
                 <View style={styles.iconContainer}>
-                  <MaterialIcons
+                  <IconSymbol
                     name={iconName}
                     size={22}
                     color={isFocused ? '#fff' : 'rgba(255,255,255,0.5)'}
+                    weight="semibold"
                   />
                   {isFocused ? (
                     <Text style={styles.label}>{label}</Text>
