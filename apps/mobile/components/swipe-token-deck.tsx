@@ -635,16 +635,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
               onToggleFavorite={onToggleFavorite}
             />
             
-            {/* Swipe overlays */}
-            <Animated.View pointerEvents="none" style={[styles.overlayBadge, styles.overlayUp, upOverlayStyle]}>
-              <Text style={styles.overlayUpText}>♥</Text>
-            </Animated.View>
-            <Animated.View pointerEvents="none" style={[styles.overlayBadge, styles.overlayRight, rightOverlayStyle]}>
-              <Text style={styles.overlayRightText}>BUY</Text>
-            </Animated.View>
-            <Animated.View pointerEvents="none" style={[styles.overlayBadge, styles.overlayLeft, leftOverlayStyle]}>
-              <Text style={styles.overlayLeftText}>PASS</Text>
-            </Animated.View>
+            {/* Swipe overlays removed */}
             
             <Animated.View pointerEvents="none" style={[styles.successBadge, successBadgeStyle]}>
               <Text style={styles.successBadgeText}>✓</Text>
@@ -765,19 +756,16 @@ const styles = StyleSheet.create({
   },
   favoriteWrap: {
     position: 'absolute',
-    right: 0,
-    top: 0,
+    right: 4,
+    top: 4,
     zIndex: 10,
   },
   favoriteButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 28,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-    backgroundColor: '#1C1F26',
     overflow: 'hidden',
   },
   favoriteFill: {
@@ -788,12 +776,12 @@ const styles = StyleSheet.create({
   },
   favoriteOn: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '700',
   },
   favoriteOff: {
-    color: '#d7dff7',
-    fontSize: 16,
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 20,
     fontWeight: '700',
   },
   logoCircle: {

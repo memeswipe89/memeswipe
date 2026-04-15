@@ -1405,11 +1405,15 @@ export default function HomeScreen() {
         hideToken(token.address);
       } else {
         // In other modes, swipe up adds to favorites and hides from deck
-        handleToggleFavorite(token);
+        // Check if token is already favorited - if so, just hide it, don't toggle
+        const isAlreadyFavorited = favoriteAddresses.has(token.address);
+        if (!isAlreadyFavorited) {
+          handleToggleFavorite(token);
+        }
         hideToken(token.address);
       }
     },
-    [handleToggleFavorite, hideToken, segment, persistFavorites]
+    [handleToggleFavorite, hideToken, segment, persistFavorites, favoriteAddresses]
   );
 
   const handleFavoritePopup = useCallback(
@@ -1955,7 +1959,7 @@ const styles = StyleSheet.create({
   },
   sourceTabTextActive: {
     color: '#fff',
-    fontWeight: '700',
+    fontWeight: '600',
   },
   sourceTabsWrap: {
     paddingHorizontal: 20,
