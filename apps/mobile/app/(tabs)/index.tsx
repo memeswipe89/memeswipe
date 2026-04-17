@@ -22,6 +22,7 @@ import { ProfileSheet, type ProfileSheetRef } from '@/components/profile/profile
 import { WalletSheet, type WalletSheetRef } from '@/components/wallet-sheet';
 import { SwipeHint } from '@/components/swipe-hint-overlay';
 import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
+import { TradingDisclaimer } from '@/components/trading-disclaimer';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
@@ -1646,6 +1647,10 @@ export default function HomeScreen() {
                 <SourceTab label="Pump.fun" enabled={activeSource === 'pumpfun'} onPress={() => setActiveSource('pumpfun')} />
                 <SourceTab label="Bags" enabled={activeSource === 'bags'} onPress={() => setActiveSource('bags')} />
               </View>
+              {/* Trading Disclaimer */}
+              <View style={styles.disclaimerTopContainer}>
+                <TradingDisclaimer />
+              </View>
             </View>
           </View>
 
@@ -1971,12 +1976,17 @@ const styles = StyleSheet.create({
   },
   deckArea: {
     flex: 1,
-    paddingBottom: 88,
+    paddingBottom: 72,
   },
   deckWrapper: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  disclaimerTopContainer: {
+    paddingTop: 4,
+    paddingHorizontal: 20,
+    alignItems: 'center',
   },
   simplePill: {
     flex: 1,

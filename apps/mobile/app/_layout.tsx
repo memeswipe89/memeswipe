@@ -10,10 +10,12 @@ import { Stack, usePathname, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
-import { Text, View } from "react-native";
+import { Text, View, Alert } from "react-native";
 import { PrivyProviderWrapper, usePrivy } from "@/lib/privy-runtime";
 import { OnboardingScreen } from '@/components/onboarding-screen';
+import { RiskWarningModal } from '@/components/risk-warning-modal';
 import React from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
 import { TradeSettingsProvider } from '@/contexts/trade-settings-context';
@@ -31,6 +33,8 @@ if (!(globalThis as any).Buffer) {
 if (!(globalThis as any).process) {
   (globalThis as any).process = processPolyfill;
 }
+
+const RISK_WARNING_ACCEPTED_KEY = '@memeswipe:riskWarningAccepted:v1';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -108,6 +112,47 @@ function AuthGatedApp() {
   const { tradingWalletAddress, walletAddress } = useWalletContext();
   const router = useRouter();
   const pathname = usePathname();
+  const [showRiskWarning, setShowRiskWarning] = React.useState(false);
+  const [riskWarningChecked, setRiskWarningChecked] = React.useState(false);
+
+  // Check if user has accepted risk warning
+  React.useEffect(() => {
+    const checkRiskWarning = async () => {
+      try {
+        const accepted = await AsyncStorage.getItem(RISK_WARNING_ACCEPTED_KEY);
+        if (accepted === 'true') {
+          setRiskWarningChecked(true);
+        } else {
+          setShowRiskWarning(true);
+        }
+      } catch (error) {
+        console.log('Error checking risk warning:', error);
+        setShowRiskWarning(true);
+      }
+    };
+    
+    if (isLoggedIn && !loading) {
+      void checkRiskWarning();
+    }
+  }, [isLoggedIn, loading]);
+
+  const handleAcceptRiskWarning = async () => {
+    try {
+      await AsyncStorage.setItem(RISK_WARNING_ACCEPTED_KEY, 'true');
+      setShowRiskWarning(false);
+      setRiskWarningChecked(true);
+    } catch (error) {
+      console.log('Error saving risk warning acceptance:', error);
+    }
+  };
+
+  const handleDeclineRiskWarning = () => {
+    Alert.alert(
+      'Terms Required',
+      'You must accept the risk disclosure to use this app.',
+      [{ text: 'OK' }]
+    );
+  };
 
   React.useEffect(() => {
     if (loading || balanceLoading) return;
@@ -128,6 +173,17 @@ function AuthGatedApp() {
   // Require Twitter + Email + Wallet before proceeding
   if (!loading && (!isLoggedIn || !twitterProfile || !hasEmail || !hasWallet)) {
     return <OnboardingScreen />;
+  }
+
+  // Show risk warning after onboarding but before main app
+  if (isLoggedIn && !riskWarningChecked) {
+    return (
+      <RiskWarningModal
+        visible={showRiskWarning}
+        onAccept={handleAcceptRiskWarning}
+        onDecline={handleDeclineRiskWarning}
+      />
+    );
   }
 
   return (

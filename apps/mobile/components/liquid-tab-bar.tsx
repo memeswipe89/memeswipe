@@ -11,10 +11,10 @@ import Animated, {
 import * as Haptics from 'expo-haptics';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
-const TAB_HEIGHT = 60;
-const BLOB_HEIGHT = 44;
-const BLOB_PADDING = 8;
-const BLOB_VERTICAL_PADDING = 8;
+const TAB_HEIGHT = 50;
+const BLOB_HEIGHT = 36;
+const BLOB_PADDING = 6;
+const BLOB_VERTICAL_PADDING = 7;
 
 const SF_ICONS: Record<string, string> = {
   index: 'house.fill',
@@ -30,7 +30,7 @@ const LABELS: Record<string, string> = {
 
 export function LiquidTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
-  const bottom = Platform.OS === 'ios' ? Math.max(insets.bottom, 16) : 24;
+  const bottom = Platform.OS === 'ios' ? Math.max(insets.bottom, 12) : 18;
 
   const visibleRoutes = state.routes.filter((route) => {
     const { options } = descriptors[route.key];
@@ -129,7 +129,7 @@ export function LiquidTabBar({ state, descriptors, navigation }: BottomTabBarPro
                 <View style={styles.iconContainer}>
                   <IconSymbol
                     name={iconName}
-                    size={22}
+                    size={20}
                     color={isFocused ? '#fff' : 'rgba(255,255,255,0.5)'}
                     weight="semibold"
                   />
@@ -155,12 +155,12 @@ const styles = StyleSheet.create({
     // Enhanced shadow for depth
     shadowColor: '#000',
     shadowOpacity: 0.3,
-    shadowRadius: 25,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 15,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
   },
   blurWrap: {
-    borderRadius: 30,
+    borderRadius: 25,
     overflow: 'hidden',
     // Refined border
     borderWidth: StyleSheet.hairlineWidth,
@@ -171,8 +171,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.08)', // Subtle tint over blur
-    borderRadius: 30,
-    paddingHorizontal: 6,
+    borderRadius: 25,
+    paddingHorizontal: 5,
     paddingVertical: BLOB_VERTICAL_PADDING,
   },
   blob: {
@@ -200,9 +200,9 @@ const styles = StyleSheet.create({
   },
   label: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '600',
-    letterSpacing: 0.3,
-    marginTop: 1,
+    letterSpacing: 0.2,
+    marginTop: 0,
   },
 });

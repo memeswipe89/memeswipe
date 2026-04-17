@@ -672,7 +672,7 @@ const styles = StyleSheet.create({
     height: SCREEN_WIDTH * 0.9,
     borderRadius: SCREEN_WIDTH,
     backgroundColor: 'rgba(61, 114, 255, 0.18)',
-    shadowColor: '#3d72ff',
+    shadowColor: '#000000ff',
     shadowOpacity: 0.3,
     shadowRadius: 60,
     shadowOffset: { width: 0, height: 20 },
@@ -681,7 +681,7 @@ const styles = StyleSheet.create({
   absoluteCard: {
     position: 'absolute',
     top: 0,
-    bottom: 0,
+    bottom: 22,
     left: 0,
     right: 0,
     width: '100%',
@@ -708,11 +708,11 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     borderRadius: 26,
-    borderWidth: 1,
+    borderWidth: 0,
     borderColor: 'rgba(255,255,255,0.06)',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#14161B',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#111316ff',
   },
   blurCard: {
     flex: 1,
@@ -736,7 +736,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   headerSection: {
-    marginBottom: 4,
+    marginBottom: 2,
     paddingRight: 0,
   },
   headerTopRow: {
@@ -839,7 +839,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginTop: 10,
+    marginTop: 8,
   },
   changePill: {
     flexDirection: 'row',
@@ -863,7 +863,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 6,
+    marginTop: 4,
   },
   statDotText: {
     color: '#7e88a8',
@@ -875,15 +875,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   metricsWrap: {
-    marginTop: 8,
+    marginTop: 6,
     marginBottom: 0,
   },
   graphContainer: {
-    marginTop: 6,
+    marginTop: 4,
     width: '100%',
   },
   metricRow: {
-    height: 44,
+    height: 38,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -923,7 +923,7 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   bottomActionSpace: {
-    height: 56,
+    height: 32,
   },
   overlayBadge: {
     position: 'absolute',

@@ -310,7 +310,7 @@ export function OnboardingScreen() {
 
         <View style={styles.header}>
           <Text style={styles.title}>Welcome to Swipeit</Text>
-          <Text style={styles.subtitle}>Trade memes, earn rewards</Text>
+          <Text style={styles.subtitle}>Discover and trade tokens</Text>
         </View>
 
         <View style={styles.steps}>
