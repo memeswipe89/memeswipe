@@ -164,7 +164,6 @@ The swipe-to-trade mechanic resembles gambling:
 
 **Code References:**
 - `apps/mobile/lib/api-base.ts` - API_BASE constant
-- `BACKEND_TESTING_GUIDE.md` - Testing instructions
 
 ---
 
@@ -266,9 +265,9 @@ Before submission:
 - [x] Add "Not financial advice" disclaimer **COMPLETED**
 - [x] Add app icon (1024x1024) **COMPLETED**
 - [x] Add splash screen **COMPLETED**
-- [x] Test backend stability **COMPLETED - See BACKEND_TEST_RESULTS.md**
-- [x] **Optimize token feed performance** **COMPLETED - See BACKEND_OPTIMIZATION_SUMMARY.md**
-- [ ] **Deploy optimizations** (5s → 1-3s expected) **NEEDS DEPLOYMENT**
+- [x] Test backend stability **COMPLETED**
+- [x] **Optimize token feed performance** **COMPLETED - Ready in newui branch**
+- [ ] **Deploy optimizations to main** (5s → 1-3s expected) **READY FOR DEPLOYMENT**
 - [x] Add wallet security warnings **COMPLETED**
 - [ ] Make Twitter login optional **NEEDS COMPLETION**
 - [x] Add educational content about risks **COMPLETED**
@@ -299,3 +298,4 @@ The primary concerns remaining are:
 ✅ Payment compliance verified (no Stripe/IAP needed - on-chain only)
 
 **Recommendation:** Address the CRITICAL "Sign in with Apple" requirement before submission. With this change, approval chances increase to 85-90%.
+curl -w "\nTime: %{time_total}s\n" "https://memeswipe.onrender.com/api/feed/solana/graduated?limit=10"

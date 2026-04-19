@@ -392,7 +392,7 @@ export default function HomeScreen() {
   const retryDelayRef = useRef(10000);
 
   useEffect(() => {
-    console.log('[FILTERS] activeSource=', activeSource);
+    // Filter effect for activeSource
   }, [activeSource]);
 
   const checkTwitterConnection = useCallback(
@@ -443,7 +443,7 @@ export default function HomeScreen() {
         setShowTwitterPrompt(false);
         await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
       } catch (error) {
-        console.log(error);
+        console.error('Error removing Twitter profile cache:', error);
         if (options?.allowStale && twitterProfile) {
           setShowTwitterPrompt(false);
           return;
@@ -645,7 +645,7 @@ export default function HomeScreen() {
     } catch (error: any) {
       connectInProgressRef.current = false;
       setTwitterConnectLoading(false);
-      console.log(error);
+      console.error('Twitter connect error:', error);
       Alert.alert("Twitter Connect", error?.message || "Failed to connect Twitter");
     }
   }, [getOrCreateLocalUserId, handleTwitterRedirect, userId]);

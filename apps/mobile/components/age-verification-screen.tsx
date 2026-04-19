@@ -19,10 +19,8 @@ export function AgeVerificationScreen({ onVerified }: AgeVerificationScreenProps
     try {
       setIsLoading(true);
       await AsyncStorage.setItem(AGE_VERIFIED_KEY, 'true');
-      console.log("Age verification saved to storage");
       // Small delay to ensure state updates
       setTimeout(() => {
-        console.log("Calling onVerified callback");
         onVerified();
       }, 100);
     } catch (error) {

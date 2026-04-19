@@ -104,7 +104,6 @@ export function OnboardingScreen() {
   const { getOrCreateTradingWalletAddress, tradingWalletAddress } = useWalletContext();
   
   useEffect(() => {
-    console.log("API_BASE:", API_BASE);
     if (user) {
       console.log("Privy user object:", JSON.stringify(user, null, 2));
     }
@@ -132,20 +131,6 @@ export function OnboardingScreen() {
   const hasSocialLogin = hasTwitter || hasApple;
   const hasEmail = Boolean(emailFromUser) || emailVerified; // Use manual tracking
   const hasWallet = Boolean(walletFromUser);
-
-  console.log("User data:", {
-    twitterProfile,
-    appleProfile,
-    emailFromUser,
-    walletFromUser,
-    hasTwitter,
-    hasApple,
-    hasSocialLogin,
-    hasEmail,
-    emailVerified,
-    hasWallet,
-    user: user ? "exists" : "null"
-  });
 
   const completeOnboarding = useCallback(async (overrides?: {
     walletAddress?: string;
@@ -212,7 +197,6 @@ export function OnboardingScreen() {
         await persistUserIds(responseJson.user_id, user.id);
       }
 
-      console.log("Onboarding completed successfully");
       setIsOnboarding(false);
 
     } catch (error) {
@@ -233,19 +217,14 @@ export function OnboardingScreen() {
   useEffect(() => {
     if (!isReady) return;
 
-    console.log("Step determination useEffect - currentStep:", currentStep, "hasSocialLogin:", hasSocialLogin, "hasEmail:", hasEmail, "hasWallet:", hasWallet);
-
     // Complete onboarding if all steps are done
     if (hasSocialLogin && hasEmail && hasWallet && user) {
-      console.log("All steps complete, finishing onboarding");
       void completeOnboarding();
     }
     // Auto-advance through steps
     else if (currentStep === "social" && hasSocialLogin) {
-      console.log("Auto-advancing to email");
       setCurrentStep("email");
     } else if (currentStep === "email" && hasSocialLogin && hasEmail) {
-      console.log("Auto-advancing to wallet");
       setCurrentStep("wallet");
     }
   }, [hasSocialLogin, hasEmail, hasWallet, isReady, currentStep, user, completeOnboarding]);
@@ -310,7 +289,6 @@ export function OnboardingScreen() {
     try {
       setVerifyingCode(true);
       await linkWithCode({ email, code });
-      console.log("Email linked successfully");
       setEmailVerified(true); // Mark email as verified
       // Move to wallet step
       setCurrentStep("wallet");
@@ -329,9 +307,7 @@ export function OnboardingScreen() {
   const handleCreateWallet = async () => {
     try {
       setCreatingWallet(true);
-      console.log("Creating wallet...");
       await getOrCreateTradingWalletAddress();
-      console.log("Wallet created successfully");
       // Wallet created, onboarding will complete via useEffect
     } catch (error) {
       console.error("Wallet create error:", error);
@@ -353,11 +329,9 @@ export function OnboardingScreen() {
     );
   }
 
-  console.log("Rendering onboarding screen - currentStep:", currentStep);
-
   // Add a check to see if we should be showing the age step
   if (currentStep === "age") {
-    console.log("AGE STEP - Should be visible now!");
+    // Age step logic here if needed
   }
 
   return (

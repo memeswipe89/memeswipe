@@ -126,7 +126,6 @@ function AuthGatedApp() {
     const checkAgeVerification = async () => {
       try {
         const verified = await AsyncStorage.getItem(AGE_VERIFIED_KEY);
-        console.log("Age verification status from storage:", verified);
         if (verified === 'true') {
           setAgeVerified(true);
         }
@@ -145,7 +144,6 @@ function AuthGatedApp() {
     const checkRiskWarning = async () => {
       try {
         const accepted = await AsyncStorage.getItem(RISK_WARNING_ACCEPTED_KEY);
-        console.log("Risk warning status from storage:", accepted);
         if (accepted === 'true') {
           setRiskWarningChecked(true);
         } else {
@@ -157,10 +155,7 @@ function AuthGatedApp() {
       }
     };
     
-    console.log("Risk warning useEffect - checking conditions:", { isLoggedIn, loading, ageVerified });
-    
     if (isLoggedIn && !loading && ageVerified) {
-      console.log("Risk warning useEffect - calling checkRiskWarning");
       void checkRiskWarning();
     }
   }, [isLoggedIn, loading, ageVerified]);
@@ -221,11 +216,8 @@ function AuthGatedApp() {
 
   // Show loading screen during initialization
   if (isInitializing || loading || balanceLoading || !ageVerificationChecked) {
-    console.log("ROOT LAYOUT: Showing loading screen", { isInitializing, loading, balanceLoading, ageVerificationChecked });
     return <LoadingScreen />;
   }
-
-  console.log("ROOT LAYOUT: Checks complete", { showOnboarding, needsAgeVerification, needsRiskWarning, allChecksComplete });
 
   // Show onboarding if needed
   if (showOnboarding) {
@@ -234,13 +226,11 @@ function AuthGatedApp() {
 
   // Show age verification if needed
   if (needsAgeVerification) {
-    console.log("ROOT LAYOUT: SHOWING AGE VERIFICATION SCREEN");
     return <AgeVerificationScreen onVerified={() => setAgeVerified(true)} />;
   }
 
   // Show risk warning if needed
   if (needsRiskWarning && showRiskWarning) {
-    console.log("ROOT LAYOUT: Showing risk warning");
     return (
       <RiskWarningModal
         visible={true}
@@ -251,8 +241,6 @@ function AuthGatedApp() {
   }
 
   // All checks passed, show main app
-  console.log("ROOT LAYOUT: Rendering main app");
-
   return (
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
