@@ -597,7 +597,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
 
   if (isLoading) {
     return (
-      <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
+      <ExpoLinearGradient colors={['#000000', '#000000', '#000000']} style={styles.container}>
         <DeckStatusCard
           title="Loading Tokens..."
           subtitle="Fetching live token data for this feed."
@@ -608,7 +608,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   }
 
   return (
-    <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
+    <ExpoLinearGradient colors={['#000000', '#000000', '#000000']} style={styles.container}>
       <Animated.View style={[styles.bgTintLayer, bgTintStyle]} />
       <Animated.View pointerEvents="none" style={[styles.successFlash, successFlashStyle]} />
 

@@ -14,7 +14,6 @@ import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { useRouter } from 'expo-router';
 
-import { AppLoader } from '@/components/app-loader';
 import { LoadingOverlay } from '@/components/loading-overlay';
 import type { FeedSegment } from '@/components/feed-segmented-control';
 import { ProfileButton } from '@/components/profile/profile-button';
@@ -324,7 +323,6 @@ export default function HomeScreen() {
   const [buyLoading, setBuyLoading] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
   const [activeSource, setActiveSource] = useState<'pumpfun' | 'bags'>('pumpfun');
-  const [appLoading, setAppLoading] = useState(true);
   const [showSwipeHint, setShowSwipeHint] = useState(true);
   const [segment, setSegment] = useState<FeedSegment>('trending');
   const [favoriteAddresses, setFavoriteAddresses] = useState<Set<string>>(new Set());
@@ -527,7 +525,7 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => setAppLoading(false), 1600);
+    const timer = setTimeout(() => setShowSwipeHint(false), 3000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -1626,7 +1624,6 @@ export default function HomeScreen() {
               {/* Right: wallet only */}
               <Pressable
                 onPress={() => walletSheetRef.current?.open()}
-                disabled={appLoading}
                 android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
                 style={({ pressed }) => [styles.brandAvatarButton, pressed && styles.brandAvatarButtonPressed]}
               >
@@ -1666,7 +1663,7 @@ export default function HomeScreen() {
                 onFavoritePopup={handleFavoritePopup}
               favoriteAddresses={favoriteAddresses}
               isLoading={loading || (isRemoteSegment(segment) && initialDeckPending && tokens.length === 0)}
-              isInteractionLocked={appLoading || creatingOrder || buyLoading}
+              isInteractionLocked={creatingOrder || buyLoading}
               onSwipeStateChange={setIsSwiping}
               onActiveCardChange={handleActiveCardChange}
               onRefresh={isRemoteSegment(segment) ? handleDeckRefresh : undefined}
@@ -1697,7 +1694,6 @@ export default function HomeScreen() {
         <ProfileSheet ref={profileSheetRef} />
         <WalletSheet ref={walletSheetRef} />
         <SwipeHint visible={showSwipeHint} />
-        <AppLoader visible={appLoading} />
         <LoadingOverlay visible={creatingOrder || buyLoading} text="Executing trade..." />
         {showTwitterPrompt ? (
           <View style={styles.connectPromptOverlay} pointerEvents="auto">
@@ -1838,15 +1834,15 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#05070A',
+    backgroundColor: '#000',
   },
   safeArea: {
     flex: 1,
-    backgroundColor: '#05070A',
+    backgroundColor: '#000',
     paddingHorizontal: 0,
   },
   topBarWrap: {
-    backgroundColor: '#05070A',
+    backgroundColor: '#000',
     zIndex: 30,
   },
   screen: {

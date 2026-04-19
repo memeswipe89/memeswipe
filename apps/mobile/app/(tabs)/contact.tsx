@@ -281,7 +281,7 @@ export default function ContactScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0b0f',
+    backgroundColor: '#000',
   },
   keyboardView: {
     flex: 1,
@@ -354,7 +354,7 @@ const styles = StyleSheet.create({
   },
   fullChatMessages: {
     flex: 1,
-    backgroundColor: '#0a0b0f',
+    backgroundColor: '#000',
   },
   chatMessagesContent: {
     padding: 16,

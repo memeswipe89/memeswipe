@@ -139,7 +139,7 @@ const styles = StyleSheet.create({
   },
   blurView: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.95)',
   },
   bottomSheet: {
     position: 'absolute',

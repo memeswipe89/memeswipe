@@ -119,6 +119,7 @@ function AuthGatedApp() {
   const [ageVerificationChecked, setAgeVerificationChecked] = React.useState(false);
   const [showRiskWarning, setShowRiskWarning] = React.useState(false);
   const [riskWarningChecked, setRiskWarningChecked] = React.useState(false);
+  const [isInitializing, setIsInitializing] = React.useState(true);
 
   // Check if user has verified age
   React.useEffect(() => {
@@ -143,9 +144,6 @@ function AuthGatedApp() {
   React.useEffect(() => {
     const checkRiskWarning = async () => {
       try {
-        // TEMPORARY: Clear risk warning for testing
-        await AsyncStorage.removeItem(RISK_WARNING_ACCEPTED_KEY);
-        
         const accepted = await AsyncStorage.getItem(RISK_WARNING_ACCEPTED_KEY);
         console.log("Risk warning status from storage:", accepted);
         if (accepted === 'true') {
@@ -204,50 +202,63 @@ function AuthGatedApp() {
   const hasSocialLogin = hasTwitter || hasApple;
   const hasWallet = Boolean(tradingWalletAddress || walletAddress);
 
-  // Show loading screen while initializing
-  if (loading || balanceLoading || !ageVerificationChecked) {
-    console.log("ROOT LAYOUT: Showing loading screen", { loading, balanceLoading, ageVerificationChecked });
+  // Determine what needs to be shown
+  const showOnboarding = !isLoggedIn || !hasSocialLogin || !hasEmail || !hasWallet;
+  const needsAgeVerification = !showOnboarding && !ageVerified;
+  const needsRiskWarning = isLoggedIn && !showOnboarding && ageVerified && !riskWarningChecked;
+  const allChecksComplete = !showOnboarding && !needsAgeVerification && !needsRiskWarning;
+
+  // Show loading screen while initializing or checking
+  React.useEffect(() => {
+    if (!loading && !balanceLoading && ageVerificationChecked) {
+      // Small delay to ensure smooth transition
+      const timer = setTimeout(() => {
+        setIsInitializing(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [loading, balanceLoading, ageVerificationChecked]);
+
+  // Show loading screen during initialization
+  if (isInitializing || loading || balanceLoading || !ageVerificationChecked) {
+    console.log("ROOT LAYOUT: Showing loading screen", { isInitializing, loading, balanceLoading, ageVerificationChecked });
     return <LoadingScreen />;
   }
 
-  // FIRST: Check if onboarding is complete
-  const showOnboarding = !isLoggedIn || !hasSocialLogin || !hasEmail || !hasWallet;
+  console.log("ROOT LAYOUT: Checks complete", { showOnboarding, needsAgeVerification, needsRiskWarning, allChecksComplete });
 
-  console.log("ROOT LAYOUT: Onboarding check", { showOnboarding, isLoggedIn, hasSocialLogin, hasEmail, hasWallet, ageVerified });
+  // Show onboarding if needed
+  if (showOnboarding) {
+    return <OnboardingScreen />;
+  }
 
-  // SECOND: Show age verification ONLY AFTER onboarding is complete
-  if (!showOnboarding && !ageVerified) {
-    console.log("ROOT LAYOUT: SHOWING AGE VERIFICATION SCREEN (onboarding complete)");
+  // Show age verification if needed
+  if (needsAgeVerification) {
+    console.log("ROOT LAYOUT: SHOWING AGE VERIFICATION SCREEN");
     return <AgeVerificationScreen onVerified={() => setAgeVerified(true)} />;
   }
 
-  // THIRD: Show risk warning after age verification
-  if (isLoggedIn && !showOnboarding && ageVerified && !riskWarningChecked) {
-    console.log("ROOT LAYOUT: Showing risk warning", { showRiskWarning, riskWarningChecked });
+  // Show risk warning if needed
+  if (needsRiskWarning && showRiskWarning) {
+    console.log("ROOT LAYOUT: Showing risk warning");
     return (
       <RiskWarningModal
-        visible={showRiskWarning}
+        visible={true}
         onAccept={handleAcceptRiskWarning}
         onDecline={handleDeclineRiskWarning}
       />
     );
   }
 
-  console.log("ROOT LAYOUT: Risk warning check failed", { isLoggedIn, showOnboarding, ageVerified, riskWarningChecked });
-
-  console.log("ROOT LAYOUT: Rendering main app", { showOnboarding, ageVerified });
+  // All checks passed, show main app
+  console.log("ROOT LAYOUT: Rendering main app");
 
   return (
-    <>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="terms" options={{ headerShown: false }} />
-        <Stack.Screen name="deposit" options={{ title: 'Fund Wallet' }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      
-      {/* Show onboarding if not complete */}
-      {showOnboarding && <OnboardingScreen />}
-    </>
+    <Stack>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="terms" options={{ headerShown: false }} />
+      <Stack.Screen name="deposit" options={{ title: 'Fund Wallet' }} />
+      <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+    </Stack>
   );
 }
