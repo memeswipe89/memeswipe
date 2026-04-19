@@ -22,6 +22,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { useTradeSettings } from "@/contexts/trade-settings-context";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
+import { openExternalLink, openExternalLinkSilent } from "@/lib/external-link-warning";
 import { SolanaIcon } from "@/components/icons/SolanaIcon";
 import { API_BASE } from "@/lib/api-base";
 
@@ -328,8 +329,8 @@ export default function WalletScreen() {
     if (!tradingWalletAddress) return;
     const link = `phantom://v1/transfer?recipient=${encodeURIComponent(tradingWalletAddress)}&network=mainnet-beta`;
     try {
-      if (await Linking.canOpenURL(link)) await Linking.openURL(link);
-      else await Linking.openURL("https://phantom.app/");
+      if (await Linking.canOpenURL(link)) await openExternalLinkSilent(link);
+      else await openExternalLinkSilent("https://phantom.app/");
     } catch {
       Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
     }
@@ -605,7 +606,7 @@ export default function WalletScreen() {
                 
                 {/* Email */}
                 <Pressable
-                  onPress={() => Linking.openURL('mailto:memeswipe89@gmail.com')}
+                  onPress={() => openExternalLink('mailto:memeswipe89@gmail.com')}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
@@ -635,7 +636,7 @@ export default function WalletScreen() {
 
                 {/* Twitter */}
                 <Pressable
-                  onPress={() => Linking.openURL('https://twitter.com/swipeitXYZ')}
+                  onPress={() => openExternalLink('https://twitter.com/swipeitXYZ')}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",

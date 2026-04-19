@@ -19,6 +19,7 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
+import { openExternalLink } from '@/lib/external-link-warning';
 import TradeChart from '@/components/trade-chart';
 import LiveChartModal from '@/components/live-chart-modal';
 import { getPriceHistory } from '@/lib/getPriceHistory';
@@ -335,7 +336,10 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                           hitSlop={8}
                           onPress={() => {
                             const url = `https://dexscreener.com/solana/${token.address}`;
-                            Linking.openURL(url).catch(() => undefined);
+                            openExternalLink(url, {
+                              title: 'View on DexScreener',
+                              message: 'This will open DexScreener to view detailed token information.',
+                            }).catch(() => undefined);
                           }}
                         >
                           <LinkIcon size={18} color="#7e88a8" />
@@ -349,12 +353,18 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                         </Pressable>
                        
                         {token.website ? (
-                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.website!).catch(() => undefined)}>
+                          <Pressable hitSlop={8} onPress={() => openExternalLink(token.website!, {
+                            title: 'Visit Website',
+                            message: 'This will open the token\'s official website.',
+                          }).catch(() => undefined)}>
                             <MaterialIcons name="language" size={18} color="#7e88a8" />
                           </Pressable>
                         ) : null}
                         {token.twitter ? (
-                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.twitter!).catch(() => undefined)}>
+                          <Pressable hitSlop={8} onPress={() => openExternalLink(token.twitter!, {
+                            title: 'View on Twitter',
+                            message: 'This will open the token\'s Twitter profile.',
+                          }).catch(() => undefined)}>
                             <Text style={styles.socialIcon}>𝕏</Text>
                           </Pressable>
                         ) : null}

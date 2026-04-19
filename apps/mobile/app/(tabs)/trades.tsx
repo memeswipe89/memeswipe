@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { addBalance } from '@/lib/devWallet';
 import { notifyTradeClosed } from '@/lib/notifications';
+import { openExternalLink } from '@/lib/external-link-warning';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
@@ -943,10 +944,10 @@ export default function TradesScreen() {
   const hasMore = paged.length < filtered.length;
   const openSolscanTx = useCallback(async (signature: string) => {
     const url = `https://solscan.io/tx/${encodeURIComponent(signature)}`;
-    const canOpen = await Linking.canOpenURL(url);
-    if (canOpen) {
-      await Linking.openURL(url);
-    }
+    await openExternalLink(url, {
+      title: 'View on Solscan',
+      message: 'This will open Solscan in your browser to view transaction details.',
+    });
   }, []);
 
   return (

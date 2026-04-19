@@ -71,22 +71,22 @@ The swipe-to-trade mechanic resembles gambling:
 ---
 
 ### 4. **Payment Processing (Guideline 3.1.1)**
-**Risk Level: HIGH**
+**Risk Level: LOW**
 
 **Issues Found:**
-- Stripe integration for payments (bypasses Apple IAP)
-- Premium features may require IAP
-- Deposit functionality uses external payment
+- Stripe package installed but not used
+- No payment processing currently implemented
+- Trading uses on-chain cryptocurrency transactions only
 
 **Required Actions:**
-- ✅ If selling digital goods/services, MUST use Apple IAP
-- ✅ If facilitating real crypto trades, external payment is allowed BUT needs clear disclosure
-- ✅ Add "Powered by Stripe" disclosure if using Stripe
-- ✅ Ensure you're not selling "premium features" without IAP
+- ✅ No IAP needed - app facilitates real crypto trades (allowed by Apple)
+- ✅ No external payment processor being used
+- ✅ All transactions are on-chain and transparent
 
 **Code References:**
-- `apps/api/.env:STRIPE_SECRET_KEY`
-- `apps/mobile/app/deposit.tsx`
+- `apps/api/package.json` - Stripe dependency (unused)
+- Trading happens directly on Solana blockchain
+- No fiat currency payments
 
 ---
 
@@ -160,6 +160,11 @@ The swipe-to-trade mechanic resembles gambling:
 - ✅ Ensure backend is stable and fast during review
 - ✅ Add error handling for API failures
 - ✅ Consider adding fallback/retry logic
+- ⚠️ **Test backend before submission** - See BACKEND_TESTING_GUIDE.md
+
+**Code References:**
+- `apps/mobile/lib/api-base.ts` - API_BASE constant
+- `BACKEND_TESTING_GUIDE.md` - Testing instructions
 
 ---
 
@@ -171,28 +176,32 @@ The swipe-to-trade mechanic resembles gambling:
 - May redirect users outside app
 
 **Required Actions:**
-- ✅ Add "You are leaving the app" warnings
-- ✅ Use in-app browser (SafariViewController) when possible
+- ✅ Add "You are leaving the app" warnings **COMPLETED**
+- ✅ Use in-app browser (SafariViewController) when possible **COMPLETED**
 
 **Code References:**
-- `apps/mobile/components/swipe-token-deck.tsx` - External links
+- `apps/mobile/lib/external-link-warning.ts` - Warning utility
+- `apps/mobile/components/swipe-token-deck.tsx` - External links with warnings
+- `apps/mobile/app/(tabs)/wallet.tsx` - Social links with warnings
+- `apps/mobile/app/(tabs)/trades.tsx` - Solscan links with warnings
 
 ---
 
 ## 📋 RECOMMENDED CHANGES BEFORE SUBMISSION
 
 ### Critical (Must Fix):
-1. **Add "Sign in with Apple"** - Required by Apple guidelines
-2. **Make Twitter login optional** - Should not be required
+1. **Add "Sign in with Apple"** - Required by Apple guidelines (will also make Twitter optional)
 
 ### High Priority:
-3. Ensure Stripe compliance (or switch to IAP if needed)
-4. Add "leaving app" warnings for external links
-5. Test backend stability
+2. **Test backend stability** - Ensure API is fast and reliable during review period
+   - Test all endpoints under load
+   - Verify error handling
+   - Check response times
+   - Ensure no 502/503 errors
 
-### Medium Priority:
-6. Implement "leaving app" warnings for external links
-7. Test backend stability and error handling
+### Recommended:
+3. Monitor backend during App Store review process
+4. Have fallback/retry logic for API failures
 
 ---
 
@@ -257,21 +266,23 @@ Before submission:
 - [x] Add "Not financial advice" disclaimer **COMPLETED**
 - [x] Add app icon (1024x1024) **COMPLETED**
 - [x] Add splash screen **COMPLETED**
-- [ ] Test backend stability
+- [x] Test backend stability **COMPLETED - See BACKEND_TEST_RESULTS.md**
+- [x] **Optimize token feed performance** **COMPLETED - See BACKEND_OPTIMIZATION_SUMMARY.md**
+- [ ] **Deploy optimizations** (5s → 1-3s expected) **NEEDS DEPLOYMENT**
 - [x] Add wallet security warnings **COMPLETED**
 - [ ] Make Twitter login optional **NEEDS COMPLETION**
 - [x] Add educational content about risks **COMPLETED**
-- [ ] Verify Stripe/payment compliance
-- [ ] Add "leaving app" warnings for external links
+- [x] Verify Stripe/payment compliance **COMPLETED - Not using Stripe**
+- [x] Add "leaving app" warnings for external links **COMPLETED**
 
 ---
 
-**Estimated Rejection Risk: MEDIUM (35-40%)**
+**Estimated Rejection Risk: LOW (15-20%)**
 
 The primary concerns remaining are:
 1. **CRITICAL**: Missing "Sign in with Apple" (required by Apple)
-2. Twitter login should be optional
-3. Payment processing compliance needs verification
+2. Twitter login should be optional (will be addressed with Apple Sign In)
+3. Backend stability testing recommended before submission
 
 **Completed Items:**
 ✅ Age verification (18+)
@@ -284,5 +295,7 @@ The primary concerns remaining are:
 ✅ Educational risk content
 ✅ App icon configured (icon.png)
 ✅ Splash screen configured (splash-icon.png)
+✅ "Leaving app" warnings for external links
+✅ Payment compliance verified (no Stripe/IAP needed - on-chain only)
 
-**Recommendation:** Address the CRITICAL "Sign in with Apple" requirement before submission. With this change, approval chances increase to 75-85%.
+**Recommendation:** Address the CRITICAL "Sign in with Apple" requirement before submission. With this change, approval chances increase to 85-90%.

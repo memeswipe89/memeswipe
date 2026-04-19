@@ -34,6 +34,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
+import { openExternalLinkSilent } from '@/lib/external-link-warning';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useLinkEmail, usePrivy } from '@privy-io/expo';
@@ -234,8 +235,8 @@ function WalletContent({ onClose }: { onClose: () => void }) {
     if (!tradingWalletAddress) return;
     const link = `phantom://v1/transfer?recipient=${encodeURIComponent(tradingWalletAddress)}&network=mainnet-beta`;
     try {
-      if (await Linking.canOpenURL(link)) await Linking.openURL(link);
-      else await Linking.openURL('https://phantom.app/');
+      if (await Linking.canOpenURL(link)) await openExternalLinkSilent(link);
+      else await openExternalLinkSilent('https://phantom.app/');
     } catch { Alert.alert('Phantom not found', 'Copy the address and send SOL from any Solana wallet.'); }
   };
 

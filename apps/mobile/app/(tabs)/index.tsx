@@ -14,6 +14,7 @@ import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { useRouter } from 'expo-router';
 
+import { openExternalLink, openExternalLinkSilent } from '@/lib/external-link-warning';
 import { LoadingOverlay } from '@/components/loading-overlay';
 import type { FeedSegment } from '@/components/feed-segmented-control';
 import { ProfileButton } from '@/components/profile/profile-button';
@@ -618,7 +619,7 @@ export default function HomeScreen() {
       // Prefer opening in Twitter/X app when installed; fallback to auth-session/browser.
       const hasTwitterApp = (await Linking.canOpenURL('twitter://')) || (await Linking.canOpenURL('x://'));
       if (hasTwitterApp) {
-        await Linking.openURL(startJson.authUrl);
+        await openExternalLinkSilent(startJson.authUrl);
         return;
       }
 
@@ -631,7 +632,7 @@ export default function HomeScreen() {
       // Some Android/Expo Go combinations may not complete auth-session callback reliably.
       // Fallback to opening the URL directly in browser so user can still continue the flow.
       if (authResult.type === 'cancel' || authResult.type === 'dismiss' || authResult.type === 'opened') {
-        const opened = await Linking.openURL(startJson.authUrl).then(() => true).catch(() => false);
+        const opened = await openExternalLinkSilent(startJson.authUrl).then(() => true).catch(() => false);
         if (!opened) {
           throw new Error('Unable to open Twitter auth page. Please check browser availability.');
         }
