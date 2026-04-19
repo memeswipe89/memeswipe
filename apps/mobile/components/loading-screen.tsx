@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Image, StyleSheet, Dimensions } from 'react-native';
+import { View, Image, StyleSheet, Dimensions, ActivityIndicator, Text } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useAnimatedStyle,
@@ -17,7 +17,7 @@ export function LoadingScreen() {
 
   React.useEffect(() => {
     scale.value = withRepeat(
-      withTiming(1.1, {
+      withTiming(1.05, {
         duration: 1500,
         easing: Easing.inOut(Easing.ease),
       }),
@@ -45,15 +45,22 @@ export function LoadingScreen() {
       colors={['#000000', '#1a1a1a', '#000000']}
       style={styles.container}
     >
-      <Animated.View style={[styles.iconContainer, animatedStyle]}>
-        <View style={styles.iconCircle}>
-          <Image
-            source={require('@/assets/images/icon.png')}
-            style={styles.icon}
-            resizeMode="contain"
-          />
+      <View style={styles.content}>
+        <Animated.View style={[styles.iconContainer, animatedStyle]}>
+          <View style={styles.iconCircle}>
+            <Image
+              source={require('@/assets/images/icon.png')}
+              style={styles.icon}
+              resizeMode="contain"
+            />
+          </View>
+        </Animated.View>
+        
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#9bc2ff" />
+          <Text style={styles.loadingText}>Loading Swipeit...</Text>
         </View>
-      </Animated.View>
+      </View>
     </LinearGradient>
   );
 }
@@ -66,6 +73,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#000',
+  },
+  content: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 40,
   },
   iconContainer: {
     justifyContent: 'center',
@@ -85,5 +97,16 @@ const styles = StyleSheet.create({
   icon: {
     width: 100,
     height: 100,
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+  },
+  loadingText: {
+    color: '#edf4ff',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });

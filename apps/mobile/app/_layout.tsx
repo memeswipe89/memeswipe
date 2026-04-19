@@ -130,7 +130,7 @@ function AuthGatedApp() {
           setAgeVerified(true);
         }
       } catch (error) {
-        console.log('Error checking age verification:', error);
+        // Error checking age verification
       } finally {
         setAgeVerificationChecked(true);
       }
@@ -150,7 +150,7 @@ function AuthGatedApp() {
           setShowRiskWarning(true);
         }
       } catch (error) {
-        console.log('Error checking risk warning:', error);
+        // Error checking risk warning
         setShowRiskWarning(true);
       }
     };
@@ -166,7 +166,7 @@ function AuthGatedApp() {
       setShowRiskWarning(false);
       setRiskWarningChecked(true);
     } catch (error) {
-      console.log('Error saving risk warning acceptance:', error);
+      // Error saving risk warning acceptance
     }
   };
 

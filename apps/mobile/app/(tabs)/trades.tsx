@@ -515,7 +515,6 @@ export default function TradesScreen() {
       });
       setTrades(mapped);
     } catch (err: any) {
-      console.log('Failed to load trades:', err);
       const now = Date.now();
       setLastErrorTime(now);
       

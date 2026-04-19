@@ -829,7 +829,6 @@ export default function HomeScreen() {
         setSegmentHasMore((prev) => ({ ...prev, [segmentType]: Boolean(data.cursor) }));
         return deduped;
       } catch (err) {
-        console.log(err);
         return [];
       } finally {
         setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: false }));
@@ -870,7 +869,6 @@ export default function HomeScreen() {
         }));
       } catch (err) {
         onFeedError();
-        console.log('live update failed', err);
       }
     },
     [activeChain, canFetchFeed, onFeedError, onFeedSuccess]
@@ -1002,7 +1000,7 @@ export default function HomeScreen() {
     try {
       await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
     } catch (err) {
-      console.log('Failed to save favorites', err);
+      // Failed to save favorites
     }
   }, []);
 
@@ -1010,7 +1008,7 @@ export default function HomeScreen() {
     try {
       await AsyncStorage.setItem(HIDDEN_TOKENS_KEY, JSON.stringify(Array.from(next)));
     } catch (err) {
-      console.log('Failed to save hidden tokens', err);
+      // Failed to save hidden tokens
     }
   }, []);
 
@@ -1109,7 +1107,7 @@ export default function HomeScreen() {
         }),
       });
     } catch (err) {
-      console.log('Favorite API failed', err);
+      // Favorite API failed
     }
   }, [activeChain, applyFavoriteUpdate, getOrCreateLocalUserId, twitterProfile?.id, twitterProfile?.username, userId]);
 
@@ -1245,15 +1243,6 @@ export default function HomeScreen() {
           });
           await connection.confirmTransaction(signature, 'confirmed');
 
-          console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
-            signature,
-            slippageBps,
-            inputMint: quoteJson?.inputMint || SOL_MINT,
-            outputMint: quoteJson?.outputMint || token.address,
-            inAmount: quoteJson?.inAmount,
-            outAmount: quoteJson?.outAmount,
-          });
-
           return {
             signature,
             inputMint: quoteJson?.inputMint || SOL_MINT,
@@ -1268,11 +1257,6 @@ export default function HomeScreen() {
             msg.includes('0x1788') ||
             msg.toLowerCase().includes('simulation failed') ||
             msg.toLowerCase().includes('slippage');
-          console.log('[TRADE][SWIPE_RIGHT] swap attempt failed', {
-            slippageBps,
-            retryable,
-            message: msg,
-          });
           if (!retryable) break;
         }
       }
@@ -1341,7 +1325,6 @@ export default function HomeScreen() {
           inAmountRaw: swapMeta.inAmountRaw,
           outAmountRaw: swapMeta.outAmountRaw,
         };
-        console.log('[TRADE][SWIPE_RIGHT] sending order payload', tradePayload);
 
         const res = await fetch(`${API_BASE}/api/orders`, {
           method: 'POST',
@@ -1350,7 +1333,6 @@ export default function HomeScreen() {
         });
 
         const json = await parseApiJson<{ error?: string }>(res);
-        console.log('[TRADE][SWIPE_RIGHT] order API response', { status: res.status, body: json });
 
         if (!res.ok) {
           const { title, message } = getFriendlyOrderError(new Error(json?.error || 'Unknown error'));
@@ -1440,7 +1422,7 @@ export default function HomeScreen() {
       setFavoritePopupDisabled(true);
       setFavoritePopup((prev) => ({ ...prev, visible: false }));
     } catch (err) {
-      console.log('Failed to save favorite popup preference', err);
+      // Failed to save favorite popup preference
     }
   }, []);
 
@@ -1466,11 +1448,6 @@ export default function HomeScreen() {
         Alert.alert('Token unavailable', `${token.symbol.toUpperCase()} has very low liquidity and can't be traded right now.`);
         return;
       }
-      console.log('[TRADE][SWIPE_RIGHT] token selected', {
-        symbol: token.symbol,
-        address: token.address,
-        priceUsd: token.priceUsd,
-      });
       void (async () => {
         setBuyLoading(true);
         try {

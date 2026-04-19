@@ -259,7 +259,6 @@ export const ProfileSheet = memo(
         resetSettings();
         closeSheet();
       } catch (err) {
-        console.log('Failed to logout', err);
         Alert.alert('Logout failed', 'Please try again.');
       }
     }, [closeSheet, logout, resetSettings, setTwitterProfile]);

@@ -104,9 +104,7 @@ export function OnboardingScreen() {
   const { getOrCreateTradingWalletAddress, tradingWalletAddress } = useWalletContext();
   
   useEffect(() => {
-    if (user) {
-      console.log("Privy user object:", JSON.stringify(user, null, 2));
-    }
+    // User object loaded
   }, [user]);
 
   const [currentStep, setCurrentStep] = useState<OnboardingStep>("social");
@@ -166,8 +164,6 @@ export function OnboardingScreen() {
         email: email || emailInput.trim() || "", // Use the input if emailFromUser is empty
         wallet_address: walletAddress || "",
       };
-
-      console.log("Completing onboarding with payload:", payload);
 
       const response = await fetch(`${API_BASE}/api/onboard-user`, {
         method: "POST",
