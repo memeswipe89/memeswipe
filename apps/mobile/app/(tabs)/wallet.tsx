@@ -16,6 +16,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useLinkEmail, usePrivy } from "@privy-io/expo";
 import { Ionicons } from "@expo/vector-icons";
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { useTradeSettings } from "@/contexts/trade-settings-context";
@@ -588,6 +590,78 @@ export default function WalletScreen() {
                 rightElement={<Ionicons name="chevron-forward" size={18} color="#3a3a3a" />}
                 last
               />
+            </MenuSection>
+
+            {/* Contact Us */}
+            <MenuSection>
+              <View style={{ padding: 16 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                  <MaterialIcons name="contact-support" size={24} color="#4ade80" />
+                  <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>Contact Us</Text>
+                </View>
+                <Text style={{ color: "#8e8e93", fontSize: 14, marginBottom: 16, lineHeight: 20 }}>
+                  Need help or have questions? Reach out to us!
+                </Text>
+                
+                {/* Email */}
+                <Pressable
+                  onPress={() => Linking.openURL('mailto:memeswipe89@gmail.com')}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: "#2c2c2e",
+                    borderRadius: 10,
+                    padding: 12,
+                    marginBottom: 10,
+                  }}
+                >
+                  <View style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    backgroundColor: "rgba(74,222,128,0.15)",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    marginRight: 12,
+                  }}>
+                    <MaterialIcons name="email" size={20} color="#4ade80" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: "#8e8e93", fontSize: 12, marginBottom: 2 }}>Email</Text>
+                    <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>memeswipe89@gmail.com</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#3a3a3a" />
+                </Pressable>
+
+                {/* Twitter */}
+                <Pressable
+                  onPress={() => Linking.openURL('https://twitter.com/swipeitXYZ')}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: "#2c2c2e",
+                    borderRadius: 10,
+                    padding: 12,
+                  }}
+                >
+                  <View style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    backgroundColor: "rgba(29,161,242,0.15)",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    marginRight: 12,
+                  }}>
+                    <FontAwesome name="twitter" size={20} color="#1DA1F2" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: "#8e8e93", fontSize: 12, marginBottom: 2 }}>Twitter</Text>
+                    <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>@swipeitXYZ</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#3a3a3a" />
+                </Pressable>
+              </View>
             </MenuSection>
 
             {/* Sign out */}

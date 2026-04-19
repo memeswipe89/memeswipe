@@ -20,12 +20,14 @@ const SF_ICONS: Record<string, string> = {
   index: 'house.fill',
   trades: 'list.bullet.rectangle.fill',
   wallet: 'creditcard.fill',
+  contact: 'message.fill',
 };
 
 const LABELS: Record<string, string> = {
   index: 'Home',
   trades: 'Trades',
   wallet: 'Wallet',
+  contact: 'Bot',
 };
 
 export function LiquidTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
