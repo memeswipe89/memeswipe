@@ -11,6 +11,8 @@ import {
   KeyboardAvoidingView,
   ScrollView,
   Platform,
+  Modal,
+  Image,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { usePrivy, useLoginWithOAuth, useLinkWithOAuth, useLinkEmail } from "@privy-io/expo";
@@ -19,16 +21,28 @@ import { useWalletContext } from "@/contexts/wallet-context";
 import { API_BASE } from "@/lib/api-base";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
 import { persistUserIds } from "@/lib/local-user-id";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-type OnboardingStep = "twitter" | "email" | "wallet";
+type OnboardingStep = "social" | "email" | "wallet";
 
 const getLinkedAccounts = (privyUser: any): any[] => {
   if (!privyUser) return [];
   if (Array.isArray(privyUser?.linked_accounts)) return privyUser.linked_accounts;
   if (Array.isArray(privyUser?.linkedAccounts)) return privyUser.linkedAccounts;
   return [];
+};
+
+const getAppleFromPrivy = (privyUser: any) => {
+  if (!privyUser) return null;
+  const linked = getLinkedAccounts(privyUser);
+  const apple = linked.find((account: any) => account?.type === "apple_oauth" || account?.type === "apple");
+  if (!apple) return null;
+  return {
+    id: apple?.subject || apple?.id,
+    email: apple?.email,
+  };
 };
 
 const getTwitterFromPrivy = (privyUser: any) => {
@@ -88,12 +102,17 @@ export function OnboardingScreen() {
   const { sendCode, linkWithCode } = useLinkEmail();
   const { isLoggedIn } = useAuth();
   const { getOrCreateTradingWalletAddress, tradingWalletAddress } = useWalletContext();
+  
   useEffect(() => {
     console.log("API_BASE:", API_BASE);
-  }, []);
+    if (user) {
+      console.log("Privy user object:", JSON.stringify(user, null, 2));
+    }
+  }, [user]);
 
-  const [currentStep, setCurrentStep] = useState<OnboardingStep>("twitter");
+  const [currentStep, setCurrentStep] = useState<OnboardingStep>("social");
   const [isOnboarding, setIsOnboarding] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
   const [twitterLoading, setTwitterLoading] = useState(false);
   const [emailInput, setEmailInput] = useState("");
   const [codeInput, setCodeInput] = useState("");
@@ -101,13 +120,32 @@ export function OnboardingScreen() {
   const [verifyingCode, setVerifyingCode] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
   const [creatingWallet, setCreatingWallet] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false); // Track email manually
+  const [showTermsModal, setShowTermsModal] = useState(false);
 
   const twitterProfile = getTwitterFromPrivy(user);
+  const appleProfile = getAppleFromPrivy(user);
   const emailFromUser = getEmailFromPrivy(user);
   const walletFromUser = getWalletAddressFromPrivy(user) || tradingWalletAddress;
   const hasTwitter = Boolean(twitterProfile?.id);
-  const hasEmail = Boolean(emailFromUser);
+  const hasApple = Boolean(appleProfile?.id);
+  const hasSocialLogin = hasTwitter || hasApple;
+  const hasEmail = Boolean(emailFromUser) || emailVerified; // Use manual tracking
   const hasWallet = Boolean(walletFromUser);
+
+  console.log("User data:", {
+    twitterProfile,
+    appleProfile,
+    emailFromUser,
+    walletFromUser,
+    hasTwitter,
+    hasApple,
+    hasSocialLogin,
+    hasEmail,
+    emailVerified,
+    hasWallet,
+    user: user ? "exists" : "null"
+  });
 
   const completeOnboarding = useCallback(async (overrides?: {
     walletAddress?: string;
@@ -121,12 +159,14 @@ export function OnboardingScreen() {
       setIsOnboarding(true);
 
       const walletAddress = overrides?.walletAddress || walletFromUser || "";
-      const email = overrides?.email || emailFromUser || emailInput.trim();
+      const email = overrides?.email || emailFromUser || emailInput.trim() || ""; // Make email optional
 
       const missing: string[] = [];
-      if (!twitterProfile?.id) missing.push("twitter_user_id");
-      if (!twitterProfile?.username) missing.push("twitter_username");
-      if (!email) missing.push("email");
+      // Accept either Twitter OR Apple for social login
+      const socialId = twitterProfile?.id || appleProfile?.id || "";
+      
+      if (!socialId) missing.push("social_login");
+      // Email is now optional
       if (!walletAddress) missing.push("wallet_address");
       if (missing.length > 0) {
         throw new Error(`Missing required fields: ${missing.join(", ")}`);
@@ -136,9 +176,13 @@ export function OnboardingScreen() {
         privy_user_id: user.id,
         twitter_user_id: twitterProfile?.id || "",
         twitter_username: twitterProfile?.username || "",
-        email: email || "",
+        apple_user_id: appleProfile?.id || "",
+        apple_email: appleProfile?.email || "",
+        email: email || emailInput.trim() || "", // Use the input if emailFromUser is empty
         wallet_address: walletAddress || "",
       };
+
+      console.log("Completing onboarding with payload:", payload);
 
       const response = await fetch(`${API_BASE}/api/onboard-user`, {
         method: "POST",
@@ -168,6 +212,7 @@ export function OnboardingScreen() {
         await persistUserIds(responseJson.user_id, user.id);
       }
 
+      console.log("Onboarding completed successfully");
       setIsOnboarding(false);
 
     } catch (error) {
@@ -182,23 +227,28 @@ export function OnboardingScreen() {
 
     }
 
-  }, [emailFromUser, emailInput, tradingWalletAddress, user, walletFromUser, twitterProfile]);
+  }, [emailFromUser, emailInput, tradingWalletAddress, user, walletFromUser, twitterProfile, appleProfile]);
 
+  // Determine which step to show
   useEffect(() => {
-
     if (!isReady) return;
 
-    if (hasTwitter && hasEmail && hasWallet && user) {
-      void completeOnboarding();
-    } else if (hasTwitter && hasEmail) {
-      setCurrentStep("wallet");
-    } else if (hasTwitter) {
-      setCurrentStep("email");
-    } else {
-      setCurrentStep("twitter");
-    }
+    console.log("Step determination useEffect - currentStep:", currentStep, "hasSocialLogin:", hasSocialLogin, "hasEmail:", hasEmail, "hasWallet:", hasWallet);
 
-  }, [completeOnboarding, hasEmail, hasTwitter, hasWallet, isLoggedIn, isReady, user, tradingWalletAddress]);
+    // Complete onboarding if all steps are done
+    if (hasSocialLogin && hasEmail && hasWallet && user) {
+      console.log("All steps complete, finishing onboarding");
+      void completeOnboarding();
+    }
+    // Auto-advance through steps
+    else if (currentStep === "social" && hasSocialLogin) {
+      console.log("Auto-advancing to email");
+      setCurrentStep("email");
+    } else if (currentStep === "email" && hasSocialLogin && hasEmail) {
+      console.log("Auto-advancing to wallet");
+      setCurrentStep("wallet");
+    }
+  }, [hasSocialLogin, hasEmail, hasWallet, isReady, currentStep, user, completeOnboarding]);
 
   const handleTwitterConnect = async () => {
     try {
@@ -260,6 +310,9 @@ export function OnboardingScreen() {
     try {
       setVerifyingCode(true);
       await linkWithCode({ email, code });
+      console.log("Email linked successfully");
+      setEmailVerified(true); // Mark email as verified
+      // Move to wallet step
       setCurrentStep("wallet");
     } catch (error) {
       console.error("Email verify error:", error);
@@ -276,8 +329,10 @@ export function OnboardingScreen() {
   const handleCreateWallet = async () => {
     try {
       setCreatingWallet(true);
-      const createdWalletAddress = await getOrCreateTradingWalletAddress();
-      await completeOnboarding({ walletAddress: createdWalletAddress });
+      console.log("Creating wallet...");
+      await getOrCreateTradingWalletAddress();
+      console.log("Wallet created successfully");
+      // Wallet created, onboarding will complete via useEffect
     } catch (error) {
       console.error("Wallet create error:", error);
       const friendly = getUserFriendlyAuthError(error, {
@@ -298,35 +353,59 @@ export function OnboardingScreen() {
     );
   }
 
-  // Keep showing onboarding until Twitter (and other steps) are satisfied.
+  console.log("Rendering onboarding screen - currentStep:", currentStep);
+
+  // Add a check to see if we should be showing the age step
+  if (currentStep === "age") {
+    console.log("AGE STEP - Should be visible now!");
+  }
 
   return (
-    <LinearGradient colors={["#000000", "#1a1a1a", "#000000"]} style={styles.container}>
-      <KeyboardAvoidingView
-        style={styles.keyboard}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+    <LinearGradient 
+      colors={["#000000", "#1a1a1a", "#000000"]} 
+      style={[styles.container, { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }]}
+    >
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
       >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.centerContainer}>
+        
         <View style={styles.header}>
+          <View style={styles.iconCircle}>
+            <Image 
+              source={require('@/assets/images/icon.png')} 
+              style={styles.iconImage}
+              resizeMode="contain"
+            />
+          </View>
+          
           <Text style={styles.title}>Welcome to Swipeit</Text>
           <Text style={styles.subtitle}>Discover and trade tokens</Text>
         </View>
 
-        <View style={styles.steps}>
-          {renderStep("twitter", "1", "Connect Twitter", currentStep, () => setCurrentStep("twitter"), true)}
-          {renderStep("email", "2", "Verify Email", currentStep, () => setCurrentStep("email"), hasTwitter)}
-          {renderStep("wallet", "3", "Create Wallet", currentStep, () => setCurrentStep("wallet"), hasTwitter && hasEmail)}
-        </View>
-
         <View style={styles.actionContainer}>
 
-          {currentStep === "twitter" && (
-            <Pressable style={[styles.primaryButton, twitterLoading && styles.primaryButtonDisabled]} onPress={handleTwitterConnect} disabled={twitterLoading}>
+          {currentStep === "social" && (
+            <Pressable 
+              style={[styles.twitterButton, twitterLoading && styles.buttonDisabled]} 
+              onPress={handleTwitterConnect} 
+              disabled={twitterLoading || hasTwitter}
+            >
               {twitterLoading ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.primaryButtonText}>Connect Twitter</Text>
+                <>
+                  <Text style={styles.twitterIcon}>🐦</Text>
+                  <Text style={styles.twitterButtonText}>
+                    {hasTwitter ? "Twitter Connected" : "Sign in with Twitter"}
+                  </Text>
+                </>
               )}
             </Pressable>
           )}
@@ -385,71 +464,142 @@ export function OnboardingScreen() {
           </View>
         )}
 
-        </ScrollView>
+        <View style={styles.legalFooter}>
+          <Text style={styles.legalFooterText}>
+            By continuing, you agree to our{' '}
+          </Text>
+          <Pressable 
+            onPress={() => setShowTermsModal(true)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Text style={styles.legalFooterLink}>Terms & Privacy Policy</Text>
+          </Pressable>
+        </View>
+
+      </View>
+      </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Terms Modal */}
+      <Modal
+        visible={showTermsModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowTermsModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Legal</Text>
+            <Pressable onPress={() => setShowTermsModal(false)} style={styles.modalCloseButton}>
+              <Text style={styles.modalCloseText}>Close</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
+            
+            <Text style={styles.modalMainTitle}>Terms of Service</Text>
+            <Text style={styles.modalLastUpdated}>Last Updated: {new Date().toLocaleDateString()}</Text>
+            
+            <Text style={styles.modalSectionTitle}>1. Acceptance of Terms</Text>
+            <Text style={styles.modalText}>
+              By using Swipeit, you accept these Terms of Service. If you don't agree, please don't use the App.
+            </Text>
+            
+            <Text style={styles.modalSectionTitle}>2. Age Requirement</Text>
+            <Text style={styles.modalText}>
+              You must be at least 18 years old to use this App.
+            </Text>
+            
+            <Text style={styles.modalSectionTitle}>3. Trading Risks</Text>
+            <Text style={styles.modalText}>
+              Cryptocurrency trading involves substantial risk. You may lose all or part of your investment. 
+              You are solely responsible for your trading decisions.
+            </Text>
+            
+            <Text style={styles.modalSectionTitle}>4. Not Financial Advice</Text>
+            <Text style={styles.modalText}>
+              The App does not provide investment or financial advice. All content is for informational purposes only.
+            </Text>
+            
+            <Text style={styles.modalSectionTitle}>5. Limitation of Liability</Text>
+            <Text style={styles.modalText}>
+              We are not liable for any losses, damages, or expenses arising from your use of the App.
+            </Text>
+            
+            <Text style={[styles.modalMainTitle, { marginTop: 32 }]}>Privacy Policy</Text>
+            <Text style={styles.modalLastUpdated}>Last Updated: {new Date().toLocaleDateString()}</Text>
+            
+            <Text style={styles.modalSectionTitle}>1. Information We Collect</Text>
+            <Text style={styles.modalText}>
+              We collect your email, social media profile, wallet addresses, and usage data.
+            </Text>
+            
+            <Text style={styles.modalSectionTitle}>2. How We Use Your Information</Text>
+            <Text style={styles.modalText}>
+              We use your information to provide services, process transactions, and improve the App.
+            </Text>
+            
+            <Text style={styles.modalSectionTitle}>3. Data Security</Text>
+            <Text style={styles.modalText}>
+              We implement industry-standard security measures including encryption and secure servers.
+            </Text>
+            
+            <Text style={styles.modalSectionTitle}>4. Your Rights</Text>
+            <Text style={styles.modalText}>
+              You have the right to access, correct, or delete your personal information.
+            </Text>
+            
+            <Text style={styles.modalText}>
+              For full Terms and Privacy Policy, see the Legal section in your profile.
+            </Text>
+            
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }
 
-function renderStep(
-  step: OnboardingStep,
-  number: string,
-  title: string,
-  currentStep: OnboardingStep,
-  onPress: () => void,
-  enabled: boolean
-) {
-
-  const active = currentStep === step;
-
-  return (
-    <Pressable
-      style={[styles.step, active && styles.activeStep, !enabled && styles.disabledStep]}
-      onPress={enabled ? onPress : undefined}
-      disabled={!enabled}
-    >
-      <View style={[styles.stepIndicator, active && styles.activeIndicator]}>
-        <Text style={[styles.stepNumber, active && styles.activeStepNumber]}>
-          {number}
-        </Text>
-      </View>
-
-      <Text style={[styles.stepTitle, active && styles.activeStepTitle]}>
-        {title}
-      </Text>
-    </Pressable>
-  );
-
-}
-
 const styles = StyleSheet.create({
   container:{flex:1,width:SCREEN_WIDTH,height:SCREEN_HEIGHT},
-  keyboard:{flex:1},
+  scrollContent:{flexGrow:1,justifyContent:"center",paddingHorizontal:24,paddingVertical:40},
+  centerContainer:{alignItems:"center"},
   center:{justifyContent:"center",alignItems:"center"},
-  content:{flexGrow:1,paddingHorizontal:24,paddingTop:190,paddingBottom:40},
-  header:{alignItems:"center",marginBottom:60},
+  header:{alignItems:"center",marginBottom:40},
+  iconCircle:{width:120,height:120,borderRadius:60,backgroundColor:"rgba(255,255,255,0.1)",alignItems:"center",justifyContent:"center",marginBottom:24,borderWidth:2,borderColor:"rgba(255,255,255,0.2)",overflow:"hidden"},
+  iconImage:{width:80,height:80},
   title:{fontSize:32,fontWeight:"700",color:"#fff",textAlign:"center"},
-  subtitle:{fontSize:18,color:"#888",textAlign:"center"},
-  steps:{flex:1,justifyContent:"center",gap:24},
-  step:{flexDirection:"row",alignItems:"center",padding:20,backgroundColor:"#1a1a1a",borderRadius:16,borderWidth:1,borderColor:"#333"},
-  activeStep:{borderColor:"#007AFF",backgroundColor:"#001122"},
-  disabledStep:{opacity:0.4},
-  stepIndicator:{width:40,height:40,borderRadius:20,backgroundColor:"#333",justifyContent:"center",alignItems:"center",marginRight:16},
-  activeIndicator:{backgroundColor:"#007AFF"},
-  stepNumber:{fontSize:18,color:"#888"},
-  activeStepNumber:{color:"#fff"},
-  stepTitle:{fontSize:18,color:"#888"},
-  activeStepTitle:{color:"#fff"},
-  actionContainer:{marginTop:40},
+  subtitle:{fontSize:18,color:"#888",textAlign:"center",marginBottom:20},
+  actionContainer:{marginTop:20,width:"100%",maxWidth:400},
+  twitterButton:{backgroundColor:"#1DA1F2",paddingVertical:16,borderRadius:12,alignItems:"center",flexDirection:"row",justifyContent:"center",marginBottom:12},
+  twitterIcon:{fontSize:20,marginRight:8},
+  twitterButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
+  buttonDisabled:{opacity:0.5},
   primaryButton:{backgroundColor:"#007AFF",paddingVertical:16,borderRadius:12,alignItems:"center"},
-  primaryButtonDisabled:{opacity:0.7},
   primaryButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
   secondaryButton:{backgroundColor:"#1a1a1a",paddingVertical:14,borderRadius:12,alignItems:"center",borderWidth:1,borderColor:"#333",marginTop:12},
   secondaryButtonText:{color:"#fff",fontSize:16,fontWeight:"600"},
-  infoContainer:{padding:20,backgroundColor:"#1a1a1a",borderRadius:12,alignItems:"center"},
-  infoText:{color:"#fff",fontSize:16},
   loadingOverlay:{position:"absolute",top:0,left:0,right:0,bottom:0,backgroundColor:"rgba(0,0,0,0.8)",justifyContent:"center",alignItems:"center"},
   loadingText:{fontSize:18,color:"#fff",fontWeight:"600"},
-  emailContainer:{gap:12},
-  input:{backgroundColor:"#111",borderWidth:1,borderColor:"#333",borderRadius:12,paddingHorizontal:14,paddingVertical:12,color:"#fff",fontSize:16}
+  emailContainer:{gap:12,width:"100%"},
+  input:{backgroundColor:"#111",borderWidth:1,borderColor:"#333",borderRadius:12,paddingHorizontal:14,paddingVertical:12,color:"#fff",fontSize:16},
+  ageContainer:{gap:16,width:"100%",alignItems:"center"},
+  ageTitle:{fontSize:24,fontWeight:"700",color:"#fff",marginBottom:8},
+  ageWarning:{fontSize:40,marginBottom:12},
+  ageDescription:{fontSize:14,color:"#ccc",textAlign:"center",lineHeight:20,marginBottom:16},
+  ageConfirmBox:{backgroundColor:"rgba(255,255,255,0.05)",borderWidth:1,borderColor:"rgba(255,255,255,0.1)",borderRadius:12,padding:14,marginBottom:16,width:"100%"},
+  ageConfirmText:{fontSize:13,color:"#fff",textAlign:"center",lineHeight:18,fontWeight:"500"},
+  legalFooter:{flexDirection:"row",alignItems:"center",justifyContent:"center",paddingVertical:16,paddingHorizontal:24,flexWrap:"wrap",marginTop:32},
+  legalFooterText:{color:"#888",fontSize:12,textAlign:"center"},
+  legalFooterLink:{color:"#007AFF",fontSize:12,fontWeight:"600",textDecorationLine:"underline"},
+  modalContainer:{flex:1,backgroundColor:"#000"},
+  modalHeader:{flexDirection:"row",justifyContent:"space-between",alignItems:"center",paddingHorizontal:16,paddingVertical:16,borderBottomWidth:StyleSheet.hairlineWidth,borderBottomColor:"rgba(255,255,255,0.1)"},
+  modalTitle:{color:"#fff",fontSize:18,fontWeight:"600"},
+  modalCloseButton:{paddingHorizontal:12,paddingVertical:6,borderRadius:8,backgroundColor:"#1a1a1a"},
+  modalCloseText:{color:"#007AFF",fontSize:14,fontWeight:"600"},
+  modalContent:{flex:1,paddingHorizontal:20,paddingTop:8},
+  modalMainTitle:{color:"#fff",fontSize:22,fontWeight:"700",marginTop:16,marginBottom:4},
+  modalLastUpdated:{color:"#888",fontSize:11,marginBottom:16,fontStyle:"italic"},
+  modalSectionTitle:{color:"#fff",fontSize:16,fontWeight:"600",marginTop:20,marginBottom:8},
+  modalText:{color:"rgba(255,255,255,0.8)",fontSize:14,lineHeight:20,marginBottom:12}
 });

@@ -14,6 +14,8 @@ import { Text, View, Alert } from "react-native";
 import { PrivyProviderWrapper, usePrivy } from "@/lib/privy-runtime";
 import { OnboardingScreen } from '@/components/onboarding-screen';
 import { RiskWarningModal } from '@/components/risk-warning-modal';
+import { LoadingScreen } from '@/components/loading-screen';
+import { AgeVerificationScreen } from '@/components/age-verification-screen';
 import React from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -35,6 +37,7 @@ if (!(globalThis as any).process) {
 }
 
 const RISK_WARNING_ACCEPTED_KEY = '@memeswipe:riskWarningAccepted:v1';
+const AGE_VERIFIED_KEY = '@memeswipe:ageVerified:v1';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -112,14 +115,39 @@ function AuthGatedApp() {
   const { tradingWalletAddress, walletAddress } = useWalletContext();
   const router = useRouter();
   const pathname = usePathname();
+  const [ageVerified, setAgeVerified] = React.useState(false);
+  const [ageVerificationChecked, setAgeVerificationChecked] = React.useState(false);
   const [showRiskWarning, setShowRiskWarning] = React.useState(false);
   const [riskWarningChecked, setRiskWarningChecked] = React.useState(false);
+
+  // Check if user has verified age
+  React.useEffect(() => {
+    const checkAgeVerification = async () => {
+      try {
+        const verified = await AsyncStorage.getItem(AGE_VERIFIED_KEY);
+        console.log("Age verification status from storage:", verified);
+        if (verified === 'true') {
+          setAgeVerified(true);
+        }
+      } catch (error) {
+        console.log('Error checking age verification:', error);
+      } finally {
+        setAgeVerificationChecked(true);
+      }
+    };
+    
+    void checkAgeVerification();
+  }, []);
 
   // Check if user has accepted risk warning
   React.useEffect(() => {
     const checkRiskWarning = async () => {
       try {
+        // TEMPORARY: Clear risk warning for testing
+        await AsyncStorage.removeItem(RISK_WARNING_ACCEPTED_KEY);
+        
         const accepted = await AsyncStorage.getItem(RISK_WARNING_ACCEPTED_KEY);
+        console.log("Risk warning status from storage:", accepted);
         if (accepted === 'true') {
           setRiskWarningChecked(true);
         } else {
@@ -131,10 +159,13 @@ function AuthGatedApp() {
       }
     };
     
-    if (isLoggedIn && !loading) {
+    console.log("Risk warning useEffect - checking conditions:", { isLoggedIn, loading, ageVerified });
+    
+    if (isLoggedIn && !loading && ageVerified) {
+      console.log("Risk warning useEffect - calling checkRiskWarning");
       void checkRiskWarning();
     }
-  }, [isLoggedIn, loading]);
+  }, [isLoggedIn, loading, ageVerified]);
 
   const handleAcceptRiskWarning = async () => {
     try {
@@ -168,15 +199,31 @@ function AuthGatedApp() {
       ? (privyUser as any).linkedAccounts
       : [];
   const hasEmail = linkedAccounts.some((account: any) => account?.type === "email");
+  const hasTwitter = linkedAccounts.some((account: any) => account?.type === "twitter_oauth");
+  const hasApple = linkedAccounts.some((account: any) => account?.type === "apple_oauth" || account?.type === "apple");
+  const hasSocialLogin = hasTwitter || hasApple;
   const hasWallet = Boolean(tradingWalletAddress || walletAddress);
 
-  // Require Twitter + Email + Wallet before proceeding
-  if (!loading && (!isLoggedIn || !twitterProfile || !hasEmail || !hasWallet)) {
-    return <OnboardingScreen />;
+  // Show loading screen while initializing
+  if (loading || balanceLoading || !ageVerificationChecked) {
+    console.log("ROOT LAYOUT: Showing loading screen", { loading, balanceLoading, ageVerificationChecked });
+    return <LoadingScreen />;
   }
 
-  // Show risk warning after onboarding but before main app
-  if (isLoggedIn && !riskWarningChecked) {
+  // FIRST: Check if onboarding is complete
+  const showOnboarding = !isLoggedIn || !hasSocialLogin || !hasEmail || !hasWallet;
+
+  console.log("ROOT LAYOUT: Onboarding check", { showOnboarding, isLoggedIn, hasSocialLogin, hasEmail, hasWallet, ageVerified });
+
+  // SECOND: Show age verification ONLY AFTER onboarding is complete
+  if (!showOnboarding && !ageVerified) {
+    console.log("ROOT LAYOUT: SHOWING AGE VERIFICATION SCREEN (onboarding complete)");
+    return <AgeVerificationScreen onVerified={() => setAgeVerified(true)} />;
+  }
+
+  // THIRD: Show risk warning after age verification
+  if (isLoggedIn && !showOnboarding && ageVerified && !riskWarningChecked) {
+    console.log("ROOT LAYOUT: Showing risk warning", { showRiskWarning, riskWarningChecked });
     return (
       <RiskWarningModal
         visible={showRiskWarning}
@@ -186,6 +233,10 @@ function AuthGatedApp() {
     );
   }
 
+  console.log("ROOT LAYOUT: Risk warning check failed", { isLoggedIn, showOnboarding, ageVerified, riskWarningChecked });
+
+  console.log("ROOT LAYOUT: Rendering main app", { showOnboarding, ageVerified });
+
   return (
     <>
       <Stack>
@@ -194,6 +245,9 @@ function AuthGatedApp() {
         <Stack.Screen name="deposit" options={{ title: 'Fund Wallet' }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>
+      
+      {/* Show onboarding if not complete */}
+      {showOnboarding && <OnboardingScreen />}
     </>
   );
 }

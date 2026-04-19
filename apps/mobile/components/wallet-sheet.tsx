@@ -241,15 +241,37 @@ function WalletContent({ onClose }: { onClose: () => void }) {
 
   const handleSend = async (toAddress: string, amountStr: string) => {
     const amount = Number(amountStr);
-    if (!Number.isFinite(amount) || amount <= 0) { Alert.alert('Send SOL', 'Enter a valid amount.'); return; }
-    if (!toAddress.trim()) { Alert.alert('Send SOL', 'Enter a destination address.'); return; }
+    if (!Number.isFinite(amount) || amount <= 0) { 
+      Alert.alert('Invalid Amount', 'Please enter a valid amount.'); 
+      return; 
+    }
+    if (!toAddress.trim()) { 
+      Alert.alert('Missing Address', 'Please enter a destination address.'); 
+      return; 
+    }
+    
+    // Check if user has enough balance
+    if (solBalance !== null && amount > solBalance) {
+      Alert.alert(
+        'Insufficient Balance',
+        `You only have ${solBalance.toFixed(4)} SOL available. Please enter a smaller amount.`
+      );
+      return;
+    }
+    
     try {
       setSending(true);
       const result = await withdrawFromTradingWallet(amount, toAddress.trim());
       setSendVisible(false);
-      Alert.alert('Sent!', `Tx: ${result.txSignature}`);
+      Alert.alert(
+        'Success!', 
+        `Successfully sent ${amount} SOL!\n\nTransaction ID: ${result.txSignature.slice(0, 8)}...${result.txSignature.slice(-8)}`
+      );
       if (tradingWalletAddress) void loadBalance(tradingWalletAddress);
-    } catch (e: any) { Alert.alert('Send Failed', e?.message || 'Failed to send SOL.'); }
+    } catch (e: any) { 
+      console.error('Send error:', e);
+      Alert.alert('Send Failed', e?.message || 'Could not send SOL. Please try again.');
+    }
     finally { setSending(false); }
   };
 

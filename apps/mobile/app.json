@@ -5,16 +5,48 @@
     "scheme": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
     "jsEngine": "hermes",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/images/icon.png",
+          "imageWidth": 200
+        }
+      ]
     ],
     "ios": {
-      "bundleIdentifier": "com.memeswipe.mobile"
+      "bundleIdentifier": "com.memeswipe.mobile",
+      "usesAppleSignIn": true,
+      "icon": "./assets/images/icon.png",
+      "supportsTablet": false,
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#000000"
+      }
     },
     "android": {
-      "package": "com.memeswipe.mobile"
+      "package": "com.memeswipe.mobile",
+      "icon": "./assets/images/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#000000"
+      },
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#000000"
+      }
     },
     "extra": {
       "apiBase": "https://memeswipe.onrender.com",

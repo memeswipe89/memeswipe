@@ -39,6 +39,7 @@ import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { useAuth } from '@/contexts/auth-context';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { API_BASE } from '@/lib/api-base';
+import { router } from 'expo-router';
 
 import { TradeSettings } from './trade-settings';
 import { SolanaIcon } from '../icons/SolanaIcon';
@@ -357,6 +358,20 @@ export const ProfileSheet = memo(
                   <TradeSettings onInputFocusChange={setInputFocused} />
 
                   <View style={styles.actionsWrap}>
+                    <Text style={[styles.sectionTitle, styles.networkTitle]}>Legal</Text>
+                    <Pressable 
+                      style={styles.legalButton} 
+                      onPress={() => {
+                        closeSheet();
+                        router.push('/terms');
+                      }}
+                    >
+                      <Text style={styles.legalText}>Terms of Service & Privacy Policy</Text>
+                      <Text style={styles.legalArrow}>›</Text>
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.actionsWrap}>
                     <Text style={[styles.sectionTitle, styles.networkTitle]}>Actions</Text>
                     <Pressable style={styles.logoutButton} onPress={handleLogout}>
                       <Text style={styles.logoutIcon}>⇢</Text>
@@ -589,6 +604,28 @@ const styles = StyleSheet.create({
     color: '#ff6b6b',
     fontSize: 14,
     fontWeight: '700',
+  },
+  legalButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  legalText: {
+    color: '#d7e4ff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  legalArrow: {
+    color: '#a7b4d5',
+    fontSize: 20,
+    fontWeight: '300',
   },
   version: {
     marginTop: 2,
