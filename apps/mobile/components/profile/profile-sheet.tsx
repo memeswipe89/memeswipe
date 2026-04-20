@@ -81,6 +81,8 @@ export const ProfileSheet = memo(
       tradeAmount,
       tpROI,
       stopLoss,
+      showDisclaimer,
+      setShowDisclaimer,
       resetSettings,
     } = useTradeSettings();
     const { logout } = useAuth();
@@ -355,6 +357,22 @@ export const ProfileSheet = memo(
                   </View>
 
                   <TradeSettings onInputFocusChange={setInputFocused} />
+
+                  <View style={styles.actionsWrap}>
+                    <Text style={[styles.sectionTitle, styles.networkTitle]}>Display</Text>
+                    <Pressable 
+                      style={styles.toggleRow} 
+                      onPress={() => setShowDisclaimer(!showDisclaimer)}
+                    >
+                      <View style={styles.toggleLeft}>
+                        <Text style={styles.toggleLabel}>Show Disclaimer</Text>
+                        <Text style={styles.toggleSubtext}>Display risk warning on main screen</Text>
+                      </View>
+                      <View style={[styles.toggleSwitch, showDisclaimer && styles.toggleSwitchActive]}>
+                        <View style={[styles.toggleThumb, showDisclaimer && styles.toggleThumbActive]} />
+                      </View>
+                    </Pressable>
+                  </View>
 
                   <View style={styles.actionsWrap}>
                     <Text style={[styles.sectionTitle, styles.networkTitle]}>Legal</Text>
@@ -635,5 +653,56 @@ const styles = StyleSheet.create({
     marginTop: 12,
     color: '#7f8fb5',
     fontSize: 12,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  toggleLeft: {
+    flex: 1,
+    marginRight: 12,
+  },
+  toggleLabel: {
+    color: '#d7e4ff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  toggleSubtext: {
+    color: '#8794b4',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  toggleSwitch: {
+    width: 48,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleSwitchActive: {
+    backgroundColor: '#4ade80',
+  },
+  toggleThumb: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  toggleThumbActive: {
+    transform: [{ translateX: 20 }],
   },
 });

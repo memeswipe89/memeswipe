@@ -2,7 +2,13 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
-export function TradingDisclaimer() {
+type TradingDisclaimerProps = {
+  visible?: boolean;
+};
+
+export function TradingDisclaimer({ visible = true }: TradingDisclaimerProps) {
+  if (!visible) return null;
+  
   return (
     <View style={styles.container}>
       <MaterialIcons name="info-outline" size={11} color="rgba(255,255,255,0.4)" />

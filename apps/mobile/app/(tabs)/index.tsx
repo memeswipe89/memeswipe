@@ -361,7 +361,7 @@ export default function HomeScreen() {
     neverShowAgain: false,
   });
   const [favoritePopupDisabled, setFavoritePopupDisabled] = useState(false);
-  const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI, setStopLoss } =
+  const { activeChain, profileName, tradeAmount, tpROI, stopLoss, showDisclaimer, setTradeAmount, setTpROI, setStopLoss } =
     useTradeSettings();
 
   type EditField = 'AMT' | 'ROI' | 'SL';
@@ -1623,9 +1623,11 @@ export default function HomeScreen() {
                 <SourceTab label="Bags" enabled={activeSource === 'bags'} onPress={() => setActiveSource('bags')} />
               </View>
               {/* Trading Disclaimer */}
-              <View style={styles.disclaimerTopContainer}>
-                <TradingDisclaimer />
-              </View>
+              {showDisclaimer && (
+                <View style={styles.disclaimerTopContainer}>
+                  <TradingDisclaimer visible={showDisclaimer} />
+                </View>
+              )}
             </View>
           </View>
 
@@ -1646,6 +1648,7 @@ export default function HomeScreen() {
               onActiveCardChange={handleActiveCardChange}
               onRefresh={isRemoteSegment(segment) ? handleDeckRefresh : undefined}
               isFavoritesMode={segment === 'favorites'}
+              showDisclaimer={showDisclaimer}
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'

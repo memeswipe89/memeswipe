@@ -9,12 +9,14 @@ type TradeSettingsState = {
   tpROI: number;
   stopLoss: number;
   activeChain: ChainType;
+  showDisclaimer: boolean;
   hydrated: boolean;
   setProfileName: (value: string) => void;
   setTradeAmount: (value: number) => void;
   setTpROI: (value: number) => void;
   setStopLoss: (value: number) => void;
   setActiveChain: (value: ChainType) => void;
+  setShowDisclaimer: (value: boolean) => void;
   resetSettings: () => void;
 };
 
@@ -29,6 +31,7 @@ const DEFAULT_SETTINGS = {
   tpROI: 50,
   stopLoss: 15,
   activeChain: 'solana' as ChainType,
+  showDisclaimer: true,
 };
 
 const TradeSettingsContext = createContext<TradeSettingsState | undefined>(undefined);
@@ -51,6 +54,7 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
   const [tpROI, setTpROI] = useState(DEFAULT_SETTINGS.tpROI);
   const [stopLoss, setStopLoss] = useState(DEFAULT_SETTINGS.stopLoss);
   const [activeChain, setActiveChain] = useState<ChainType>(DEFAULT_SETTINGS.activeChain);
+  const [showDisclaimer, setShowDisclaimer] = useState(DEFAULT_SETTINGS.showDisclaimer);
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate on mount
@@ -65,6 +69,7 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
         if (typeof parsed.tradeAmount === 'number') setTradeAmount(parsed.tradeAmount);
         if (typeof parsed.tpROI === 'number') setTpROI(parsed.tpROI);
         if (typeof parsed.stopLoss === 'number') setStopLoss(parsed.stopLoss);
+        if (typeof parsed.showDisclaimer === 'boolean') setShowDisclaimer(parsed.showDisclaimer);
         if (parsed.activeChain === 'solana' || parsed.activeChain === 'base') {
           setActiveChain(parsed.activeChain);
         }
@@ -108,12 +113,18 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
     void mergePersist({ activeChain: value });
   }, []);
 
+  const setShowDisclaimerSafe = useCallback((value: boolean) => {
+    setShowDisclaimer(value);
+    void mergePersist({ showDisclaimer: value });
+  }, []);
+
   const resetSettings = useCallback(() => {
     setProfileName(DEFAULT_SETTINGS.profileName);
     setTradeAmount(DEFAULT_SETTINGS.tradeAmount);
     setTpROI(DEFAULT_SETTINGS.tpROI);
     setStopLoss(DEFAULT_SETTINGS.stopLoss);
     setActiveChain(DEFAULT_SETTINGS.activeChain);
+    setShowDisclaimer(DEFAULT_SETTINGS.showDisclaimer);
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS));
   }, []);
 
@@ -124,18 +135,20 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
       tpROI,
       stopLoss,
       activeChain,
+      showDisclaimer,
       hydrated,
       setProfileName: setProfileNameSafe,
       setTradeAmount: setTradeAmountSafe,
       setTpROI: setTpROISafe,
       setStopLoss: setStopLossSafe,
       setActiveChain: setActiveChainSafe,
+      setShowDisclaimer: setShowDisclaimerSafe,
       resetSettings,
     }),
     [
       activeChain, hydrated, profileName, resetSettings,
-      setActiveChainSafe, setProfileNameSafe, setStopLossSafe,
-      setTpROISafe, setTradeAmountSafe, stopLoss, tpROI, tradeAmount,
+      setActiveChainSafe, setProfileNameSafe, setShowDisclaimerSafe, setStopLossSafe,
+      setTpROISafe, setTradeAmountSafe, showDisclaimer, stopLoss, tpROI, tradeAmount,
     ]
   );
 

@@ -25,7 +25,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-type OnboardingStep = "social" | "email" | "wallet";
+const AGE_VERIFIED_KEY = '@memeswipe:ageVerified:v1';
+const RISK_WARNING_ACCEPTED_KEY = '@memeswipe:riskWarningAccepted:v1';
+
+type OnboardingStep = "age" | "risk" | "social" | "email" | "wallet";
 
 const getLinkedAccounts = (privyUser: any): any[] => {
   if (!privyUser) return [];
@@ -107,7 +110,7 @@ export function OnboardingScreen() {
     // User object loaded
   }, [user]);
 
-  const [currentStep, setCurrentStep] = useState<OnboardingStep>("social");
+  const [currentStep, setCurrentStep] = useState<OnboardingStep>("age");
   const [isOnboarding, setIsOnboarding] = useState(false);
   const [appleLoading, setAppleLoading] = useState(false);
   const [twitterLoading, setTwitterLoading] = useState(false);
@@ -119,6 +122,9 @@ export function OnboardingScreen() {
   const [creatingWallet, setCreatingWallet] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false); // Track email manually
   const [showTermsModal, setShowTermsModal] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [riskAgeConfirmed, setRiskAgeConfirmed] = useState(false);
+  const [riskUnderstood, setRiskUnderstood] = useState(false);
 
   const twitterProfile = getTwitterFromPrivy(user);
   const appleProfile = getAppleFromPrivy(user);
@@ -214,16 +220,18 @@ export function OnboardingScreen() {
     if (!isReady) return;
 
     // Complete onboarding if all steps are done
-    if (hasSocialLogin && hasEmail && hasWallet && user) {
+    if (ageConfirmed && riskAgeConfirmed && riskUnderstood && hasSocialLogin && hasEmail && hasWallet && user) {
       void completeOnboarding();
     }
-    // Auto-advance through steps
-    else if (currentStep === "social" && hasSocialLogin) {
+    // Auto-advance through steps (but NOT from risk to social - that requires button click)
+    else if (currentStep === "age" && ageConfirmed) {
+      setCurrentStep("risk");
+    } else if (currentStep === "social" && hasSocialLogin) {
       setCurrentStep("email");
     } else if (currentStep === "email" && hasSocialLogin && hasEmail) {
       setCurrentStep("wallet");
     }
-  }, [hasSocialLogin, hasEmail, hasWallet, isReady, currentStep, user, completeOnboarding]);
+  }, [ageConfirmed, riskAgeConfirmed, riskUnderstood, hasSocialLogin, hasEmail, hasWallet, isReady, currentStep, user, completeOnboarding]);
 
   const handleTwitterConnect = async () => {
     try {
@@ -304,6 +312,9 @@ export function OnboardingScreen() {
     try {
       setCreatingWallet(true);
       await getOrCreateTradingWalletAddress();
+      // Save age verification and risk warning acceptance
+      await AsyncStorage.setItem(AGE_VERIFIED_KEY, 'true');
+      await AsyncStorage.setItem(RISK_WARNING_ACCEPTED_KEY, 'true');
       // Wallet created, onboarding will complete via useEffect
     } catch (error) {
       console.error("Wallet create error:", error);
@@ -317,17 +328,31 @@ export function OnboardingScreen() {
     }
   };
 
+  const handleAgeConfirm = () => {
+    setAgeConfirmed(true);
+  };
+
+  const handleAgeDecline = () => {
+    Alert.alert(
+      'Age Requirement',
+      'You must be 18 years or older to use this app.',
+      [{ text: 'OK' }]
+    );
+  };
+
+  const handleRiskAccept = () => {
+    if (riskAgeConfirmed && riskUnderstood) {
+      // Both checkboxes confirmed, proceed to next step
+      setCurrentStep("social");
+    }
+  };
+
   if (!isReady) {
     return (
       <View style={[styles.container, styles.center]}>
         <Text style={{ color: "#fff" }}>Loading...</Text>
       </View>
     );
-  }
-
-  // Add a check to see if we should be showing the age step
-  if (currentStep === "age") {
-    // Age step logic here if needed
   }
 
   return (
@@ -361,6 +386,78 @@ export function OnboardingScreen() {
 
         <View style={styles.actionContainer}>
 
+          {currentStep === "age" && (
+            <>
+              <Text style={styles.ageTitle}>Age Verification</Text>
+              <Text style={styles.ageWarning}>⚠️</Text>
+              <Text style={styles.ageDescription}>
+                This app involves cryptocurrency trading and carries significant financial risk.
+                {'\n\n'}
+                You must be at least 18 years old to use this application.
+              </Text>
+              <View style={styles.ageConfirmBox}>
+                <Text style={styles.ageConfirmText}>
+                  I confirm that I am 18 years of age or older and understand the risks involved in cryptocurrency trading.
+                </Text>
+              </View>
+              <Pressable style={styles.primaryButton} onPress={handleAgeConfirm}>
+                <Text style={styles.primaryButtonText}>I CONFIRM, I AM 18+</Text>
+              </Pressable>
+              <Pressable style={styles.secondaryButton} onPress={handleAgeDecline}>
+                <Text style={styles.secondaryButtonText}>I AM UNDER 18</Text>
+              </Pressable>
+            </>
+          )}
+
+          {currentStep === "risk" && (
+            <>
+              <Text style={styles.ageTitle}>Risk Disclosure</Text>
+              <ScrollView style={styles.riskScrollView} showsVerticalScrollIndicator={false}>
+                <View style={styles.riskSection}>
+                  <Text style={styles.riskSectionTitle}>⚠️ Risk Warning</Text>
+                  <Text style={styles.riskText}>
+                    Trading cryptocurrencies involves substantial risk of loss and is not suitable for every investor.
+                  </Text>
+                </View>
+                <View style={styles.riskSection}>
+                  <Text style={styles.riskSectionTitle}>📊 Not Financial Advice</Text>
+                  <Text style={styles.riskText}>
+                    This app does not provide investment advice. You are solely responsible for your trading decisions.
+                  </Text>
+                </View>
+                <View style={styles.riskSection}>
+                  <Text style={styles.riskSectionTitle}>🔒 Your Responsibility</Text>
+                  <Text style={styles.riskText}>
+                    All trades are executed on-chain and are irreversible. You are responsible for securing your wallet.
+                  </Text>
+                </View>
+                <View style={styles.checkboxContainer}>
+                  <Pressable style={styles.checkboxRow} onPress={() => setRiskAgeConfirmed(!riskAgeConfirmed)}>
+                    <View style={[styles.checkbox, riskAgeConfirmed && styles.checkboxChecked]}>
+                      {riskAgeConfirmed && <Text style={styles.checkmark}>✓</Text>}
+                    </View>
+                    <Text style={styles.checkboxLabel}>I confirm that I am at least 18 years old</Text>
+                  </Pressable>
+                  <Pressable style={styles.checkboxRow} onPress={() => setRiskUnderstood(!riskUnderstood)}>
+                    <View style={[styles.checkbox, riskUnderstood && styles.checkboxChecked]}>
+                      {riskUnderstood && <Text style={styles.checkmark}>✓</Text>}
+                    </View>
+                    <Text style={styles.checkboxLabel}>I understand the risks and accept full responsibility</Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
+              <View style={styles.riskButtonContainer}>
+                <Pressable 
+                  style={[styles.primaryButton, (!riskAgeConfirmed || !riskUnderstood) && styles.buttonDisabled]} 
+                  onPress={handleRiskAccept}
+                  disabled={!riskAgeConfirmed || !riskUnderstood}
+                >
+                  <Text style={styles.primaryButtonText}>ACCEPT & CONTINUE</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
+
           {currentStep === "social" && (
             <Pressable 
               style={[styles.twitterButton, twitterLoading && styles.buttonDisabled]} 
@@ -370,12 +467,9 @@ export function OnboardingScreen() {
               {twitterLoading ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <>
-                  <Text style={styles.twitterIcon}>🐦</Text>
-                  <Text style={styles.twitterButtonText}>
-                    {hasTwitter ? "Twitter Connected" : "Sign in with Twitter"}
-                  </Text>
-                </>
+                <Text style={styles.twitterButtonText}>
+                  {hasTwitter ? "Twitter Connected" : "Sign in with Twitter"}
+                </Text>
               )}
             </Pressable>
           )}
@@ -535,14 +629,13 @@ const styles = StyleSheet.create({
   scrollContent:{flexGrow:1,justifyContent:"center",paddingHorizontal:24,paddingVertical:40},
   centerContainer:{alignItems:"center"},
   center:{justifyContent:"center",alignItems:"center"},
-  header:{alignItems:"center",marginBottom:40},
-  iconCircle:{width:120,height:120,borderRadius:60,backgroundColor:"rgba(255,255,255,0.1)",alignItems:"center",justifyContent:"center",marginBottom:24,borderWidth:2,borderColor:"rgba(255,255,255,0.2)",overflow:"hidden"},
-  iconImage:{width:80,height:80},
-  title:{fontSize:32,fontWeight:"700",color:"#fff",textAlign:"center"},
-  subtitle:{fontSize:18,color:"#888",textAlign:"center",marginBottom:20},
+  header:{alignItems:"center",marginBottom:24},
+  iconCircle:{width:100,height:100,borderRadius:50,backgroundColor:"rgba(255,255,255,0.1)",alignItems:"center",justifyContent:"center",marginBottom:16,borderWidth:2,borderColor:"rgba(255,255,255,0.2)",overflow:"hidden"},
+  iconImage:{width:70,height:70},
+  title:{fontSize:28,fontWeight:"700",color:"#fff",textAlign:"center"},
+  subtitle:{fontSize:16,color:"#888",textAlign:"center",marginBottom:12},
   actionContainer:{marginTop:20,width:"100%",maxWidth:400},
-  twitterButton:{backgroundColor:"#1DA1F2",paddingVertical:16,borderRadius:12,alignItems:"center",flexDirection:"row",justifyContent:"center",marginBottom:12},
-  twitterIcon:{fontSize:20,marginRight:8},
+  twitterButton:{backgroundColor:"#1DA1F2",paddingVertical:16,borderRadius:12,alignItems:"center",justifyContent:"center",marginBottom:12},
   twitterButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
   buttonDisabled:{opacity:0.5},
   primaryButton:{backgroundColor:"#007AFF",paddingVertical:16,borderRadius:12,alignItems:"center"},
@@ -554,11 +647,23 @@ const styles = StyleSheet.create({
   emailContainer:{gap:12,width:"100%"},
   input:{backgroundColor:"#111",borderWidth:1,borderColor:"#333",borderRadius:12,paddingHorizontal:14,paddingVertical:12,color:"#fff",fontSize:16},
   ageContainer:{gap:16,width:"100%",alignItems:"center"},
-  ageTitle:{fontSize:24,fontWeight:"700",color:"#fff",marginBottom:8},
-  ageWarning:{fontSize:40,marginBottom:12},
+  ageTitle:{fontSize:24,fontWeight:"700",color:"#fff",marginBottom:8,textAlign:"center"},
+  ageWarning:{fontSize:40,marginBottom:12,textAlign:"center"},
   ageDescription:{fontSize:14,color:"#ccc",textAlign:"center",lineHeight:20,marginBottom:16},
   ageConfirmBox:{backgroundColor:"rgba(255,255,255,0.05)",borderWidth:1,borderColor:"rgba(255,255,255,0.1)",borderRadius:12,padding:14,marginBottom:16,width:"100%"},
   ageConfirmText:{fontSize:13,color:"#fff",textAlign:"center",lineHeight:18,fontWeight:"500"},
+  riskScrollView:{maxHeight:300,width:"100%",marginBottom:16},
+  riskSection:{marginBottom:16},
+  riskSectionTitle:{fontSize:16,fontWeight:"700",color:"#fff",marginBottom:8},
+  riskText:{fontSize:13,color:"#ccc",lineHeight:18},
+  checkboxContainer:{marginTop:8,gap:12,marginBottom:16},
+  checkboxRow:{flexDirection:"row",alignItems:"flex-start",gap:10},
+  checkbox:{width:22,height:22,borderRadius:6,borderWidth:2,borderColor:"rgba(255,255,255,0.3)",justifyContent:"center",alignItems:"center",marginTop:2},
+  checkboxChecked:{backgroundColor:"#4ade80",borderColor:"#4ade80"},
+  checkmark:{color:"#fff",fontSize:14,fontWeight:"800"},
+  checkboxLabel:{flex:1,fontSize:13,color:"#fff",lineHeight:18,fontWeight:"500"},
+  riskButtonContainer:{paddingTop:8,width:"100%"},
+  buttonDisabled:{opacity:0.4},
   legalFooter:{flexDirection:"row",alignItems:"center",justifyContent:"center",paddingVertical:16,paddingHorizontal:24,flexWrap:"wrap",marginTop:32},
   legalFooterText:{color:"#888",fontSize:12,textAlign:"center"},
   legalFooterLink:{color:"#007AFF",fontSize:12,fontWeight:"600",textDecorationLine:"underline"},

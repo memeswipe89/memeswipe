@@ -181,7 +181,7 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
   const { sendCode, linkWithCode } = useLinkEmail();
-  const { profileName, setProfileName } = useTradeSettings();
+  const { profileName, setProfileName, showDisclaimer, setShowDisclaimer } = useTradeSettings();
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
@@ -414,6 +414,40 @@ function WalletContent({ onClose }: { onClose: () => void }) {
           <MenuSection>
             <MenuRow icon="logo-twitter" iconBg="#1a2a3a" label="X / Twitter" value={twitterProfile?.username ? `@${twitterProfile.username}` : 'Not connected'} onPress={() => {}} />
             <MenuRow icon="mail-outline" iconBg="#2a1a3a" label="Email" value={linkedEmail ?? 'Not linked'} onPress={() => {}} last />
+          </MenuSection>
+
+          {/* Settings */}
+          <MenuSection>
+            <Pressable
+              onPress={() => setShowDisclaimer(!showDisclaimer)}
+              style={({ pressed }) => ({
+                flexDirection: 'row', alignItems: 'center',
+                paddingVertical: 13, paddingHorizontal: 16,
+                backgroundColor: pressed ? '#1e1e1e' : 'transparent',
+              })}
+            >
+              <View style={{
+                width: 32, height: 32, borderRadius: 8, backgroundColor: '#2a2a3a',
+                alignItems: 'center', justifyContent: 'center', marginRight: 14,
+              }}>
+                <Ionicons name="information-circle-outline" size={17} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontSize: 16 }}>Show Disclaimer</Text>
+                <Text style={{ color: '#8e8e93', fontSize: 12, marginTop: 2 }}>Display risk warning on main screen</Text>
+              </View>
+              <View style={{
+                width: 48, height: 28, borderRadius: 14,
+                backgroundColor: showDisclaimer ? '#30d158' : 'rgba(255,255,255,0.15)',
+                padding: 2, justifyContent: 'center',
+              }}>
+                <View style={{
+                  width: 24, height: 24, borderRadius: 12, backgroundColor: '#fff',
+                  transform: [{ translateX: showDisclaimer ? 20 : 0 }],
+                  shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 },
+                }} />
+              </View>
+            </Pressable>
           </MenuSection>
 
           {/* T&C + Sign out */}

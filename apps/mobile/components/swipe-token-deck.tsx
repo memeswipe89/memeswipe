@@ -76,12 +76,14 @@ type SwipeTokenDeckProps = {
   onRefresh?: () => void;
   isFavoritesMode?: boolean;
   onFavoritePopup?: (token: SwipeToken) => void;
+  showDisclaimer?: boolean;
 };
 
 type TokenCardProps = {
   token: SwipeToken;
   isFavorite: boolean;
   onToggleFavorite: (token: SwipeToken) => void;
+  showDisclaimer?: boolean;
 };
 
 const formatCurrency = (value: number) => {
@@ -259,7 +261,7 @@ const DeckStatusCard = memo(function DeckStatusCard({
   );
 });
 
-const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite }: TokenCardProps) {
+const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite, showDisclaimer = false }: TokenCardProps) {
   const palette = tokenPalette(token.symbol);
   const priceUp =
     token.chartData.length > 1
@@ -422,7 +424,7 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
               </View>
             </View>
 
-            <View style={styles.bottomActionSpace} />
+            <View style={[styles.bottomActionSpace, showDisclaimer && styles.bottomActionSpaceWithDisclaimer]} />
         </View>
       </View>
 
@@ -454,6 +456,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   onRefresh,
   isFavoritesMode = false,
   onFavoritePopup,
+  showDisclaimer,
 }: SwipeTokenDeckProps) {
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -630,6 +633,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
             token={token}
             isFavorite={favoriteAddresses.has(token.address)}
             onToggleFavorite={onToggleFavorite}
+            showDisclaimer={showDisclaimer}
           />
         </Animated.View>
       ))}
@@ -644,6 +648,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
               token={currentToken}
               isFavorite={favoriteAddresses.has(currentToken.address)}
               onToggleFavorite={onToggleFavorite}
+              showDisclaimer={showDisclaimer}
             />
             
             {/* Swipe overlays removed */}
@@ -933,7 +938,10 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   bottomActionSpace: {
-    height: 32,
+    height: 8,
+  },
+  bottomActionSpaceWithDisclaimer: {
+    height: 20,
   },
   overlayBadge: {
     position: 'absolute',
