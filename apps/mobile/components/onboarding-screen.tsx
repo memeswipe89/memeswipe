@@ -15,6 +15,8 @@ import {
   Image,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Haptics from "expo-haptics";
+import { testAllHaptics, checkHapticsSupport } from '@/lib/haptics-test';
 import { usePrivy, useLoginWithOAuth, useLinkWithOAuth, useLinkEmail } from "@privy-io/expo";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
@@ -236,9 +238,11 @@ export function OnboardingScreen() {
   const handleTwitterConnect = async () => {
     try {
       if (hasTwitter) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
         setCurrentStep("email");
         return;
       }
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
       setTwitterLoading(true);
       if (user) {
         await link({ provider: "twitter" });
@@ -247,6 +251,7 @@ export function OnboardingScreen() {
       }
     } catch (error) {
       console.error("Twitter login error:", error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       const friendly = getUserFriendlyAuthError(error, {
         title: "Twitter connection failed",
         message: "Could not connect your Twitter account. Please try again.",
@@ -263,15 +268,19 @@ export function OnboardingScreen() {
     }
     const email = emailInput.trim();
     if (!email) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
       Alert.alert("Email required", "Please enter your email address.");
       return;
     }
     try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
       setSendingCode(true);
       await sendCode({ email });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       setCodeSent(true);
     } catch (error) {
       console.error("Email send code error:", error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       const friendly = getUserFriendlyAuthError(error, {
         title: "Could not send code",
         message: "We couldn't send a verification code. Please try again.",
@@ -287,17 +296,21 @@ export function OnboardingScreen() {
     const email = emailInput.trim();
     const code = codeInput.trim();
     if (!email || !code) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
       Alert.alert("Missing details", "Please enter both email and verification code.");
       return;
     }
     try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
       setVerifyingCode(true);
       await linkWithCode({ email, code });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       setEmailVerified(true); // Mark email as verified
       // Move to wallet step
       setCurrentStep("wallet");
     } catch (error) {
       console.error("Email verify error:", error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       const friendly = getUserFriendlyAuthError(error, {
         title: "Verification failed",
         message: "We couldn't verify this code. Please check and try again.",
@@ -310,14 +323,17 @@ export function OnboardingScreen() {
 
   const handleCreateWallet = async () => {
     try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
       setCreatingWallet(true);
       await getOrCreateTradingWalletAddress();
       // Save age verification and risk warning acceptance
       await AsyncStorage.setItem(AGE_VERIFIED_KEY, 'true');
       await AsyncStorage.setItem(RISK_WARNING_ACCEPTED_KEY, 'true');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       // Wallet created, onboarding will complete via useEffect
     } catch (error) {
       console.error("Wallet create error:", error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       const friendly = getUserFriendlyAuthError(error, {
         title: "Wallet creation failed",
         message: "Could not create your wallet right now. Please try again.",
@@ -329,10 +345,18 @@ export function OnboardingScreen() {
   };
 
   const handleAgeConfirm = () => {
+    console.log('Age confirm pressed - triggering haptics');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      .then(() => console.log('Haptics success notification triggered'))
+      .catch((error) => console.log('Haptics error:', error));
     setAgeConfirmed(true);
   };
 
   const handleAgeDecline = () => {
+    console.log('Age decline pressed - triggering haptics');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
+      .then(() => console.log('Haptics warning notification triggered'))
+      .catch((error) => console.log('Haptics error:', error));
     Alert.alert(
       'Age Requirement',
       'You must be 18 years or older to use this app.',
@@ -342,6 +366,7 @@ export function OnboardingScreen() {
 
   const handleRiskAccept = () => {
     if (riskAgeConfirmed && riskUnderstood) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       // Both checkboxes confirmed, proceed to next step
       setCurrentStep("social");
     }
@@ -388,6 +413,26 @@ export function OnboardingScreen() {
 
           {currentStep === "age" && (
             <>
+              {/* HAPTICS TEST BUTTON - Remove after testing */}
+              <Pressable
+                style={{
+                  padding: 15,
+                  backgroundColor: '#ff0000',
+                  borderRadius: 10,
+                  marginBottom: 20,
+                }}
+                onPress={async () => {
+                  console.log('=== HAPTICS TEST BUTTON PRESSED ===');
+                  checkHapticsSupport();
+                  await testAllHaptics();
+                  Alert.alert('Haptics Test', 'Check console for results. Did you feel the vibrations?');
+                }}
+              >
+                <Text style={{ color: '#fff', fontWeight: 'bold', textAlign: 'center' }}>
+                  🔴 TEST HAPTICS (Check Console)
+                </Text>
+              </Pressable>
+
               <Text style={styles.ageTitle}>Age Verification</Text>
               <Text style={styles.ageWarning}>⚠️</Text>
               <Text style={styles.ageDescription}>
@@ -432,13 +477,19 @@ export function OnboardingScreen() {
                   </Text>
                 </View>
                 <View style={styles.checkboxContainer}>
-                  <Pressable style={styles.checkboxRow} onPress={() => setRiskAgeConfirmed(!riskAgeConfirmed)}>
+                  <Pressable style={styles.checkboxRow} onPress={() => {
+                    Haptics.selectionAsync().catch(() => undefined);
+                    setRiskAgeConfirmed(!riskAgeConfirmed);
+                  }}>
                     <View style={[styles.checkbox, riskAgeConfirmed && styles.checkboxChecked]}>
                       {riskAgeConfirmed && <Text style={styles.checkmark}>✓</Text>}
                     </View>
                     <Text style={styles.checkboxLabel}>I confirm that I am at least 18 years old</Text>
                   </Pressable>
-                  <Pressable style={styles.checkboxRow} onPress={() => setRiskUnderstood(!riskUnderstood)}>
+                  <Pressable style={styles.checkboxRow} onPress={() => {
+                    Haptics.selectionAsync().catch(() => undefined);
+                    setRiskUnderstood(!riskUnderstood);
+                  }}>
                     <View style={[styles.checkbox, riskUnderstood && styles.checkboxChecked]}>
                       {riskUnderstood && <Text style={styles.checkmark}>✓</Text>}
                     </View>
@@ -663,7 +714,6 @@ const styles = StyleSheet.create({
   checkmark:{color:"#fff",fontSize:14,fontWeight:"800"},
   checkboxLabel:{flex:1,fontSize:13,color:"#fff",lineHeight:18,fontWeight:"500"},
   riskButtonContainer:{paddingTop:8,width:"100%"},
-  buttonDisabled:{opacity:0.4},
   legalFooter:{flexDirection:"row",alignItems:"center",justifyContent:"center",paddingVertical:16,paddingHorizontal:24,flexWrap:"wrap",marginTop:32},
   legalFooterText:{color:"#888",fontSize:12,textAlign:"center"},
   legalFooterLink:{color:"#007AFF",fontSize:12,fontWeight:"600",textDecorationLine:"underline"},

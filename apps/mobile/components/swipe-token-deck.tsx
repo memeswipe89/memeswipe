@@ -1,7 +1,8 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Clipboard, Dimensions, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
+import { Audio } from 'expo-av';
 import { BlurView } from 'expo-blur';
 import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -463,6 +464,52 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   const buyFlash = useSharedValue(0);
   const buyBadge = useSharedValue(0);
 
+  // Sound effects - using simple audio feedback
+  const audioInitialized = useRef(false);
+
+  // Initialize audio mode
+  useEffect(() => {
+    const initAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+        });
+        audioInitialized.current = true;
+      } catch (error) {
+        console.log('Failed to initialize audio:', error);
+      }
+    };
+
+    initAudio();
+  }, []);
+
+  const playSwipeSound = useCallback(async (direction: 'left' | 'right' | 'up') => {
+    if (!audioInitialized.current) return;
+
+    try {
+      // Create a simple sound object with different volumes for different actions
+      // Using a minimal WAV data URI for a short beep
+      const volume = direction === 'right' ? 0.5 : direction === 'up' ? 0.4 : 0.3;
+      
+      // Create and play a short sound
+      const { sound } = await Audio.Sound.createAsync(
+        // Empty sound - we're relying on haptics for feedback
+        // In production, replace with actual sound files:
+        // require('../assets/sounds/swipe-right.mp3')
+        { uri: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=' },
+        { shouldPlay: true, volume },
+        (status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            sound.unloadAsync().catch(() => {});
+          }
+        }
+      );
+    } catch (error) {
+      // Silently fail - sound is not critical
+    }
+  }, []);
+
   useEffect(() => {
     translateX.value = 0;
     translateY.value = 0;
@@ -481,6 +528,9 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
     (direction: SwipeDirection) => {
       const token = currentToken;
       if (!token) return;
+
+      // Play sound for the swipe direction
+      playSwipeSound(direction).catch(() => {});
 
       if (direction === 'right') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
@@ -501,7 +551,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
       translateX.value = 0;
       translateY.value = 0;
     },
-    [buyBadge, buyFlash, currentToken, onBuy, onKeepFavorite, onReject, translateX, translateY]
+    [buyBadge, buyFlash, currentToken, onBuy, onKeepFavorite, onReject, playSwipeSound, translateX, translateY]
   );
 
   const panGesture = useMemo(

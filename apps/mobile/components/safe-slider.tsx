@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
+import * as Haptics from 'expo-haptics';
 
 type SafeSliderProps = {
   label: string;
@@ -21,6 +22,12 @@ export const SafeSlider = memo(function SafeSlider({
   step = 1,
   suffix = '',
 }: SafeSliderProps) {
+  const handleValueChange = (newValue: number) => {
+    // Trigger haptic feedback on value change
+    Haptics.selectionAsync().catch(() => undefined);
+    onChange(newValue);
+  };
+
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>
@@ -36,7 +43,7 @@ export const SafeSlider = memo(function SafeSlider({
         minimumTrackTintColor="#79a5ff"
         maximumTrackTintColor="#2a3244"
         thumbTintColor="#9bc2ff"
-        onValueChange={onChange}
+        onValueChange={handleValueChange}
       />
     </View>
   );

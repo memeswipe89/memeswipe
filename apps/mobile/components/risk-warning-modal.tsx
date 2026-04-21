@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal, View, Text, StyleSheet, Pressable, ScrollView, Dimensions } from 'react-native';
 import { BlurView } from 'expo-blur';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import * as Haptics from 'expo-haptics';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -19,13 +20,24 @@ export function RiskWarningModal({ visible, onAccept, onDecline }: RiskWarningMo
 
   const handleAccept = () => {
     if (canProceed) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       onAccept();
     }
   };
 
+  const handleDecline = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+    onDecline();
+  };
+
+  const handleCheckboxToggle = (setter: (value: boolean) => void, currentValue: boolean) => {
+    Haptics.selectionAsync().catch(() => undefined);
+    setter(!currentValue);
+  };
+
   return (
     <Modal visible={visible} transparent animationType="slide" statusBarTranslucent>
-      <Pressable style={styles.backdrop} onPress={onDecline}>
+      <Pressable style={styles.backdrop} onPress={handleDecline}>
         <BlurView intensity={40} tint="dark" style={styles.blurView} />
       </Pressable>
       
@@ -80,7 +92,7 @@ export function RiskWarningModal({ visible, onAccept, onDecline }: RiskWarningMo
             <View style={styles.checkboxSection}>
               <Pressable 
                 style={styles.checkboxRow} 
-                onPress={() => setAgeConfirmed(!ageConfirmed)}
+                onPress={() => handleCheckboxToggle(setAgeConfirmed, ageConfirmed)}
               >
                 <View style={[styles.checkbox, ageConfirmed && styles.checkboxChecked]}>
                   {ageConfirmed && <MaterialIcons name="check" size={16} color="#fff" />}
@@ -92,7 +104,7 @@ export function RiskWarningModal({ visible, onAccept, onDecline }: RiskWarningMo
 
               <Pressable 
                 style={styles.checkboxRow} 
-                onPress={() => setRiskUnderstood(!riskUnderstood)}
+                onPress={() => handleCheckboxToggle(setRiskUnderstood, riskUnderstood)}
               >
                 <View style={[styles.checkbox, riskUnderstood && styles.checkboxChecked]}>
                   {riskUnderstood && <MaterialIcons name="check" size={16} color="#fff" />}
@@ -108,7 +120,7 @@ export function RiskWarningModal({ visible, onAccept, onDecline }: RiskWarningMo
           <View style={styles.actions}>
             <Pressable 
               style={[styles.button, styles.declineButton]} 
-              onPress={onDecline}
+              onPress={handleDecline}
             >
               <Text style={styles.declineButtonText}>Decline</Text>
             </Pressable>

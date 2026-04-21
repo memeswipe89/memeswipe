@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 
 type ProfileButtonProps = {
   onPress: () => void;
@@ -9,10 +10,22 @@ type ProfileButtonProps = {
 };
 
 export const ProfileButton = memo(function ProfileButton({ onPress, onLongPress, disabled }: ProfileButtonProps) {
+  const handlePress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    onPress();
+  };
+
+  const handleLongPress = () => {
+    if (onLongPress) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+      onLongPress();
+    }
+  };
+
   return (
     <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
+      onPress={handlePress}
+      onLongPress={handleLongPress}
       disabled={disabled}
       android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
       style={({ pressed }) => [styles.pressable, pressed && styles.pressed]}

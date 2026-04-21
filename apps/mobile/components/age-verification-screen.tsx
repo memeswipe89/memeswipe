@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Dimensions, Alert } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'react-native';
 
@@ -17,6 +18,10 @@ export function AgeVerificationScreen({ onVerified }: AgeVerificationScreenProps
 
   const handleConfirm18Plus = async () => {
     try {
+      console.log('Confirm 18+ pressed - triggering haptics');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+        .then(() => console.log('Haptics success notification triggered'))
+        .catch((error) => console.log('Haptics error:', error));
       setIsLoading(true);
       await AsyncStorage.setItem(AGE_VERIFIED_KEY, 'true');
       // Small delay to ensure state updates
@@ -25,6 +30,9 @@ export function AgeVerificationScreen({ onVerified }: AgeVerificationScreenProps
       }, 100);
     } catch (error) {
       console.error('Error saving age verification:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
+        .then(() => console.log('Haptics error notification triggered'))
+        .catch((err) => console.log('Haptics error:', err));
       Alert.alert('Error', 'Could not save your preference. Please try again.');
     } finally {
       setIsLoading(false);
@@ -32,6 +40,10 @@ export function AgeVerificationScreen({ onVerified }: AgeVerificationScreenProps
   };
 
   const handleDecline = () => {
+    console.log('Decline pressed - triggering haptics');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
+      .then(() => console.log('Haptics warning notification triggered'))
+      .catch((error) => console.log('Haptics error:', error));
     Alert.alert(
       'Age Requirement',
       'You must be 18 years or older to use this app.',
