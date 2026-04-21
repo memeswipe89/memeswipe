@@ -10,8 +10,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
+import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useLinkEmail, usePrivy } from "@privy-io/expo";
@@ -73,14 +75,18 @@ function Avatar({ name, size = 80 }: { name: string; size?: number }) {
         width: size,
         height: size,
         borderRadius: size / 2,
-        backgroundColor: "#2a2a2a",
+        backgroundColor: "rgba(42, 42, 42, 0.6)",
         alignItems: "center",
         justifyContent: "center",
-        borderWidth: 2,
-        borderColor: "#3a3a3a",
+        borderWidth: 3,
+        borderColor: "rgba(255,255,255,0.1)",
+        shadowColor: "#000",
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 4 },
       }}
     >
-      <Text style={{ color: "#fff", fontSize: size * 0.35, fontWeight: "700" }}>
+      <Text style={{ color: "#fff", fontSize: size * 0.35, fontWeight: "800", letterSpacing: 1 }}>
         {initials || "?"}
       </Text>
     </View>
@@ -113,32 +119,36 @@ function MenuRow({
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
-        paddingVertical: 13,
-        paddingHorizontal: 16,
-        backgroundColor: pressed ? "#1e1e1e" : "transparent",
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        backgroundColor: pressed ? "rgba(255,255,255,0.05)" : "transparent",
         borderBottomWidth: last ? 0 : 0.5,
-        borderBottomColor: "#2a2a2a",
+        borderBottomColor: "rgba(255,255,255,0.06)",
       })}
     >
       <View
         style={{
-          width: 32,
-          height: 32,
-          borderRadius: 8,
+          width: 36,
+          height: 36,
+          borderRadius: 10,
           backgroundColor: iconBg,
           alignItems: "center",
           justifyContent: "center",
           marginRight: 14,
+          shadowColor: iconBg,
+          shadowOpacity: 0.4,
+          shadowRadius: 8,
+          shadowOffset: { width: 0, height: 2 },
         }}
       >
-        <Ionicons name={icon} size={17} color="#fff" />
+        <Ionicons name={icon} size={18} color="#fff" />
       </View>
-      <Text style={{ flex: 1, color: destructive ? "#ff453a" : "#fff", fontSize: 16 }}>
+      <Text style={{ flex: 1, color: destructive ? "#ff453a" : "#fff", fontSize: 16, fontWeight: "600" }}>
         {label}
       </Text>
       {rightElement ?? (
         value ? (
-          <Text style={{ color: "#8e8e93", fontSize: 15 }}>{value}</Text>
+          <Text style={{ color: "#8e8e93", fontSize: 14, fontWeight: "500" }}>{value}</Text>
         ) : null
       )}
     </Pressable>
@@ -150,10 +160,16 @@ function MenuSection({ children }: { children: React.ReactNode }) {
   return (
     <View
       style={{
-        backgroundColor: "#1c1c1e",
-        borderRadius: 12,
+        backgroundColor: "rgba(28, 28, 30, 0.7)",
+        borderRadius: 16,
         marginBottom: 16,
         overflow: "hidden",
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.08)",
+        shadowColor: "#000",
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
       }}
     >
       {children}
@@ -177,56 +193,100 @@ function WithdrawSheet({
   const [amount, setAmount] = useState("0.01");
   if (!visible) return null;
   return (
-    <View style={{ backgroundColor: "#1c1c1e", borderRadius: 16, padding: 16, marginBottom: 16 }}>
-      <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16, marginBottom: 12 }}>
+    <View style={{ 
+      backgroundColor: "rgba(28, 28, 30, 0.7)", 
+      borderRadius: 16, 
+      padding: 20, 
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: "rgba(255,255,255,0.08)",
+      shadowColor: "#000",
+      shadowOpacity: 0.2,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+    }}>
+      <Text style={{ color: "#fff", fontWeight: "800", fontSize: 17, marginBottom: 16, letterSpacing: 0.3 }}>
         Send SOL
       </Text>
       <TextInput
         value={toAddress}
         onChangeText={setToAddress}
         placeholder="Destination address"
-        placeholderTextColor="#555"
+        placeholderTextColor="rgba(255,255,255,0.3)"
         autoCapitalize="none"
         autoCorrect={false}
         style={{
-          backgroundColor: "#2c2c2e",
-          borderRadius: 10,
-          paddingHorizontal: 12,
-          paddingVertical: 10,
+          backgroundColor: "rgba(255,255,255,0.05)",
+          borderRadius: 12,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
           color: "#fff",
-          fontSize: 13,
-          marginBottom: 10,
+          fontSize: 14,
+          marginBottom: 12,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.1)",
+          fontWeight: "500",
         }}
       />
       <TextInput
         value={amount}
         onChangeText={setAmount}
         placeholder="Amount (SOL)"
-        placeholderTextColor="#555"
+        placeholderTextColor="rgba(255,255,255,0.3)"
         keyboardType="decimal-pad"
         style={{
-          backgroundColor: "#2c2c2e",
-          borderRadius: 10,
-          paddingHorizontal: 12,
-          paddingVertical: 10,
+          backgroundColor: "rgba(255,255,255,0.05)",
+          borderRadius: 12,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
           color: "#fff",
-          fontSize: 13,
-          marginBottom: 12,
+          fontSize: 14,
+          marginBottom: 16,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.1)",
+          fontWeight: "500",
         }}
       />
-      <View style={{ flexDirection: "row", gap: 10 }}>
+      <View style={{ flexDirection: "row", gap: 12 }}>
         <Pressable
           onPress={onClose}
-          style={{ flex: 1, backgroundColor: "#2c2c2e", borderRadius: 10, paddingVertical: 12, alignItems: "center" }}
+          style={{ 
+            flex: 1, 
+            backgroundColor: "rgba(255,255,255,0.08)", 
+            borderRadius: 12, 
+            paddingVertical: 14, 
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.1)",
+          }}
         >
-          <Text style={{ color: "#fff", fontWeight: "600" }}>Cancel</Text>
+          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>Cancel</Text>
         </Pressable>
         <Pressable
           onPress={() => onWithdraw(toAddress, amount)}
           disabled={withdrawing}
-          style={{ flex: 1, backgroundColor: "#0a84ff", borderRadius: 10, paddingVertical: 12, alignItems: "center", opacity: withdrawing ? 0.6 : 1 }}
+          style={{ 
+            flex: 1, 
+            borderRadius: 12, 
+            paddingVertical: 14, 
+            alignItems: "center", 
+            opacity: withdrawing ? 0.6 : 1,
+            overflow: "hidden",
+          }}
         >
-          <Text style={{ color: "#fff", fontWeight: "700" }}>{withdrawing ? "Sending…" : "Send"}</Text>
+          <LinearGradient
+            colors={["#0a84ff", "#0066cc"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: 0,
+              bottom: 0,
+            }}
+          />
+          <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{withdrawing ? "Sending…" : "Send"}</Text>
         </Pressable>
       </View>
     </View>
@@ -439,12 +499,12 @@ export default function WalletScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {/* ── Header: avatar + editable name ── */}
-        <View style={{ alignItems: "center", paddingVertical: 28 }}>
-          <Avatar name={profileName} size={88} />
+        <View style={{ alignItems: "center", paddingVertical: 24, paddingBottom: 20 }}>
+          <Avatar name={profileName} size={84} />
 
           {/* Editable name */}
           {editingName ? (
-            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 14, gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 16, gap: 10 }}>
               <TextInput
                 ref={nameInputRef}
                 value={nameInput}
@@ -455,33 +515,51 @@ export default function WalletScreen() {
                 style={{
                   color: "#fff",
                   fontSize: 22,
-                  fontWeight: "700",
-                  borderBottomWidth: 1.5,
+                  fontWeight: "800",
+                  borderBottomWidth: 2,
                   borderBottomColor: "#0a84ff",
-                  minWidth: 120,
+                  minWidth: 140,
                   textAlign: "center",
-                  paddingVertical: 2,
-                  paddingHorizontal: 4,
+                  paddingVertical: 4,
+                  paddingHorizontal: 8,
+                  letterSpacing: 0.5,
                 }}
               />
               <Pressable onPress={saveName} hitSlop={10}>
-                <Ionicons name="checkmark-circle" size={26} color="#0a84ff" />
+                <Ionicons name="checkmark-circle" size={28} color="#0a84ff" />
               </Pressable>
             </View>
           ) : (
             <Pressable
               onPress={() => { setEditingName(true); setTimeout(() => nameInputRef.current?.focus(), 50); }}
-              style={{ flexDirection: "row", alignItems: "center", marginTop: 14, gap: 6 }}
+              style={{ flexDirection: "row", alignItems: "center", marginTop: 16, gap: 8 }}
             >
-              <Text style={{ color: "#fff", fontSize: 24, fontWeight: "700" }}>{profileName}</Text>
-              <Ionicons name="pencil" size={15} color="#8e8e93" />
+              <Text style={{ color: "#fff", fontSize: 24, fontWeight: "800", letterSpacing: 0.3 }}>{profileName}</Text>
+              <View style={{
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                backgroundColor: "rgba(255,255,255,0.1)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}>
+                <Ionicons name="pencil" size={12} color="rgba(255,255,255,0.6)" />
+              </View>
             </Pressable>
           )}
 
           {twitterProfile?.username ? (
-            <Text style={{ color: "#8e8e93", fontSize: 14, marginTop: 4 }}>
-              @{twitterProfile.username}
-            </Text>
+            <View style={{
+              marginTop: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 4,
+              borderRadius: 12,
+              backgroundColor: "rgba(29, 161, 242, 0.15)",
+              borderWidth: 1,
+              borderColor: "rgba(29, 161, 242, 0.3)",
+            }}>
+              <Text style={{ color: "#1DA1F2", fontSize: 13, fontWeight: "600" }}>@{twitterProfile.username}</Text>
+            </View>
           ) : null}
         </View>
 
@@ -495,37 +573,58 @@ export default function WalletScreen() {
           <>
             {/* Balance card */}
             <MenuSection>
-              <View style={{ padding: 16 }}>
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                  {/* Solana logo + label */}
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-                    <SolanaIcon size={20} />
-                    <Text style={{ color: "#8e8e93", fontSize: 13 }}>SOL Balance</Text>
+              <View style={{ padding: 20 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <View style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      backgroundColor: "rgba(138, 99, 255, 0.15)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}>
+                      <SolanaIcon size={16} />
+                    </View>
+                    <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, fontWeight: "600", letterSpacing: 0.5 }}>SOL BALANCE</Text>
                   </View>
-                  {/* Refresh button inline with balance label */}
                   <Pressable
                     onPress={() => tradingWalletAddress && void loadBalance(tradingWalletAddress)}
                     hitSlop={10}
                     style={{
-                      width: 30,
-                      height: 30,
-                      borderRadius: 8,
+                      width: 32,
+                      height: 32,
+                      borderRadius: 10,
                       alignItems: "center",
                       justifyContent: "center",
-                      backgroundColor: "#2c2c2e",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.1)",
                     }}
                   >
                     {balanceLoading
                       ? <ActivityIndicator size="small" color="#8e8e93" />
-                      : <Ionicons name="refresh" size={15} color="#8e8e93" />
+                      : <Ionicons name="refresh" size={16} color="rgba(255,255,255,0.6)" />
                     }
                   </Pressable>
                 </View>
-                <Text style={{ color: "#fff", fontSize: 28, fontWeight: "700" }}>
-                  {solBalance === null ? "—" : formatSol(solBalance)}
+                <Text style={{ color: "#fff", fontSize: 32, fontWeight: "800", letterSpacing: -0.5, marginBottom: 4 }}>
+                  {solBalance === null ? "—" : `${solBalance.toFixed(4)}`}
+                </Text>
+                <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 15, fontWeight: "600" }}>
+                  {solBalance === null ? "SOL" : "SOL"}
                 </Text>
                 {usdValue ? (
-                  <Text style={{ color: "#8e8e93", fontSize: 14, marginTop: 2 }}>≈ ${usdValue} USD</Text>
+                  <View style={{
+                    marginTop: 12,
+                    paddingTop: 12,
+                    borderTopWidth: 1,
+                    borderTopColor: "rgba(255,255,255,0.08)",
+                  }}>
+                    <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, fontWeight: "600" }}>
+                      ≈ ${usdValue} USD
+                    </Text>
+                  </View>
                 ) : null}
               </View>
             </MenuSection>
@@ -588,79 +687,110 @@ export default function WalletScreen() {
                 iconBg="#2a2a1a"
                 label="Terms & Conditions"
                 onPress={() => router.push("/terms")}
-                rightElement={<Ionicons name="chevron-forward" size={18} color="#3a3a3a" />}
+                rightElement={<Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />}
                 last
               />
             </MenuSection>
 
             {/* Contact Us */}
             <MenuSection>
-              <View style={{ padding: 16 }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                  <MaterialIcons name="contact-support" size={24} color="#4ade80" />
-                  <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>Contact Us</Text>
+              <View style={{ padding: 20 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <View style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    backgroundColor: "rgba(74, 222, 128, 0.2)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    shadowColor: "#4ade80",
+                    shadowOpacity: 0.3,
+                    shadowRadius: 8,
+                    shadowOffset: { width: 0, height: 2 },
+                  }}>
+                    <MaterialIcons name="contact-support" size={20} color="#4ade80" />
+                  </View>
+                  <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800", letterSpacing: 0.3 }}>Contact Us</Text>
                 </View>
-                <Text style={{ color: "#8e8e93", fontSize: 14, marginBottom: 16, lineHeight: 20 }}>
+                <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, marginBottom: 18, lineHeight: 20, fontWeight: "500" }}>
                   Need help or have questions? Reach out to us!
                 </Text>
                 
                 {/* Email */}
                 <Pressable
-                  onPress={() => openExternalLink('mailto:memeswipe89@gmail.com')}
-                  style={{
+                  onPress={() => {
+                    openExternalLink('mailto:memeswipe89@gmail.com');
+                    Haptics.selectionAsync().catch(() => undefined);
+                  }}
+                  style={({ pressed }) => ({
                     flexDirection: "row",
                     alignItems: "center",
-                    backgroundColor: "#2c2c2e",
-                    borderRadius: 10,
-                    padding: 12,
-                    marginBottom: 10,
-                  }}
+                    backgroundColor: pressed ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
+                    borderRadius: 12,
+                    padding: 14,
+                    marginBottom: 12,
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.08)",
+                  })}
                 >
                   <View style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 10,
                     backgroundColor: "rgba(74,222,128,0.15)",
                     justifyContent: "center",
                     alignItems: "center",
-                    marginRight: 12,
+                    marginRight: 14,
+                    shadowColor: "#4ade80",
+                    shadowOpacity: 0.3,
+                    shadowRadius: 6,
+                    shadowOffset: { width: 0, height: 2 },
                   }}>
                     <MaterialIcons name="email" size={20} color="#4ade80" />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={{ color: "#8e8e93", fontSize: 12, marginBottom: 2 }}>Email</Text>
-                    <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>memeswipe89@gmail.com</Text>
+                    <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginBottom: 3, fontWeight: "600", letterSpacing: 0.3 }}>Email</Text>
+                    <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>memeswipe89@gmail.com</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={18} color="#3a3a3a" />
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
                 </Pressable>
 
                 {/* Twitter */}
                 <Pressable
-                  onPress={() => openExternalLink('https://twitter.com/swipeitXYZ')}
-                  style={{
+                  onPress={() => {
+                    openExternalLink('https://twitter.com/swipeitXYZ');
+                    Haptics.selectionAsync().catch(() => undefined);
+                  }}
+                  style={({ pressed }) => ({
                     flexDirection: "row",
                     alignItems: "center",
-                    backgroundColor: "#2c2c2e",
-                    borderRadius: 10,
-                    padding: 12,
-                  }}
+                    backgroundColor: pressed ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
+                    borderRadius: 12,
+                    padding: 14,
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.08)",
+                  })}
                 >
                   <View style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 10,
                     backgroundColor: "rgba(29,161,242,0.15)",
                     justifyContent: "center",
                     alignItems: "center",
-                    marginRight: 12,
+                    marginRight: 14,
+                    shadowColor: "#1DA1F2",
+                    shadowOpacity: 0.3,
+                    shadowRadius: 6,
+                    shadowOffset: { width: 0, height: 2 },
                   }}>
                     <FontAwesome name="twitter" size={20} color="#1DA1F2" />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={{ color: "#8e8e93", fontSize: 12, marginBottom: 2 }}>Twitter</Text>
-                    <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>@swipeitXYZ</Text>
+                    <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginBottom: 3, fontWeight: "600", letterSpacing: 0.3 }}>Twitter</Text>
+                    <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>@swipeitXYZ</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={18} color="#3a3a3a" />
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
                 </Pressable>
               </View>
             </MenuSection>
@@ -696,34 +826,55 @@ export default function WalletScreen() {
               </MenuSection>
             ) : (
               <MenuSection>
-                <View style={{ padding: 16 }}>
-                  <Text style={{ color: "#8e8e93", fontSize: 13, marginBottom: 10 }}>
+                <View style={{ padding: 20 }}>
+                  <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, marginBottom: 14, fontWeight: "600", letterSpacing: 0.3 }}>
                     Link your email to create a wallet
                   </Text>
                   <TextInput
                     value={emailInput}
                     onChangeText={setEmailInput}
                     placeholder="Email address"
-                    placeholderTextColor="#555"
+                    placeholderTextColor="rgba(255,255,255,0.3)"
                     autoCapitalize="none"
                     autoCorrect={false}
                     keyboardType="email-address"
                     style={{
-                      backgroundColor: "#2c2c2e",
-                      borderRadius: 10,
-                      paddingHorizontal: 12,
-                      paddingVertical: 10,
+                      backgroundColor: "rgba(255,255,255,0.05)",
+                      borderRadius: 12,
+                      paddingHorizontal: 14,
+                      paddingVertical: 12,
                       color: "#fff",
                       fontSize: 14,
-                      marginBottom: 10,
+                      marginBottom: 12,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.1)",
+                      fontWeight: "500",
                     }}
                   />
                   <Pressable
                     onPress={handleSendCode}
                     disabled={sendingCode}
-                    style={{ backgroundColor: "#0a84ff", borderRadius: 10, paddingVertical: 12, alignItems: "center", opacity: sendingCode ? 0.6 : 1 }}
+                    style={{ 
+                      borderRadius: 12, 
+                      paddingVertical: 14, 
+                      alignItems: "center", 
+                      opacity: sendingCode ? 0.6 : 1,
+                      overflow: "hidden",
+                    }}
                   >
-                    <Text style={{ color: "#fff", fontWeight: "700" }}>{sendingCode ? "Sending…" : "Send Code"}</Text>
+                    <LinearGradient
+                      colors={["#0a84ff", "#0066cc"]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                      }}
+                    />
+                    <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{sendingCode ? "Sending…" : "Send Code"}</Text>
                   </Pressable>
                   {codeSent ? (
                     <>
@@ -731,25 +882,46 @@ export default function WalletScreen() {
                         value={codeInput}
                         onChangeText={setCodeInput}
                         placeholder="Verification code"
-                        placeholderTextColor="#555"
+                        placeholderTextColor="rgba(255,255,255,0.3)"
                         keyboardType="number-pad"
                         style={{
-                          backgroundColor: "#2c2c2e",
-                          borderRadius: 10,
-                          paddingHorizontal: 12,
-                          paddingVertical: 10,
+                          backgroundColor: "rgba(255,255,255,0.05)",
+                          borderRadius: 12,
+                          paddingHorizontal: 14,
+                          paddingVertical: 12,
                           color: "#fff",
                           fontSize: 14,
-                          marginTop: 10,
-                          marginBottom: 10,
+                          marginTop: 12,
+                          marginBottom: 12,
+                          borderWidth: 1,
+                          borderColor: "rgba(255,255,255,0.1)",
+                          fontWeight: "500",
                         }}
                       />
                       <Pressable
                         onPress={handleVerifyCode}
                         disabled={verifyingCode}
-                        style={{ backgroundColor: "#30d158", borderRadius: 10, paddingVertical: 12, alignItems: "center", opacity: verifyingCode ? 0.6 : 1 }}
+                        style={{ 
+                          borderRadius: 12, 
+                          paddingVertical: 14, 
+                          alignItems: "center", 
+                          opacity: verifyingCode ? 0.6 : 1,
+                          overflow: "hidden",
+                        }}
                       >
-                        <Text style={{ color: "#fff", fontWeight: "700" }}>{verifyingCode ? "Verifying…" : "Verify & Connect"}</Text>
+                        <LinearGradient
+                          colors={["#30d158", "#28a745"]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                          }}
+                        />
+                        <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{verifyingCode ? "Verifying…" : "Verify & Connect"}</Text>
                       </Pressable>
                     </>
                   ) : null}

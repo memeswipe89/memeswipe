@@ -38,11 +38,9 @@ import * as Linking from 'expo-linking';
 import { LinearGradient } from 'expo-linear-gradient';
 import { openExternalLinkSilent } from '@/lib/external-link-warning';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
 import { useLinkEmail, usePrivy } from '@privy-io/expo';
 import { Ionicons } from '@expo/vector-icons';
 
-import { useAuth } from '@/contexts/auth-context';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { getUserFriendlyAuthError } from '@/lib/user-friendly-errors';
@@ -53,15 +51,6 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.88);
 const DRAG_CLOSE_THRESHOLD = 100;
 const MAINNET_RPC_URL = 'https://api.mainnet-beta.solana.com';
-
-const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
-const FAVORITES_KEY = '@memeswipe:favorites:v1';
-const HIDDEN_TOKENS_KEY = '@memeswipe:hidden-tokens:v1';
-const LAST_AMOUNT_KEY = '@memeswipe:lastAmount';
-const LAST_ROI_KEY = '@memeswipe:lastROI';
-const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
-const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
-const TRADE_SETTINGS_KEY = '@memeswipe:trade-settings:v1';
 
 const getSolBalance = async (address: string): Promise<number> => {
   const res = await fetch(MAINNET_RPC_URL, {
@@ -260,9 +249,7 @@ function SendForm({
 
 // ─── Sheet content ────────────────────────────────────────────────────────────
 function WalletContent({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
   const { twitterProfile, setTwitterProfile, tradingWalletAddress, walletLoading, walletError, getOrCreateTradingWalletAddress, withdrawFromTradingWallet } = useWalletContext();
-  const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
   const { sendCode, linkWithCode } = useLinkEmail();
   const { profileName, setProfileName, showDisclaimer, setShowDisclaimer, hapticsEnabled, setHapticsEnabled } = useTradeSettings();
@@ -272,7 +259,6 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [sendVisible, setSendVisible] = useState(false);
   const [sending, setSending] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(profileName);
   const nameInputRef = useRef<TextInput>(null);
@@ -360,26 +346,6 @@ function WalletContent({ onClose }: { onClose: () => void }) {
     finally { setSending(false); }
   };
 
-  const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out', style: 'destructive',
-        onPress: () => void (async () => {
-          try {
-            setLoggingOut(true);
-            setTwitterProfile(null);
-            await AsyncStorage.multiRemove([TWITTER_PROFILE_CACHE_KEY, FAVORITES_KEY, HIDDEN_TOKENS_KEY, LAST_AMOUNT_KEY, LAST_ROI_KEY, BONUS_2000_APPLIED_KEY, LOCAL_USER_ID_KEY, TRADE_SETTINGS_KEY]);
-            await logout();
-            onClose();
-            router.replace('/(tabs)');
-          } catch (e: any) { Alert.alert('Sign Out', e?.message || 'Failed to sign out.'); }
-          finally { setLoggingOut(false); }
-        })(),
-      },
-    ]);
-  };
-
   const handleSendCode = useCallback(async () => {
     const email = emailInput.trim();
     if (!email) { Alert.alert('Email required', 'Enter a valid email address.'); return; }
@@ -411,12 +377,6 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   const usdValue = solBalance !== null && solPriceUsd !== null && solPriceUsd > 0
     ? (solBalance * solPriceUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : null;
-  const linkedEmail = (() => {
-    if (!privyUser) return null;
-    const accounts: any[] = (privyUser as any)?.linked_accounts ?? (privyUser as any)?.linkedAccounts ?? [];
-    const ea = accounts.find((a: any) => a?.type === 'email');
-    return ea?.address ?? ea?.email ?? null;
-  })();
 
   return (
     <ScrollView
@@ -556,12 +516,6 @@ function WalletContent({ onClose }: { onClose: () => void }) {
 
           <SendForm visible={sendVisible} onClose={() => setSendVisible(false)} onSend={handleSend} sending={sending} />
 
-          {/* Account */}
-          <MenuSection>
-            <MenuRow icon="logo-twitter" iconBg="#1a2a3a" label="X / Twitter" value={twitterProfile?.username ? `@${twitterProfile.username}` : 'Not connected'} onPress={() => {}} />
-            <MenuRow icon="mail-outline" iconBg="#2a1a3a" label="Email" value={linkedEmail ?? 'Not linked'} onPress={() => {}} last />
-          </MenuSection>
-
           {/* Settings */}
           <MenuSection>
             <Pressable
@@ -658,18 +612,6 @@ function WalletContent({ onClose }: { onClose: () => void }) {
                 }} />
               </View>
             </Pressable>
-          </MenuSection>
-
-          {/* T&C + Sign out */}
-          <MenuSection>
-            <MenuRow
-              icon="document-text-outline"
-              iconBg="#2a2a1a"
-              label="Terms & Conditions"
-              showChevron
-              onPress={() => { router.push('/terms'); }}
-            />
-            <MenuRow icon="log-out-outline" iconBg="#3a1a1a" label={loggingOut ? 'Signing out…' : 'Sign Out'} onPress={handleLogout} destructive last />
           </MenuSection>
         </>
       ) : (
