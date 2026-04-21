@@ -33,7 +33,9 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
+import { LinearGradient } from 'expo-linear-gradient';
 import { openExternalLinkSilent } from '@/lib/external-link-warning';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
@@ -82,10 +84,16 @@ function Avatar({ name, size = 72 }: { name: string; size?: number }) {
   return (
     <View style={{
       width: size, height: size, borderRadius: size / 2,
-      backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center',
-      borderWidth: 2, borderColor: '#3a3a3a',
+      backgroundColor: 'rgba(42, 42, 42, 0.6)', 
+      alignItems: 'center', justifyContent: 'center',
+      borderWidth: 3, 
+      borderColor: 'rgba(255,255,255,0.1)',
+      shadowColor: '#000',
+      shadowOpacity: 0.3,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
     }}>
-      <Text style={{ color: '#fff', fontSize: size * 0.35, fontWeight: '700' }}>{initials || '?'}</Text>
+      <Text style={{ color: '#fff', fontSize: size * 0.35, fontWeight: '800', letterSpacing: 1 }}>{initials || '?'}</Text>
     </View>
   );
 }
@@ -108,20 +116,25 @@ function MenuRow({
       onPress={onPress}
       style={({ pressed }) => ({
         flexDirection: 'row', alignItems: 'center',
-        paddingVertical: 13, paddingHorizontal: 16,
-        backgroundColor: pressed ? '#1e1e1e' : 'transparent',
-        borderBottomWidth: last ? 0 : 0.5, borderBottomColor: '#2a2a2a',
+        paddingVertical: 14, paddingHorizontal: 18,
+        backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
+        borderBottomWidth: last ? 0 : 0.5, 
+        borderBottomColor: 'rgba(255,255,255,0.06)',
       })}
     >
       <View style={{
-        width: 32, height: 32, borderRadius: 8, backgroundColor: iconBg,
+        width: 36, height: 36, borderRadius: 10, backgroundColor: iconBg,
         alignItems: 'center', justifyContent: 'center', marginRight: 14,
+        shadowColor: iconBg,
+        shadowOpacity: 0.4,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 2 },
       }}>
-        <Ionicons name={icon} size={17} color="#fff" />
+        <Ionicons name={icon} size={18} color="#fff" />
       </View>
-      <Text style={{ flex: 1, color: destructive ? '#ff453a' : '#fff', fontSize: 16 }}>{label}</Text>
-      {value ? <Text style={{ color: '#8e8e93', fontSize: 14, marginRight: showChevron ? 4 : 0 }}>{value}</Text> : null}
-      {showChevron ? <Ionicons name="chevron-forward" size={16} color="#3a3a3a" /> : null}
+      <Text style={{ flex: 1, color: destructive ? '#ff453a' : '#fff', fontSize: 16, fontWeight: '600' }}>{label}</Text>
+      {value ? <Text style={{ color: '#8e8e93', fontSize: 14, marginRight: showChevron ? 6 : 0, fontWeight: '500' }}>{value}</Text> : null}
+      {showChevron ? <Ionicons name="chevron-forward" size={18} color='rgba(255,255,255,0.3)' /> : null}
     </Pressable>
   );
 }
@@ -129,7 +142,18 @@ function MenuRow({
 // ─── Section card ─────────────────────────────────────────────────────────────
 function MenuSection({ children }: { children: React.ReactNode }) {
   return (
-    <View style={{ backgroundColor: '#1c1c1e', borderRadius: 12, marginBottom: 14, overflow: 'hidden' }}>
+    <View style={{ 
+      backgroundColor: 'rgba(28, 28, 30, 0.7)', 
+      borderRadius: 16, 
+      marginBottom: 16, 
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.08)',
+      shadowColor: '#000',
+      shadowOpacity: 0.2,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+    }}>
       {children}
     </View>
   );
@@ -148,26 +172,86 @@ function SendForm({
   const [amt, setAmt] = useState('0.01');
   if (!visible) return null;
   return (
-    <View style={{ backgroundColor: '#1c1c1e', borderRadius: 14, padding: 16, marginBottom: 14 }}>
-      <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15, marginBottom: 12 }}>Send SOL</Text>
+    <View style={{ 
+      backgroundColor: 'rgba(28, 28, 30, 0.7)', 
+      borderRadius: 16, 
+      padding: 20, 
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.08)',
+      shadowColor: '#000',
+      shadowOpacity: 0.2,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+    }}>
+      <Text style={{ color: '#fff', fontWeight: '800', fontSize: 17, marginBottom: 16, letterSpacing: 0.3 }}>Send SOL</Text>
       <TextInput
         value={addr} onChangeText={setAddr}
-        placeholder="Destination address" placeholderTextColor="#555"
+        placeholder="Destination address" placeholderTextColor="rgba(255,255,255,0.3)"
         autoCapitalize="none" autoCorrect={false}
-        style={{ backgroundColor: '#2c2c2e', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: '#fff', fontSize: 13, marginBottom: 10 }}
+        style={{ 
+          backgroundColor: 'rgba(255,255,255,0.05)', 
+          borderRadius: 12, 
+          paddingHorizontal: 14, 
+          paddingVertical: 12, 
+          color: '#fff', 
+          fontSize: 14, 
+          marginBottom: 12,
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.1)',
+          fontWeight: '500',
+        }}
       />
       <TextInput
         value={amt} onChangeText={setAmt}
-        placeholder="Amount (SOL)" placeholderTextColor="#555" keyboardType="decimal-pad"
-        style={{ backgroundColor: '#2c2c2e', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: '#fff', fontSize: 13, marginBottom: 12 }}
+        placeholder="Amount (SOL)" placeholderTextColor="rgba(255,255,255,0.3)" keyboardType="decimal-pad"
+        style={{ 
+          backgroundColor: 'rgba(255,255,255,0.05)', 
+          borderRadius: 12, 
+          paddingHorizontal: 14, 
+          paddingVertical: 12, 
+          color: '#fff', 
+          fontSize: 14, 
+          marginBottom: 16,
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.1)',
+          fontWeight: '500',
+        }}
       />
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#2c2c2e', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}>
-          <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <Pressable onPress={onClose} style={{ 
+          flex: 1, 
+          backgroundColor: 'rgba(255,255,255,0.08)', 
+          borderRadius: 12, 
+          paddingVertical: 14, 
+          alignItems: 'center',
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.1)',
+        }}>
+          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Cancel</Text>
         </Pressable>
         <Pressable onPress={() => onSend(addr, amt)} disabled={sending}
-          style={{ flex: 1, backgroundColor: '#0a84ff', borderRadius: 10, paddingVertical: 12, alignItems: 'center', opacity: sending ? 0.6 : 1 }}>
-          <Text style={{ color: '#fff', fontWeight: '700' }}>{sending ? 'Sending…' : 'Send'}</Text>
+          style={{ 
+            flex: 1, 
+            borderRadius: 12, 
+            paddingVertical: 14, 
+            alignItems: 'center', 
+            opacity: sending ? 0.6 : 1,
+            overflow: 'hidden',
+          }}>
+          <LinearGradient
+            colors={['#0a84ff', '#0066cc']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: 0,
+              bottom: 0,
+            }}
+          />
+          <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>{sending ? 'Sending…' : 'Send'}</Text>
         </Pressable>
       </View>
     </View>
@@ -181,7 +265,7 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
   const { sendCode, linkWithCode } = useLinkEmail();
-  const { profileName, setProfileName, showDisclaimer, setShowDisclaimer } = useTradeSettings();
+  const { profileName, setProfileName, showDisclaimer, setShowDisclaimer, hapticsEnabled, setHapticsEnabled } = useTradeSettings();
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
@@ -337,35 +421,65 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   return (
     <ScrollView
       ref={scrollRef}
-      contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40, paddingTop: 4 }}
+      contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: 40, paddingTop: 8 }}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
       {/* Avatar + editable name */}
-      <View style={{ alignItems: 'center', paddingVertical: 20 }}>
-        <Avatar name={profileName} size={76} />
+      <View style={{ alignItems: 'center', paddingVertical: 24, paddingBottom: 20 }}>
+        <Avatar name={profileName} size={84} />
         {editingName ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, gap: 10 }}>
             <TextInput
               ref={nameInputRef} value={nameInput} onChangeText={setNameInput}
               onSubmitEditing={saveName} autoFocus returnKeyType="done"
-              style={{ color: '#fff', fontSize: 20, fontWeight: '700', borderBottomWidth: 1.5, borderBottomColor: '#0a84ff', minWidth: 120, textAlign: 'center', paddingVertical: 2, paddingHorizontal: 4 }}
+              style={{ 
+                color: '#fff', 
+                fontSize: 22, 
+                fontWeight: '800', 
+                borderBottomWidth: 2, 
+                borderBottomColor: '#0a84ff', 
+                minWidth: 140, 
+                textAlign: 'center', 
+                paddingVertical: 4, 
+                paddingHorizontal: 8,
+                letterSpacing: 0.5,
+              }}
             />
             <Pressable onPress={saveName} hitSlop={10}>
-              <Ionicons name="checkmark-circle" size={24} color="#0a84ff" />
+              <Ionicons name="checkmark-circle" size={28} color="#0a84ff" />
             </Pressable>
           </View>
         ) : (
           <Pressable
             onPress={() => { setEditingName(true); setTimeout(() => nameInputRef.current?.focus(), 50); }}
-            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 6 }}
+            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, gap: 8 }}
           >
-            <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700' }}>{profileName}</Text>
-            <Ionicons name="pencil" size={14} color="#8e8e93" />
+            <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', letterSpacing: 0.3 }}>{profileName}</Text>
+            <View style={{
+              width: 24,
+              height: 24,
+              borderRadius: 12,
+              backgroundColor: 'rgba(255,255,255,0.1)',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <Ionicons name="pencil" size={12} color="rgba(255,255,255,0.6)" />
+            </View>
           </Pressable>
         )}
         {twitterProfile?.username ? (
-          <Text style={{ color: '#8e8e93', fontSize: 13, marginTop: 3 }}>@{twitterProfile.username}</Text>
+          <View style={{
+            marginTop: 8,
+            paddingHorizontal: 12,
+            paddingVertical: 4,
+            borderRadius: 12,
+            backgroundColor: 'rgba(29, 161, 242, 0.15)',
+            borderWidth: 1,
+            borderColor: 'rgba(29, 161, 242, 0.3)',
+          }}>
+            <Text style={{ color: '#1DA1F2', fontSize: 13, fontWeight: '600' }}>@{twitterProfile.username}</Text>
+          </View>
         ) : null}
       </View>
 
@@ -378,26 +492,58 @@ function WalletContent({ onClose }: { onClose: () => void }) {
         <>
           {/* Balance */}
           <MenuSection>
-            <View style={{ padding: 16 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-                  <SolanaIcon size={18} />
-                  <Text style={{ color: '#8e8e93', fontSize: 13 }}>SOL Balance</Text>
+            <View style={{ padding: 20 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: 'rgba(138, 99, 255, 0.15)',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    <SolanaIcon size={16} />
+                  </View>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontWeight: '600', letterSpacing: 0.5 }}>SOL BALANCE</Text>
                 </View>
                 <Pressable
                   onPress={() => tradingWalletAddress && void loadBalance(tradingWalletAddress)}
                   hitSlop={10}
-                  style={{ width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2c2c2e' }}
+                  style={{ 
+                    width: 32, 
+                    height: 32, 
+                    borderRadius: 10, 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    backgroundColor: 'rgba(255,255,255,0.08)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(255,255,255,0.1)',
+                  }}
                 >
                   {balanceLoading
                     ? <ActivityIndicator size="small" color="#8e8e93" />
-                    : <Ionicons name="refresh" size={14} color="#8e8e93" />}
+                    : <Ionicons name="refresh" size={16} color="rgba(255,255,255,0.6)" />}
                 </Pressable>
               </View>
-              <Text style={{ color: '#fff', fontSize: 26, fontWeight: '700' }}>
-                {solBalance === null ? '—' : `${solBalance.toFixed(4)} SOL`}
+              <Text style={{ color: '#fff', fontSize: 32, fontWeight: '800', letterSpacing: -0.5, marginBottom: 4 }}>
+                {solBalance === null ? '—' : `${solBalance.toFixed(4)}`}
               </Text>
-              {usdValue ? <Text style={{ color: '#8e8e93', fontSize: 13, marginTop: 2 }}>≈ ${usdValue} USD</Text> : null}
+              <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 15, fontWeight: '600' }}>
+                {solBalance === null ? 'SOL' : 'SOL'}
+              </Text>
+              {usdValue ? (
+                <View style={{ 
+                  marginTop: 12, 
+                  paddingTop: 12, 
+                  borderTopWidth: 1, 
+                  borderTopColor: 'rgba(255,255,255,0.08)' 
+                }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '600' }}>
+                    ≈ ${usdValue} USD
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </MenuSection>
 
@@ -419,32 +565,96 @@ function WalletContent({ onClose }: { onClose: () => void }) {
           {/* Settings */}
           <MenuSection>
             <Pressable
-              onPress={() => setShowDisclaimer(!showDisclaimer)}
+              onPress={() => {
+                const newValue = !showDisclaimer;
+                setShowDisclaimer(newValue);
+                if (hapticsEnabled) {
+                  Haptics.selectionAsync().catch(() => undefined);
+                }
+              }}
               style={({ pressed }) => ({
                 flexDirection: 'row', alignItems: 'center',
-                paddingVertical: 13, paddingHorizontal: 16,
-                backgroundColor: pressed ? '#1e1e1e' : 'transparent',
+                paddingVertical: 14, paddingHorizontal: 18,
+                backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
+                borderBottomWidth: 0.5,
+                borderBottomColor: 'rgba(255,255,255,0.06)',
               })}
             >
               <View style={{
-                width: 32, height: 32, borderRadius: 8, backgroundColor: '#2a2a3a',
+                width: 36, height: 36, borderRadius: 10, 
+                backgroundColor: 'rgba(10, 132, 255, 0.2)',
                 alignItems: 'center', justifyContent: 'center', marginRight: 14,
+                shadowColor: '#0a84ff',
+                shadowOpacity: 0.3,
+                shadowRadius: 8,
+                shadowOffset: { width: 0, height: 2 },
               }}>
-                <Ionicons name="information-circle-outline" size={17} color="#fff" />
+                <Ionicons name="information-circle-outline" size={18} color="#0a84ff" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ color: '#fff', fontSize: 16 }}>Show Disclaimer</Text>
-                <Text style={{ color: '#8e8e93', fontSize: 12, marginTop: 2 }}>Display risk warning on main screen</Text>
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>Show Disclaimer</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 2, fontWeight: '500' }}>Display risk warning on main screen</Text>
               </View>
               <View style={{
-                width: 48, height: 28, borderRadius: 14,
-                backgroundColor: showDisclaimer ? '#30d158' : 'rgba(255,255,255,0.15)',
+                width: 51, height: 31, borderRadius: 16,
+                backgroundColor: showDisclaimer ? '#30d158' : 'rgba(120, 120, 128, 0.32)',
                 padding: 2, justifyContent: 'center',
+                shadowColor: showDisclaimer ? '#30d158' : '#000',
+                shadowOpacity: showDisclaimer ? 0.4 : 0.2,
+                shadowRadius: 4,
+                shadowOffset: { width: 0, height: 2 },
               }}>
                 <View style={{
-                  width: 24, height: 24, borderRadius: 12, backgroundColor: '#fff',
+                  width: 27, height: 27, borderRadius: 14, backgroundColor: '#fff',
                   transform: [{ translateX: showDisclaimer ? 20 : 0 }],
-                  shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 },
+                  shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 2 },
+                }} />
+              </View>
+            </Pressable>
+
+            <Pressable
+              onPress={() => {
+                const newValue = !hapticsEnabled;
+                setHapticsEnabled(newValue);
+                // Give immediate feedback when enabling
+                if (newValue) {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+                }
+              }}
+              style={({ pressed }) => ({
+                flexDirection: 'row', alignItems: 'center',
+                paddingVertical: 14, paddingHorizontal: 18,
+                backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
+              })}
+            >
+              <View style={{
+                width: 36, height: 36, borderRadius: 10, 
+                backgroundColor: 'rgba(48, 209, 88, 0.2)',
+                alignItems: 'center', justifyContent: 'center', marginRight: 14,
+                shadowColor: '#30d158',
+                shadowOpacity: 0.3,
+                shadowRadius: 8,
+                shadowOffset: { width: 0, height: 2 },
+              }}>
+                <Ionicons name="phone-portrait-outline" size={18} color="#30d158" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>Haptic Feedback</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 2, fontWeight: '500' }}>Vibration feedback for interactions</Text>
+              </View>
+              <View style={{
+                width: 51, height: 31, borderRadius: 16,
+                backgroundColor: hapticsEnabled ? '#30d158' : 'rgba(120, 120, 128, 0.32)',
+                padding: 2, justifyContent: 'center',
+                shadowColor: hapticsEnabled ? '#30d158' : '#000',
+                shadowOpacity: hapticsEnabled ? 0.4 : 0.2,
+                shadowRadius: 4,
+                shadowOffset: { width: 0, height: 2 },
+              }}>
+                <View style={{
+                  width: 27, height: 27, borderRadius: 14, backgroundColor: '#fff',
+                  transform: [{ translateX: hapticsEnabled ? 20 : 0 }],
+                  shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 2 },
                 }} />
               </View>
             </Pressable>
@@ -593,29 +803,55 @@ const styles = StyleSheet.create({
   sheet: {
     width: '100%',
     height: SHEET_HEIGHT,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    backgroundColor: 'rgba(15, 15, 15, 0.78)',
-    borderTopWidth: 0.5,
-    borderColor: '#2a2a2a',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    backgroundColor: 'rgba(10, 10, 12, 0.95)',
+    borderTopWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    shadowColor: '#000',
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: -10 },
   },
-  handleWrap: { alignItems: 'center', paddingTop: 10, paddingBottom: 4 },
-  handle: { width: 36, height: 4, borderRadius: 4, backgroundColor: '#444' },
+  handleWrap: { alignItems: 'center', paddingTop: 12, paddingBottom: 8 },
+  handle: { 
+    width: 40, 
+    height: 5, 
+    borderRadius: 3, 
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    shadowColor: '#fff',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#1c1c1e',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
-  headerTitle: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  headerTitle: { 
+    color: '#fff', 
+    fontSize: 20, 
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
   closeBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(10, 132, 255, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(10, 132, 255, 0.3)',
   },
-  closeBtnText: { color: '#0a84ff', fontWeight: '600', fontSize: 14 },
+  closeBtnText: { 
+    color: '#0a84ff', 
+    fontWeight: '700', 
+    fontSize: 15,
+    letterSpacing: 0.3,
+  },
 });
