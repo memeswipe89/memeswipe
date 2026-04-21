@@ -12,7 +12,9 @@ import {
   Alert,
   Dimensions,
   Keyboard,
+  Modal,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -40,6 +42,7 @@ import { openExternalLinkSilent } from '@/lib/external-link-warning';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLinkEmail, usePrivy } from '@privy-io/expo';
 import { Ionicons } from '@expo/vector-icons';
+import QRCode from 'react-native-qrcode-svg';
 
 import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
@@ -66,6 +69,126 @@ const truncateMiddle = (value: string, keep = 5) => {
   if (value.length <= keep * 2 + 3) return value;
   return `${value.slice(0, keep)}...${value.slice(-keep)}`;
 };
+
+// ─── Toast notification ───────────────────────────────────────────────────────
+function Toast({ message, visible, onHide }: { message: string; visible: boolean; onHide: () => void }) {
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (visible) {
+      opacity.value = withTiming(1, { duration: 200 });
+      const timer = setTimeout(() => {
+        opacity.value = withTiming(0, { duration: 200 }, (finished) => {
+          if (finished) runOnJS(onHide)();
+        });
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [visible, opacity, onHide]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: interpolate(opacity.value, [0, 1], [-20, 0]) }],
+  }));
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View style={[{
+      position: 'absolute',
+      top: 60,
+      left: 20,
+      right: 20,
+      zIndex: 1000,
+    }, animatedStyle]}>
+      <View style={{
+        backgroundColor: 'rgba(48, 209, 88, 0.95)',
+        borderRadius: 12,
+        padding: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+      }}>
+        <Ionicons name="checkmark-circle" size={24} color="#fff" />
+        <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700', flex: 1 }}>{message}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── QR Code Modal ────────────────────────────────────────────────────────────
+function QRCodeModal({ visible, address, onClose }: { visible: boolean; address: string; onClose: () => void }) {
+  if (!visible) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
+        <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View style={{
+              backgroundColor: 'rgba(28, 28, 30, 0.98)',
+              borderRadius: 24,
+              padding: 30,
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.1)',
+              shadowColor: '#000',
+              shadowOpacity: 0.5,
+              shadowRadius: 20,
+              shadowOffset: { width: 0, height: 10 },
+            }}>
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 8, letterSpacing: 0.3 }}>
+                Deposit SOL
+              </Text>
+              <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14, marginBottom: 24, textAlign: 'center', fontWeight: '500' }}>
+                Scan this QR code to deposit SOL
+              </Text>
+              
+              <View style={{
+                backgroundColor: '#fff',
+                padding: 20,
+                borderRadius: 16,
+                marginBottom: 20,
+              }}>
+                <QRCode value={address} size={220} />
+              </View>
+
+              <Text style={{ 
+                color: 'rgba(255,255,255,0.5)', 
+                fontSize: 12, 
+                textAlign: 'center',
+                fontFamily: 'monospace',
+                marginBottom: 20,
+                fontWeight: '600',
+              }}>
+                {truncateMiddle(address, 8)}
+              </Text>
+
+              <Pressable
+                onPress={onClose}
+                style={{
+                  paddingHorizontal: 32,
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.2)',
+                }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Close</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+}
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 function Avatar({ name, size = 72 }: { name: string; size?: number }) {
@@ -259,17 +382,24 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [sendVisible, setSendVisible] = useState(false);
   const [sending, setSending] = useState(false);
-  const [editingName, setEditingName] = useState(false);
-  const [nameInput, setNameInput] = useState(profileName);
-  const nameInputRef = useRef<TextInput>(null);
   const [emailInput, setEmailInput] = useState('');
   const [codeInput, setCodeInput] = useState('');
   const [sendingCode, setSendingCode] = useState(false);
   const [verifyingCode, setVerifyingCode] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
+  const [qrVisible, setQrVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
-  useEffect(() => { setNameInput(profileName); }, [profileName]);
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setToastVisible(true);
+    if (hapticsEnabled) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    }
+  };
 
   const loadBalance = useCallback(async (address: string) => {
     try {
@@ -289,26 +419,50 @@ function WalletContent({ onClose }: { onClose: () => void }) {
     if (tradingWalletAddress) void loadBalance(tradingWalletAddress);
   }, [tradingWalletAddress, loadBalance]);
 
-  const saveName = () => {
-    const t = nameInput.trim();
-    if (t) setProfileName(t); else setNameInput(profileName);
-    setEditingName(false);
-  };
-
   const copyAddress = async () => {
     if (!tradingWalletAddress) return;
     await Clipboard.setStringAsync(tradingWalletAddress);
-    Alert.alert('Copied', 'Wallet address copied to clipboard.');
+    showToast('Address copied to clipboard');
   };
 
   const openPhantom = async () => {
     if (!tradingWalletAddress) return;
+    if (hapticsEnabled) {
+      Haptics.selectionAsync().catch(() => undefined);
+    }
     const link = `phantom://v1/transfer?recipient=${encodeURIComponent(tradingWalletAddress)}&network=mainnet-beta`;
     try {
       if (await Linking.canOpenURL(link)) await openExternalLinkSilent(link);
       else await openExternalLinkSilent('https://phantom.app/');
     } catch { Alert.alert('Phantom not found', 'Copy the address and send SOL from any Solana wallet.'); }
   };
+
+  const handleShowQR = () => {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    }
+    setQrVisible(true);
+  };
+
+  const handleRefreshBalance = () => {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    }
+    if (tradingWalletAddress) void loadBalance(tradingWalletAddress);
+  };
+
+  const onRefresh = useCallback(async () => {
+    if (!tradingWalletAddress) return;
+    setRefreshing(true);
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    }
+    try {
+      await loadBalance(tradingWalletAddress);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [tradingWalletAddress, loadBalance, hapticsEnabled]);
 
   const handleSend = async (toAddress: string, amountStr: string) => {
     const amount = Number(amountStr);
@@ -334,10 +488,7 @@ function WalletContent({ onClose }: { onClose: () => void }) {
       setSending(true);
       const result = await withdrawFromTradingWallet(amount, toAddress.trim());
       setSendVisible(false);
-      Alert.alert(
-        'Success!', 
-        `Successfully sent ${amount} SOL!\n\nTransaction ID: ${result.txSignature.slice(0, 8)}...${result.txSignature.slice(-8)}`
-      );
+      showToast(`Successfully sent ${amount} SOL!`);
       if (tradingWalletAddress) void loadBalance(tradingWalletAddress);
     } catch (e: any) { 
       console.error('Send error:', e);
@@ -384,50 +535,25 @@ function WalletContent({ onClose }: { onClose: () => void }) {
       contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: 40, paddingTop: 8 }}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor="#0a84ff"
+          colors={["#0a84ff"]}
+          progressBackgroundColor="rgba(28, 28, 30, 0.9)"
+        />
+      }
     >
-      {/* Avatar + editable name */}
+      <Toast message={toastMessage} visible={toastVisible} onHide={() => setToastVisible(false)} />
+      <QRCodeModal visible={qrVisible} address={tradingWalletAddress ?? ''} onClose={() => setQrVisible(false)} />
+
+      {/* Avatar + name (read-only) */}
       <View style={{ alignItems: 'center', paddingVertical: 24, paddingBottom: 20 }}>
         <Avatar name={profileName} size={84} />
-        {editingName ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, gap: 10 }}>
-            <TextInput
-              ref={nameInputRef} value={nameInput} onChangeText={setNameInput}
-              onSubmitEditing={saveName} autoFocus returnKeyType="done"
-              style={{ 
-                color: '#fff', 
-                fontSize: 22, 
-                fontWeight: '800', 
-                borderBottomWidth: 2, 
-                borderBottomColor: '#0a84ff', 
-                minWidth: 140, 
-                textAlign: 'center', 
-                paddingVertical: 4, 
-                paddingHorizontal: 8,
-                letterSpacing: 0.5,
-              }}
-            />
-            <Pressable onPress={saveName} hitSlop={10}>
-              <Ionicons name="checkmark-circle" size={28} color="#0a84ff" />
-            </Pressable>
-          </View>
-        ) : (
-          <Pressable
-            onPress={() => { setEditingName(true); setTimeout(() => nameInputRef.current?.focus(), 50); }}
-            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, gap: 8 }}
-          >
-            <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', letterSpacing: 0.3 }}>{profileName}</Text>
-            <View style={{
-              width: 24,
-              height: 24,
-              borderRadius: 12,
-              backgroundColor: 'rgba(255,255,255,0.1)',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <Ionicons name="pencil" size={12} color="rgba(255,255,255,0.6)" />
-            </View>
-          </Pressable>
-        )}
+        <View style={{ marginTop: 16 }}>
+          <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' }}>{profileName}</Text>
+        </View>
         {twitterProfile?.username ? (
           <View style={{
             marginTop: 8,
@@ -468,7 +594,7 @@ function WalletContent({ onClose }: { onClose: () => void }) {
                   <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontWeight: '600', letterSpacing: 0.5 }}>SOL BALANCE</Text>
                 </View>
                 <Pressable
-                  onPress={() => tradingWalletAddress && void loadBalance(tradingWalletAddress)}
+                  onPress={handleRefreshBalance}
                   hitSlop={10}
                   style={{ 
                     width: 32, 
@@ -507,11 +633,46 @@ function WalletContent({ onClose }: { onClose: () => void }) {
             </View>
           </MenuSection>
 
+          {/* Deposit Button */}
+          <Pressable
+            onPress={handleShowQR}
+            style={({ pressed }) => ({
+              marginBottom: 16,
+              borderRadius: 16,
+              overflow: 'hidden',
+              opacity: pressed ? 0.9 : 1,
+            })}
+          >
+            <LinearGradient
+              colors={['#0a84ff', '#0066cc']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{
+                paddingVertical: 16,
+                paddingHorizontal: 20,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+              }}
+            >
+              <Ionicons name="qr-code" size={24} color="#fff" />
+              <Text style={{ color: '#fff', fontSize: 17, fontWeight: '800', letterSpacing: 0.3 }}>
+                Show Deposit QR Code
+              </Text>
+            </LinearGradient>
+          </Pressable>
+
           {/* Actions */}
           <MenuSection>
             <MenuRow icon="copy-outline" iconBg="#3a3a3c" label="Copy Address" value={truncateMiddle(tradingWalletAddress ?? '')} onPress={copyAddress} />
-            <MenuRow icon="wallet-outline" iconBg="#1a3a1a" label="Open in Phantom" onPress={openPhantom} />
-            <MenuRow icon="arrow-up-circle-outline" iconBg="#1c3a5e" label="Send SOL" onPress={() => setSendVisible((v) => !v)} last />
+            <MenuRow icon="wallet-outline" iconBg="#1a3a1a" label="Deposit via Phantom" onPress={openPhantom} />
+            <MenuRow icon="arrow-up-circle-outline" iconBg="#1c3a5e" label="Send SOL" onPress={() => {
+              if (hapticsEnabled) {
+                Haptics.selectionAsync().catch(() => undefined);
+              }
+              setSendVisible((v) => !v);
+            }} last />
           </MenuSection>
 
           <SendForm visible={sendVisible} onClose={() => setSendVisible(false)} onSend={handleSend} sending={sending} />
@@ -616,21 +777,71 @@ function WalletContent({ onClose }: { onClose: () => void }) {
         </>
       ) : (
         <>
-          <Text style={{ color: '#8e8e93', textAlign: 'center', marginBottom: 16 }}>
-            {walletError || 'No wallet found. Create one to start trading.'}
-          </Text>
+          <View style={{ alignItems: 'center', paddingVertical: 30, paddingHorizontal: 20 }}>
+            <View style={{
+              width: 80,
+              height: 80,
+              borderRadius: 40,
+              backgroundColor: 'rgba(138, 99, 255, 0.15)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 20,
+              borderWidth: 2,
+              borderColor: 'rgba(138, 99, 255, 0.3)',
+            }}>
+              <Ionicons name="wallet-outline" size={40} color="#8a63ff" />
+            </View>
+            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 8, letterSpacing: 0.3 }}>
+              No Wallet Yet
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.6)', textAlign: 'center', fontSize: 14, lineHeight: 20, fontWeight: '500' }}>
+              {walletError || 'Create a wallet to start trading meme coins on Solana'}
+            </Text>
+          </View>
           {privyUser ? (
             <MenuSection>
-              <MenuRow icon="add-circle-outline" iconBg="#1a3a1a" label="Create Wallet"
+              <Pressable
                 onPress={async () => {
+                  if (hapticsEnabled) {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+                  }
                   try {
                     const address = await getOrCreateTradingWalletAddress();
-                    if (address) void loadBalance(address);
+                    if (address) {
+                      showToast('Wallet created successfully!');
+                      void loadBalance(address);
+                    }
                   } catch (e: any) {
                     const f = getUserFriendlyAuthError(e, { title: 'Wallet', message: 'Could not create a wallet right now.' });
                     Alert.alert(f.title, f.message);
                   }
-                }} last />
+                }}
+                style={({ pressed }) => ({
+                  margin: 16,
+                  borderRadius: 16,
+                  overflow: 'hidden',
+                  opacity: pressed ? 0.9 : 1,
+                })}
+              >
+                <LinearGradient
+                  colors={['#30d158', '#28a745']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={{
+                    paddingVertical: 16,
+                    paddingHorizontal: 20,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                  }}
+                >
+                  <Ionicons name="add-circle" size={24} color="#fff" />
+                  <Text style={{ color: '#fff', fontSize: 17, fontWeight: '800', letterSpacing: 0.3 }}>
+                    Create Wallet
+                  </Text>
+                </LinearGradient>
+              </Pressable>
             </MenuSection>
           ) : (
             <MenuSection>
