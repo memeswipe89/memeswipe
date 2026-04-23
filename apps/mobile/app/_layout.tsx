@@ -68,7 +68,7 @@ export default function RootLayout() {
         appearance: {
           theme: 'dark',
         },
-        loginMethods: ['twitter', 'email'],
+        loginMethods: ['twitter', 'apple', 'email'],
         // Privy Expo SDK expects a path, not a full scheme URI.
         // Expo will build the full deep link with the correct scheme.
         redirectUri: "/privy/oauth",

@@ -15,6 +15,7 @@
     "jsEngine": "hermes",
     "plugins": [
       "expo-router",
+      "expo-apple-authentication",
       [
         "expo-splash-screen",
         {
@@ -33,6 +34,9 @@
         "image": "./assets/images/splash-icon.png",
         "resizeMode": "contain",
         "backgroundColor": "#FFFFFF"
+      },
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -52,7 +56,11 @@
     "extra": {
       "apiBase": "https://memeswipe.onrender.com",
       "privyAppId": "cmm22gaas01qw0djot7jeb7g4",
-      "privyClientId": "client-WY6WhsZXya69tFYhdGTNGtcMDKTR6G2CoMkRSMMvbDKD2"
+      "privyClientId": "client-WY6WhsZXya69tFYhdGTNGtcMDKTR6G2CoMkRSMMvbDKD2",
+      "router": {},
+      "eas": {
+        "projectId": "b057dbd3-4df0-4e1a-ba48-0697ea4711b4"
+      }
     }
   }
 }

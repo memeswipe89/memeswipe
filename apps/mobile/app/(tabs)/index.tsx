@@ -443,7 +443,14 @@ export default function HomeScreen() {
         setShowTwitterPrompt(false);
         await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
       } catch (error) {
-        console.error('Error removing Twitter profile cache:', error);
+        const message = String((error as any)?.message || error || '');
+        const isAbort =
+          (error as any)?.name === 'AbortError' ||
+          message.toLowerCase().includes('aborted') ||
+          message.toLowerCase().includes('aborterror');
+        if (!isAbort) {
+          console.error('Twitter connection check failed:', error);
+        }
         if (options?.allowStale && twitterProfile) {
           setShowTwitterPrompt(false);
           return;

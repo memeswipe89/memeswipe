@@ -250,6 +250,14 @@ export function OnboardingScreen() {
         await login({ provider: "twitter" });
       }
     } catch (error) {
+      const message = String((error as any)?.message || error || "");
+      const isCancelled =
+        message.toLowerCase().includes("cancel") ||
+        message.toLowerCase().includes("cancelled") ||
+        message.toLowerCase().includes("canceled");
+      if (isCancelled) {
+        return;
+      }
       console.error("Twitter login error:", error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       const friendly = getUserFriendlyAuthError(error, {
@@ -259,6 +267,33 @@ export function OnboardingScreen() {
       Alert.alert(friendly.title, friendly.message);
     } finally {
       setTwitterLoading(false);
+    }
+  };
+
+  const handleAppleConnect = async () => {
+    try {
+      if (hasApple) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+        setCurrentStep("email");
+        return;
+      }
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+      setAppleLoading(true);
+      if (user) {
+        await link({ provider: "apple" });
+      } else {
+        await login({ provider: "apple" });
+      }
+    } catch (error) {
+      console.error("Apple login error:", error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      const friendly = getUserFriendlyAuthError(error, {
+        title: "Apple connection failed",
+        message: "Could not connect your Apple account. Please try again.",
+      });
+      Alert.alert(friendly.title, friendly.message);
+    } finally {
+      setAppleLoading(false);
     }
   };
 
@@ -510,19 +545,37 @@ export function OnboardingScreen() {
           )}
 
           {currentStep === "social" && (
-            <Pressable 
-              style={[styles.twitterButton, twitterLoading && styles.buttonDisabled]} 
-              onPress={handleTwitterConnect} 
-              disabled={twitterLoading || hasTwitter}
-            >
-              {twitterLoading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.twitterButtonText}>
-                  {hasTwitter ? "Twitter Connected" : "Sign in with Twitter"}
-                </Text>
+            <>
+              {Platform.OS === "ios" && (
+                <Pressable
+                  style={[styles.appleButton, (appleLoading || hasApple) && styles.buttonDisabled]}
+                  onPress={handleAppleConnect}
+                  disabled={appleLoading || hasApple}
+                >
+                  {appleLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.appleButtonText}>
+                      {hasApple ? "Apple Connected" : "Sign in with Apple"}
+                    </Text>
+                  )}
+                </Pressable>
               )}
-            </Pressable>
+
+              <Pressable 
+                style={[styles.twitterButton, (twitterLoading || hasTwitter) && styles.buttonDisabled]} 
+                onPress={handleTwitterConnect} 
+                disabled={twitterLoading || hasTwitter}
+              >
+                {twitterLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.twitterButtonText}>
+                    {hasTwitter ? "Twitter Connected" : "Sign in with Twitter"}
+                  </Text>
+                )}
+              </Pressable>
+            </>
           )}
 
           {currentStep === "email" && (
@@ -688,6 +741,8 @@ const styles = StyleSheet.create({
   actionContainer:{marginTop:20,width:"100%",maxWidth:400},
   twitterButton:{backgroundColor:"#1DA1F2",paddingVertical:16,borderRadius:12,alignItems:"center",justifyContent:"center",marginBottom:12},
   twitterButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
+  appleButton:{backgroundColor:"#000000",paddingVertical:16,borderRadius:12,alignItems:"center",justifyContent:"center",marginBottom:12},
+  appleButtonText:{color:"#ffffff",fontSize:18,fontWeight:"600"},
   buttonDisabled:{opacity:0.5},
   primaryButton:{backgroundColor:"#007AFF",paddingVertical:16,borderRadius:12,alignItems:"center"},
   primaryButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
