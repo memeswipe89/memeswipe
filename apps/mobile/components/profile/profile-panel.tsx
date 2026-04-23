@@ -14,6 +14,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { useTradeSettings } from '@/contexts/trade-settings-context';
+import { useWalletContext } from '@/contexts/wallet-context';
+import { usePrivy } from '@privy-io/expo';
 
 import { ChainSwitcher } from './chain-switcher';
 import { LiveStats } from './live-stats';
@@ -40,6 +42,16 @@ export const ProfilePanel = memo(function ProfilePanel({ visible, onClose }: Pro
     tpROI,
     stopLoss,
   } = useTradeSettings();
+  const { twitterProfile } = useWalletContext();
+  const { user: privyUser } = usePrivy();
+
+  const appleUserId = (() => {
+    const accounts: any[] = (privyUser as any)?.linked_accounts ?? (privyUser as any)?.linkedAccounts ?? [];
+    const apple = accounts.find((a: any) => a?.type === "apple_oauth" || a?.type === "apple");
+    const id = apple?.subject ?? apple?.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  })();
+  const twitterUsername = typeof twitterProfile?.username === "string" && twitterProfile.username.length > 0 ? twitterProfile.username : null;
 
   useEffect(() => {
     if (visible) {
@@ -73,9 +85,15 @@ export const ProfilePanel = memo(function ProfilePanel({ visible, onClose }: Pro
 
   const initials = useMemo(() => {
     const trimmed = profileName.trim();
-    if (!trimmed) return 'TR';
+    if (!trimmed) {
+      // Use first letter of Twitter username or Apple ID if profile name is empty
+      const authInitial =
+        (typeof twitterUsername === "string" ? twitterUsername[0] : null) ||
+        (typeof appleUserId === "string" ? appleUserId[0] : null);
+      return authInitial ? authInitial.toUpperCase() : 'T';
+    }
     return trimmed.slice(0, 2).toUpperCase();
-  }, [profileName]);
+  }, [profileName, twitterUsername, appleUserId]);
 
   if (!mounted) return null;
 
