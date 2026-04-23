@@ -616,7 +616,7 @@ export function OnboardingScreen() {
             
             <Text style={styles.modalSectionTitle}>1. Acceptance of Terms</Text>
             <Text style={styles.modalText}>
-              By using Swipeit, you accept these Terms of Service. If you don't agree, please don't use the App.
+              By using Swipeit, you accept these Terms of Service. If you don’t agree, please don’t use the App.
             </Text>
             
             <Text style={styles.modalSectionTitle}>2. Age Requirement</Text>

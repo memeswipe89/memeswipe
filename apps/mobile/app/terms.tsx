@@ -1,10 +1,23 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TermsScreen() {
   const insets = useSafeAreaInsets();
+  const { section } = useLocalSearchParams<{ section?: string }>();
+  const scrollRef = React.useRef<ScrollView>(null);
+  const [termsOffsetY, setTermsOffsetY] = React.useState<number | null>(null);
+  const [privacyOffsetY, setPrivacyOffsetY] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    if (!section) return;
+    if (section === 'privacy' && privacyOffsetY != null) {
+      scrollRef.current?.scrollTo({ y: privacyOffsetY, animated: true });
+    } else if (section === 'terms' && termsOffsetY != null) {
+      scrollRef.current?.scrollTo({ y: termsOffsetY, animated: true });
+    }
+  }, [privacyOffsetY, section, termsOffsetY]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -21,15 +34,20 @@ export default function TermsScreen() {
       </View>
 
       {/* Content */}
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollRef} style={styles.content} showsVerticalScrollIndicator={false}>
         
         {/* Terms of Service */}
-        <Text style={styles.mainTitle}>Terms of Service</Text>
+        <Text
+          style={styles.mainTitle}
+          onLayout={(event) => setTermsOffsetY(event.nativeEvent.layout.y)}
+        >
+          Terms of Service
+        </Text>
         <Text style={styles.lastUpdated}>Last Updated: {new Date().toLocaleDateString()}</Text>
         
         <Text style={styles.sectionTitle}>1. Acceptance of Terms</Text>
         <Text style={styles.text}>
-          By accessing and using Swipeit ("the App"), you accept and agree to be bound by these Terms of Service. 
+          By accessing and using Swipeit (&quot;the App&quot;), you accept and agree to be bound by these Terms of Service. 
           If you do not agree to these terms, please do not use the App.
         </Text>
         
@@ -76,7 +94,7 @@ export default function TermsScreen() {
         </Text>
         <Text style={styles.bulletText}>• Use the App for any illegal purposes</Text>
         <Text style={styles.bulletText}>• Attempt to manipulate markets or prices</Text>
-        <Text style={styles.bulletText}>• Interfere with the App's operation or security</Text>
+        <Text style={styles.bulletText}>• Interfere with the App’s operation or security</Text>
         <Text style={styles.bulletText}>• Use automated systems without authorization</Text>
         
         <Text style={styles.sectionTitle}>8. Wallet and Custody</Text>
@@ -103,7 +121,7 @@ export default function TermsScreen() {
         
         <Text style={styles.sectionTitle}>11. Disclaimer of Warranties</Text>
         <Text style={styles.text}>
-          THE APP IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR 
+          THE APP IS PROVIDED &quot;AS IS&quot; AND &quot;AS AVAILABLE&quot; WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR 
           IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, 
           OR NON-INFRINGEMENT.
         </Text>
@@ -121,7 +139,12 @@ export default function TermsScreen() {
         </Text>
         
         {/* Privacy Policy */}
-        <Text style={[styles.mainTitle, { marginTop: 40 }]}>Privacy Policy</Text>
+        <Text
+          style={[styles.mainTitle, { marginTop: 40 }]}
+          onLayout={(event) => setPrivacyOffsetY(event.nativeEvent.layout.y)}
+        >
+          Privacy Policy
+        </Text>
         <Text style={styles.lastUpdated}>Last Updated: {new Date().toLocaleDateString()}</Text>
         
         <Text style={styles.sectionTitle}>1. Information We Collect</Text>
@@ -186,7 +209,7 @@ export default function TermsScreen() {
           obligations. Transaction data on the blockchain is permanent and cannot be deleted.
         </Text>
         
-        <Text style={styles.sectionTitle}>8. Children's Privacy</Text>
+        <Text style={styles.sectionTitle}>8. Children’s Privacy</Text>
         <Text style={styles.text}>
           Our App is not intended for users under 18 years of age. We do not knowingly collect information 
           from children.
@@ -200,7 +223,7 @@ export default function TermsScreen() {
         
         <Text style={styles.sectionTitle}>10. Contact Us</Text>
         <Text style={styles.text}>
-          For questions about these Terms or Privacy Policy, please contact us through the App's support 
+          For questions about these Terms or Privacy Policy, please contact us through the App’s support 
           channels.
         </Text>
         

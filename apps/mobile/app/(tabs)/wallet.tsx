@@ -913,6 +913,13 @@ export default function WalletScreen() {
                 label="Terms & Conditions"
                 onPress={() => router.push("/terms")}
                 rightElement={<Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />}
+              />
+              <MenuRow
+                icon="shield-checkmark-outline"
+                iconBg="#1a2a2a"
+                label="Privacy Policy"
+                onPress={() => router.push({ pathname: "/terms", params: { section: "privacy" } })}
+                rightElement={<Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />}
                 last
               />
             </MenuSection>
