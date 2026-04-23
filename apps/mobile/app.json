@@ -4,9 +4,8 @@
     "slug": "memeswipe",
     "scheme": "mobile",
     "version": "1.0.0",
-    "icon": "./assets/images/appicon.png",
-    "orientation": "portrait",
     "icon": "./assets/images/icon.png",
+    "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/images/splash-icon.png",
@@ -14,12 +13,6 @@
       "backgroundColor": "#FFFFFF"
     },
     "jsEngine": "hermes",
-<<<<<<< HEAD
-    "plugins": ["expo-router"],
-    "ios": {
-      "icon": "./assets/images/appicon.png",
-      "bundleIdentifier": "com.memeswipe.mobile",
-=======
     "plugins": [
       "expo-router",
       "expo-apple-authentication",
@@ -37,12 +30,6 @@
       "usesAppleSignIn": true,
       "icon": "./assets/images/icon.png",
       "supportsTablet": false,
-      "splash": {
-        "image": "./assets/images/splash-icon.png",
-        "resizeMode": "contain",
-        "backgroundColor": "#FFFFFF"
-      },
->>>>>>> newui
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -54,11 +41,6 @@
         "foregroundImage": "./assets/images/icon.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png",
         "backgroundColor": "#000000"
-      },
-      "splash": {
-        "image": "./assets/images/splash-icon.png",
-        "resizeMode": "contain",
-        "backgroundColor": "#FFFFFF"
       }
     },
     "extra": {
