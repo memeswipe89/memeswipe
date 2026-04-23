@@ -417,7 +417,10 @@ function WithdrawSheet({
               bottom: 0,
             }}
           />
-          <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{withdrawing ? "Sending…" : "Send"}</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {withdrawing ? <ActivityIndicator color="#fff" size="small" /> : null}
+            <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{withdrawing ? "Sending…" : "Send"}</Text>
+          </View>
         </Pressable>
       </View>
     </View>
@@ -441,6 +444,21 @@ export default function WalletScreen() {
   const { sendCode, linkWithCode } = useLinkEmail();
   const { profileName, setProfileName, hapticsEnabled } = useTradeSettings();
 
+  const appleUserId = (() => {
+    const accounts: any[] = (privyUser as any)?.linked_accounts ?? (privyUser as any)?.linkedAccounts ?? [];
+    const apple = accounts.find((a: any) => a?.type === "apple_oauth" || a?.type === "apple");
+    const id = apple?.subject ?? apple?.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  })();
+  const twitterUsername = typeof twitterProfile?.username === "string" && twitterProfile.username.length > 0 ? twitterProfile.username : null;
+  const authInitial =
+    (typeof twitterUsername === "string" ? twitterUsername[0] : null) ||
+    (typeof appleUserId === "string" ? appleUserId[0] : null);
+  const displayProfileName =
+    (!profileName || profileName.trim() === '') && authInitial
+      ? authInitial.toUpperCase()
+      : profileName || 'T';
+
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
@@ -454,7 +472,7 @@ export default function WalletScreen() {
 
   // Editable profile name
   const [editingName, setEditingName] = useState(false);
-  const [nameInput, setNameInput] = useState(profileName);
+  const [nameInput, setNameInput] = useState(displayProfileName);
   const nameInputRef = useRef<TextInput>(null);
 
   // Email link
@@ -468,7 +486,7 @@ export default function WalletScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   // Keep nameInput in sync when profileName loads from storage
-  useEffect(() => { setNameInput(profileName); }, [profileName]);
+  useEffect(() => { setNameInput(displayProfileName); }, [displayProfileName]);
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -518,7 +536,7 @@ export default function WalletScreen() {
   const saveName = () => {
     const trimmed = nameInput.trim();
     if (trimmed) setProfileName(trimmed);
-    else setNameInput(profileName);
+    else setNameInput(displayProfileName);
     setEditingName(false);
   };
 
@@ -690,7 +708,7 @@ export default function WalletScreen() {
       >
         {/* ── Header: avatar + editable name ── */}
         <View style={{ alignItems: "center", paddingVertical: 24, paddingBottom: 20 }}>
-          <Avatar name={profileName} size={84} />
+          <Avatar name={displayProfileName} size={84} />
 
           {/* Editable name */}
           {editingName ? (
@@ -724,7 +742,7 @@ export default function WalletScreen() {
               onPress={() => { setEditingName(true); setTimeout(() => nameInputRef.current?.focus(), 50); }}
               style={{ flexDirection: "row", alignItems: "center", marginTop: 16, gap: 8 }}
             >
-              <Text style={{ color: "#fff", fontSize: 24, fontWeight: "800", letterSpacing: 0.3 }}>{profileName}</Text>
+              <Text style={{ color: "#fff", fontSize: 24, fontWeight: "800", letterSpacing: 0.3 }}>{displayProfileName}</Text>
               <View style={{
                 width: 24,
                 height: 24,

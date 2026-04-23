@@ -16,10 +16,11 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { testAllHaptics, checkHapticsSupport } from '@/lib/haptics-test';
 import { usePrivy, useLoginWithOAuth, useLinkWithOAuth, useLinkEmail } from "@privy-io/expo";
+import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
+import { useTradeSettings } from "@/contexts/trade-settings-context";
 import { API_BASE } from "@/lib/api-base";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
 import { persistUserIds } from "@/lib/local-user-id";
@@ -107,6 +108,7 @@ export function OnboardingScreen() {
   const { sendCode, linkWithCode } = useLinkEmail();
   const { isLoggedIn } = useAuth();
   const { getOrCreateTradingWalletAddress, tradingWalletAddress } = useWalletContext();
+  const { profileName, setProfileName } = useTradeSettings();
   
   useEffect(() => {
     // User object loaded
@@ -199,6 +201,18 @@ export function OnboardingScreen() {
       }
       if (responseJson?.user_id) {
         await persistUserIds(responseJson.user_id, user.id);
+      }
+
+      // Set initial profile name to first letter of Twitter username or Apple ID if not already set
+      if (!profileName || profileName.trim() === '') {
+        const twitterUsername = twitterProfile?.username;
+        const appleUserId = appleProfile?.id;
+        const authInitial =
+          (typeof twitterUsername === "string" && twitterUsername.length > 0 ? twitterUsername[0] : null) ||
+          (typeof appleUserId === "string" && appleUserId.length > 0 ? appleUserId[0] : null);
+        if (authInitial) {
+          setProfileName(authInitial.toUpperCase());
+        }
       }
 
       setIsOnboarding(false);
@@ -448,26 +462,6 @@ export function OnboardingScreen() {
 
           {currentStep === "age" && (
             <>
-              {/* HAPTICS TEST BUTTON - Remove after testing */}
-              <Pressable
-                style={{
-                  padding: 15,
-                  backgroundColor: '#ff0000',
-                  borderRadius: 10,
-                  marginBottom: 20,
-                }}
-                onPress={async () => {
-                  console.log('=== HAPTICS TEST BUTTON PRESSED ===');
-                  checkHapticsSupport();
-                  await testAllHaptics();
-                  Alert.alert('Haptics Test', 'Check console for results. Did you feel the vibrations?');
-                }}
-              >
-                <Text style={{ color: '#fff', fontWeight: 'bold', textAlign: 'center' }}>
-                  🔴 TEST HAPTICS (Check Console)
-                </Text>
-              </Pressable>
-
               <Text style={styles.ageTitle}>Age Verification</Text>
               <Text style={styles.ageWarning}>⚠️</Text>
               <Text style={styles.ageDescription}>
@@ -555,9 +549,12 @@ export function OnboardingScreen() {
                   {appleLoading ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
-                    <Text style={styles.appleButtonText}>
-                      {hasApple ? "Apple Connected" : "Sign in with Apple"}
-                    </Text>
+                    <View style={styles.socialButtonContent}>
+                      <Ionicons name="logo-apple" size={20} color="#fff" />
+                      <Text style={styles.appleButtonText}>
+                        {hasApple ? "Apple Connected" : "Sign in with Apple"}
+                      </Text>
+                    </View>
                   )}
                 </Pressable>
               )}
@@ -570,9 +567,12 @@ export function OnboardingScreen() {
                 {twitterLoading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.twitterButtonText}>
-                    {hasTwitter ? "Twitter Connected" : "Sign in with Twitter"}
-                  </Text>
+                  <View style={styles.socialButtonContent}>
+                    <Ionicons name="logo-twitter" size={20} color="#fff" />
+                    <Text style={styles.twitterButtonText}>
+                      {hasTwitter ? "Twitter Connected" : "Sign in with Twitter"}
+                    </Text>
+                  </View>
                 )}
               </Pressable>
             </>
@@ -739,6 +739,7 @@ const styles = StyleSheet.create({
   title:{fontSize:28,fontWeight:"700",color:"#fff",textAlign:"center"},
   subtitle:{fontSize:16,color:"#888",textAlign:"center",marginBottom:12},
   actionContainer:{marginTop:20,width:"100%",maxWidth:400},
+  socialButtonContent:{flexDirection:"row",alignItems:"center",justifyContent:"center",gap:10},
   twitterButton:{backgroundColor:"#1DA1F2",paddingVertical:16,borderRadius:12,alignItems:"center",justifyContent:"center",marginBottom:12},
   twitterButtonText:{color:"#fff",fontSize:18,fontWeight:"600"},
   appleButton:{backgroundColor:"#000000",paddingVertical:16,borderRadius:12,alignItems:"center",justifyContent:"center",marginBottom:12},

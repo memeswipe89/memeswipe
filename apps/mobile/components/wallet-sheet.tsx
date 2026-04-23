@@ -363,7 +363,10 @@ function SendForm({
               bottom: 0,
             }}
           />
-          <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>{sending ? 'Sending…' : 'Send'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {sending ? <ActivityIndicator color="#fff" size="small" /> : null}
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>{sending ? 'Sending…' : 'Send'}</Text>
+          </View>
         </Pressable>
       </View>
     </View>
@@ -376,6 +379,21 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   const { user: privyUser } = usePrivy();
   const { sendCode, linkWithCode } = useLinkEmail();
   const { profileName, setProfileName, showDisclaimer, setShowDisclaimer, hapticsEnabled, setHapticsEnabled } = useTradeSettings();
+
+  const appleUserId = (() => {
+    const accounts: any[] = (privyUser as any)?.linked_accounts ?? (privyUser as any)?.linkedAccounts ?? [];
+    const apple = accounts.find((a: any) => a?.type === "apple_oauth" || a?.type === "apple");
+    const id = apple?.subject ?? apple?.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  })();
+  const twitterUsername = typeof twitterProfile?.username === "string" && twitterProfile.username.length > 0 ? twitterProfile.username : null;
+  const authInitial =
+    (typeof twitterUsername === "string" ? twitterUsername[0] : null) ||
+    (typeof appleUserId === "string" ? appleUserId[0] : null);
+  const displayProfileName =
+    (!profileName || profileName.trim() === '') && authInitial
+      ? authInitial.toUpperCase()
+      : profileName || 'T';
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
@@ -550,9 +568,9 @@ function WalletContent({ onClose }: { onClose: () => void }) {
 
       {/* Avatar + name (read-only) */}
       <View style={{ alignItems: 'center', paddingVertical: 24, paddingBottom: 20 }}>
-        <Avatar name={profileName} size={84} />
+        <Avatar name={displayProfileName} size={84} />
         <View style={{ marginTop: 16 }}>
-          <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' }}>{profileName}</Text>
+          <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' }}>{displayProfileName}</Text>
         </View>
         {twitterProfile?.username ? (
           <View style={{

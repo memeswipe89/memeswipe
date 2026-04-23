@@ -28,7 +28,7 @@ const MAX_TRADE_AMOUNT_USD = 500;
 const MIN_PERCENT = 0.1;
 
 const DEFAULT_SETTINGS = {
-  profileName: 'Trader',
+  profileName: '',
   tradeAmount: 10,
   tpROI: 50,
   stopLoss: 15,
