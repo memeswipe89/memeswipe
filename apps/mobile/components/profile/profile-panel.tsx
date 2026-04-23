@@ -86,11 +86,11 @@ export const ProfilePanel = memo(function ProfilePanel({ visible, onClose }: Pro
   const initials = useMemo(() => {
     const trimmed = profileName.trim();
     if (!trimmed) {
-      // Use first letter of Twitter username or Apple ID if profile name is empty
+      // Use first 2 letters of Twitter username or Apple ID if profile name is empty
       const authInitial =
-        (typeof twitterUsername === "string" ? twitterUsername[0] : null) ||
-        (typeof appleUserId === "string" ? appleUserId[0] : null);
-      return authInitial ? authInitial.toUpperCase() : 'T';
+        (typeof twitterUsername === "string" ? twitterUsername.slice(0, 2) : null) ||
+        (typeof appleUserId === "string" ? appleUserId.slice(0, 2) : null);
+      return authInitial ? authInitial.toUpperCase() : 'TR';
     }
     return trimmed.slice(0, 2).toUpperCase();
   }, [profileName, twitterUsername, appleUserId]);

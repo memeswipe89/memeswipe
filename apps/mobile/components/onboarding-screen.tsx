@@ -203,13 +203,13 @@ export function OnboardingScreen() {
         await persistUserIds(responseJson.user_id, user.id);
       }
 
-      // Set initial profile name to first letter of Twitter username or Apple ID if not already set
+      // Set initial profile name to first 2 letters of Twitter username or Apple ID if not already set
       if (!profileName || profileName.trim() === '') {
         const twitterUsername = twitterProfile?.username;
         const appleUserId = appleProfile?.id;
         const authInitial =
-          (typeof twitterUsername === "string" && twitterUsername.length > 0 ? twitterUsername[0] : null) ||
-          (typeof appleUserId === "string" && appleUserId.length > 0 ? appleUserId[0] : null);
+          (typeof twitterUsername === "string" && twitterUsername.length > 0 ? twitterUsername.slice(0, 2) : null) ||
+          (typeof appleUserId === "string" && appleUserId.length > 0 ? appleUserId.slice(0, 2) : null);
         if (authInitial) {
           setProfileName(authInitial.toUpperCase());
         }

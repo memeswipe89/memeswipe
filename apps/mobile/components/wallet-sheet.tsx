@@ -388,12 +388,12 @@ function WalletContent({ onClose }: { onClose: () => void }) {
   })();
   const twitterUsername = typeof twitterProfile?.username === "string" && twitterProfile.username.length > 0 ? twitterProfile.username : null;
   const authInitial =
-    (typeof twitterUsername === "string" ? twitterUsername[0] : null) ||
-    (typeof appleUserId === "string" ? appleUserId[0] : null);
+    (typeof twitterUsername === "string" ? twitterUsername.slice(0, 2) : null) ||
+    (typeof appleUserId === "string" ? appleUserId.slice(0, 2) : null);
   const displayProfileName =
     (!profileName || profileName.trim() === '') && authInitial
       ? authInitial.toUpperCase()
-      : profileName || 'T';
+      : profileName || 'TR';
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
