@@ -14,13 +14,15 @@ import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { useRouter } from 'expo-router';
 
-import { AppLoader } from '@/components/app-loader';
+import { openExternalLink, openExternalLinkSilent } from '@/lib/external-link-warning';
 import { LoadingOverlay } from '@/components/loading-overlay';
 import type { FeedSegment } from '@/components/feed-segmented-control';
 import { ProfileButton } from '@/components/profile/profile-button';
 import { ProfileSheet, type ProfileSheetRef } from '@/components/profile/profile-sheet';
+import { WalletSheet, type WalletSheetRef } from '@/components/wallet-sheet';
 import { SwipeHint } from '@/components/swipe-hint-overlay';
 import { SwipeTokenDeck, type SwipeToken } from '@/components/swipe-token-deck';
+import { TradingDisclaimer } from '@/components/trading-disclaimer';
 import { useWalletContext } from '@/contexts/wallet-context';
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { addBalance, getBalance as getDevBalance, resetBalance } from '@/lib/devWallet';
@@ -38,6 +40,7 @@ const LAST_ROI_KEY = '@memeswipe:lastROI';
 const BONUS_2000_APPLIED_KEY = '@memeswipe:bonus2000:applied';
 const TWITTER_PROFILE_CACHE_KEY = '@memeswipe:twitterProfile:v1';
 const LOCAL_USER_ID_KEY = '@memeswipe:userId:v1';
+const FAVORITE_POPUP_DISABLED_KEY = '@memeswipe:favoritePopupDisabled:v1';
 const PAGE_LIMIT = 50;
 const INITIAL_PAGE_LIMIT = 12;
 const LOW_DECK_THRESHOLD = 5;
@@ -74,6 +77,13 @@ type TradeOpenPopupState = {
   amountUsd: number;
   tpRoi: number;
   txSignature: string;
+};
+
+type FavoritePopupState = {
+  visible: boolean;
+  tokenName: string;
+  tokenSymbol: string;
+  neverShowAgain: boolean;
 };
 type RemoteSegment = Exclude<FeedSegment, 'favorites'>;
 
@@ -302,6 +312,7 @@ export default function HomeScreen() {
   } =
     useWalletContext();
   const profileSheetRef = useRef<ProfileSheetRef>(null);
+  const walletSheetRef = useRef<WalletSheetRef>(null);
   const connectInProgressRef = useRef(false);
   const [userId, setUserId] = useState<string>('');
   const [checkingTwitter, setCheckingTwitter] = useState(true);
@@ -313,7 +324,6 @@ export default function HomeScreen() {
   const [buyLoading, setBuyLoading] = useState(false);
   const [tokens, setTokens] = useState<SwipeToken[]>([]);
   const [activeSource, setActiveSource] = useState<'pumpfun' | 'bags'>('pumpfun');
-  const [appLoading, setAppLoading] = useState(true);
   const [showSwipeHint, setShowSwipeHint] = useState(true);
   const [segment, setSegment] = useState<FeedSegment>('trending');
   const [favoriteAddresses, setFavoriteAddresses] = useState<Set<string>>(new Set());
@@ -344,7 +354,14 @@ export default function HomeScreen() {
     tpRoi: 0,
     txSignature: '',
   });
-  const { activeChain, profileName, tradeAmount, tpROI, stopLoss, setTradeAmount, setTpROI, setStopLoss } =
+  const [favoritePopup, setFavoritePopup] = useState<FavoritePopupState>({
+    visible: false,
+    tokenName: '',
+    tokenSymbol: '',
+    neverShowAgain: false,
+  });
+  const [favoritePopupDisabled, setFavoritePopupDisabled] = useState(false);
+  const { activeChain, profileName, tradeAmount, tpROI, stopLoss, showDisclaimer, setTradeAmount, setTpROI, setStopLoss } =
     useTradeSettings();
 
   type EditField = 'AMT' | 'ROI' | 'SL';
@@ -375,7 +392,7 @@ export default function HomeScreen() {
   const retryDelayRef = useRef(10000);
 
   useEffect(() => {
-    console.log('[FILTERS] activeSource=', activeSource);
+    // Filter effect for activeSource
   }, [activeSource]);
 
   const checkTwitterConnection = useCallback(
@@ -426,7 +443,14 @@ export default function HomeScreen() {
         setShowTwitterPrompt(false);
         await AsyncStorage.removeItem(TWITTER_PROFILE_CACHE_KEY);
       } catch (error) {
-        console.log(error);
+        const message = String((error as any)?.message || error || '');
+        const isAbort =
+          (error as any)?.name === 'AbortError' ||
+          message.toLowerCase().includes('aborted') ||
+          message.toLowerCase().includes('aborterror');
+        if (!isAbort) {
+          console.error('Twitter connection check failed:', error);
+        }
         if (options?.allowStale && twitterProfile) {
           setShowTwitterPrompt(false);
           return;
@@ -509,7 +533,7 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => setAppLoading(false), 1600);
+    const timer = setTimeout(() => setShowSwipeHint(false), 3000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -602,7 +626,7 @@ export default function HomeScreen() {
       // Prefer opening in Twitter/X app when installed; fallback to auth-session/browser.
       const hasTwitterApp = (await Linking.canOpenURL('twitter://')) || (await Linking.canOpenURL('x://'));
       if (hasTwitterApp) {
-        await Linking.openURL(startJson.authUrl);
+        await openExternalLinkSilent(startJson.authUrl);
         return;
       }
 
@@ -615,7 +639,7 @@ export default function HomeScreen() {
       // Some Android/Expo Go combinations may not complete auth-session callback reliably.
       // Fallback to opening the URL directly in browser so user can still continue the flow.
       if (authResult.type === 'cancel' || authResult.type === 'dismiss' || authResult.type === 'opened') {
-        const opened = await Linking.openURL(startJson.authUrl).then(() => true).catch(() => false);
+        const opened = await openExternalLinkSilent(startJson.authUrl).then(() => true).catch(() => false);
         if (!opened) {
           throw new Error('Unable to open Twitter auth page. Please check browser availability.');
         }
@@ -628,7 +652,7 @@ export default function HomeScreen() {
     } catch (error: any) {
       connectInProgressRef.current = false;
       setTwitterConnectLoading(false);
-      console.log(error);
+      console.error('Twitter connect error:', error);
       Alert.alert("Twitter Connect", error?.message || "Failed to connect Twitter");
     }
   }, [getOrCreateLocalUserId, handleTwitterRedirect, userId]);
@@ -672,11 +696,17 @@ export default function HomeScreen() {
     let active = true;
     const hydrateLocalState = async () => {
       try {
-        const [favoritesRaw, hiddenRaw] = await Promise.all([
+        const [favoritesRaw, hiddenRaw, favoritePopupDisabledRaw] = await Promise.all([
           AsyncStorage.getItem(FAVORITES_KEY),
           AsyncStorage.getItem(HIDDEN_TOKENS_KEY),
+          AsyncStorage.getItem(FAVORITE_POPUP_DISABLED_KEY),
         ]);
         if (!active) return;
+
+        // Load favorite popup preference
+        if (favoritePopupDisabledRaw === 'true') {
+          setFavoritePopupDisabled(true);
+        }
 
         if (favoritesRaw) {
           const parsed = JSON.parse(favoritesRaw) as (string | FavoriteToken)[];
@@ -806,7 +836,6 @@ export default function HomeScreen() {
         setSegmentHasMore((prev) => ({ ...prev, [segmentType]: Boolean(data.cursor) }));
         return deduped;
       } catch (err) {
-        console.log(err);
         return [];
       } finally {
         setSegmentLoadingMore((prev) => ({ ...prev, [segmentType]: false }));
@@ -847,7 +876,6 @@ export default function HomeScreen() {
         }));
       } catch (err) {
         onFeedError();
-        console.log('live update failed', err);
       }
     },
     [activeChain, canFetchFeed, onFeedError, onFeedSuccess]
@@ -979,7 +1007,7 @@ export default function HomeScreen() {
     try {
       await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
     } catch (err) {
-      console.log('Failed to save favorites', err);
+      // Failed to save favorites
     }
   }, []);
 
@@ -987,7 +1015,7 @@ export default function HomeScreen() {
     try {
       await AsyncStorage.setItem(HIDDEN_TOKENS_KEY, JSON.stringify(Array.from(next)));
     } catch (err) {
-      console.log('Failed to save hidden tokens', err);
+      // Failed to save hidden tokens
     }
   }, []);
 
@@ -1065,6 +1093,9 @@ export default function HomeScreen() {
               ? token.chartData.map((n) => toNumber(n, basePrice || 0))
               : buildFallbackChart(basePrice),
           source: token.source || (activeChain === 'base' ? 'bags' : 'pumpfun'),
+          imageUrl: token.imageUrl,
+          website: token.website,
+          twitter: token.twitter,
         },
       ];
       return applyFavoriteUpdate(next);
@@ -1083,7 +1114,7 @@ export default function HomeScreen() {
         }),
       });
     } catch (err) {
-      console.log('Favorite API failed', err);
+      // Favorite API failed
     }
   }, [activeChain, applyFavoriteUpdate, getOrCreateLocalUserId, twitterProfile?.id, twitterProfile?.username, userId]);
 
@@ -1219,15 +1250,6 @@ export default function HomeScreen() {
           });
           await connection.confirmTransaction(signature, 'confirmed');
 
-          console.log('[TRADE][SWIPE_RIGHT] on-chain swap success', {
-            signature,
-            slippageBps,
-            inputMint: quoteJson?.inputMint || SOL_MINT,
-            outputMint: quoteJson?.outputMint || token.address,
-            inAmount: quoteJson?.inAmount,
-            outAmount: quoteJson?.outAmount,
-          });
-
           return {
             signature,
             inputMint: quoteJson?.inputMint || SOL_MINT,
@@ -1242,11 +1264,6 @@ export default function HomeScreen() {
             msg.includes('0x1788') ||
             msg.toLowerCase().includes('simulation failed') ||
             msg.toLowerCase().includes('slippage');
-          console.log('[TRADE][SWIPE_RIGHT] swap attempt failed', {
-            slippageBps,
-            retryable,
-            message: msg,
-          });
           if (!retryable) break;
         }
       }
@@ -1315,7 +1332,6 @@ export default function HomeScreen() {
           inAmountRaw: swapMeta.inAmountRaw,
           outAmountRaw: swapMeta.outAmountRaw,
         };
-        console.log('[TRADE][SWIPE_RIGHT] sending order payload', tradePayload);
 
         const res = await fetch(`${API_BASE}/api/orders`, {
           method: 'POST',
@@ -1324,7 +1340,6 @@ export default function HomeScreen() {
         });
 
         const json = await parseApiJson<{ error?: string }>(res);
-        console.log('[TRADE][SWIPE_RIGHT] order API response', { status: res.status, body: json });
 
         if (!res.ok) {
           const { title, message } = getFriendlyOrderError(new Error(json?.error || 'Unknown error'));
@@ -1353,6 +1368,71 @@ export default function HomeScreen() {
     [hideToken, removeFavoriteToken, segment]
   );
 
+  const handleKeepFavorite = useCallback(
+    (token: SwipeToken) => {
+      // In favorites mode, swipe up moves the token to the end of favorites list
+      if (segment === 'favorites') {
+        setFavoriteTokens((prev) => {
+          const tokenExists = prev.find((item) => item.address === token.address);
+          if (!tokenExists) return prev;
+          
+          // Remove the token from current position and add it to the end with updated timestamp
+          const filtered = prev.filter((item) => item.address !== token.address);
+          const updatedToken = {
+            ...tokenExists,
+            likedAt: Date.now() - (24 * 60 * 60 * 1000), // Set timestamp to 24 hours ago to put it at end
+          };
+          const reordered = [...filtered, updatedToken];
+          
+          // Update the favorites and rebuild the deck
+          const sorted = reordered.sort((a, b) => b.likedAt - a.likedAt);
+          const trimmed = sorted.slice(0, MAX_FAVORITES);
+          persistFavorites(trimmed);
+          setFavoriteAddresses(new Set(trimmed.map((f) => f.address)));
+          
+          return trimmed;
+        });
+        
+        // Also hide from current deck so it doesn't appear immediately
+        hideToken(token.address);
+      } else {
+        // In other modes, swipe up adds to favorites and hides from deck
+        // Check if token is already favorited - if so, just hide it, don't toggle
+        const isAlreadyFavorited = favoriteAddresses.has(token.address);
+        if (!isAlreadyFavorited) {
+          handleToggleFavorite(token);
+        }
+        hideToken(token.address);
+      }
+    },
+    [handleToggleFavorite, hideToken, segment, persistFavorites, favoriteAddresses]
+  );
+
+  const handleFavoritePopup = useCallback(
+    (token: SwipeToken) => {
+      // Don't show popup if user has disabled it
+      if (favoritePopupDisabled) return;
+      
+      setFavoritePopup({
+        visible: true,
+        tokenName: token.name,
+        tokenSymbol: token.symbol.toUpperCase(),
+        neverShowAgain: false,
+      });
+    },
+    [favoritePopupDisabled]
+  );
+
+  const handleNeverShowAgain = useCallback(async () => {
+    try {
+      await AsyncStorage.setItem(FAVORITE_POPUP_DISABLED_KEY, 'true');
+      setFavoritePopupDisabled(true);
+      setFavoritePopup((prev) => ({ ...prev, visible: false }));
+    } catch (err) {
+      // Failed to save favorite popup preference
+    }
+  }, []);
+
   const handleDeckRefresh = useCallback(() => {
     if (!isRemoteSegment(segment)) return;
     // Reset the segment so it fetches fresh data
@@ -1375,11 +1455,6 @@ export default function HomeScreen() {
         Alert.alert('Token unavailable', `${token.symbol.toUpperCase()} has very low liquidity and can't be traded right now.`);
         return;
       }
-      console.log('[TRADE][SWIPE_RIGHT] token selected', {
-        symbol: token.symbol,
-        address: token.address,
-        priceUsd: token.priceUsd,
-      });
       void (async () => {
         setBuyLoading(true);
         try {
@@ -1499,6 +1574,15 @@ export default function HomeScreen() {
     return () => clearTimeout(timer);
   }, [tradeOpenPopup.visible]);
 
+  useEffect(() => {
+    if (!favoritePopup.visible) return;
+    // Auto-dismiss after 3 seconds if user doesn't interact
+    const timer = setTimeout(() => {
+      setFavoritePopup((prev) => ({ ...prev, visible: false }));
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [favoritePopup.visible]);
+
   const favoritesActive = segment === 'favorites';
 
   return (
@@ -1507,8 +1591,24 @@ export default function HomeScreen() {
         <View style={styles.screen}>
           <View style={styles.topBarWrap}>
             <View style={styles.topProfileRow}>
+              {/* Left: favorites heart */}
               <Pressable
-                onPress={openWalletPage}
+                onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
+                android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
+                style={({ pressed }) => [
+                  styles.favoriteIconButton,
+                  favoritesActive && styles.favoriteIconButtonActive,
+                  pressed && styles.favoriteIconButtonPressed,
+                ]}
+              >
+                <Text style={[styles.topBarHeart, favoritesActive && styles.topBarHeartActive]}>
+                  {favoritesActive ? '♥' : '♡'}
+                </Text>
+              </Pressable>
+
+              {/* Right: wallet only */}
+              <Pressable
+                onPress={() => walletSheetRef.current?.open()}
                 android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
                 style={({ pressed }) => [styles.brandAvatarButton, pressed && styles.brandAvatarButtonPressed]}
               >
@@ -1516,26 +1616,6 @@ export default function HomeScreen() {
                   <Text style={styles.brandAvatarText}>{(profileName.trim().slice(0, 2) || 'TR').toUpperCase()}</Text>
                 </View>
               </Pressable>
-              <View style={styles.topActionsRow}>
-                <Pressable
-                  onPress={() => setSegment((prev) => (prev === 'favorites' ? 'trending' : 'favorites'))}
-                  android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
-                  style={({ pressed }) => [
-                    styles.favoriteIconButton,
-                    favoritesActive && styles.favoriteIconButtonActive,
-                    pressed && styles.favoriteIconButtonPressed,
-                  ]}
-                >
-                  <Text style={[styles.topBarHeart, favoritesActive && styles.topBarHeartActive]}>
-                    {favoritesActive ? '♥' : '♡'}
-                  </Text>
-                </Pressable>
-                <ProfileButton
-                  onPress={() => profileSheetRef.current?.open()}
-                  onLongPress={openDevWalletControls}
-                  disabled={appLoading}
-                />
-              </View>
             </View>
             <View style={styles.controlsRowWrap}>
             <View style={styles.simplePillRow}>
@@ -1549,6 +1629,12 @@ export default function HomeScreen() {
                 <SourceTab label="Pump.fun" enabled={activeSource === 'pumpfun'} onPress={() => setActiveSource('pumpfun')} />
                 <SourceTab label="Bags" enabled={activeSource === 'bags'} onPress={() => setActiveSource('bags')} />
               </View>
+              {/* Trading Disclaimer */}
+              {showDisclaimer && (
+                <View style={styles.disclaimerTopContainer}>
+                  <TradingDisclaimer visible={showDisclaimer} />
+                </View>
+              )}
             </View>
           </View>
 
@@ -1560,12 +1646,16 @@ export default function HomeScreen() {
                 onBuy={handleBuy}
                 onReject={handleReject}
                 onToggleFavorite={handleToggleFavorite}
+                onKeepFavorite={handleKeepFavorite}
+                onFavoritePopup={handleFavoritePopup}
               favoriteAddresses={favoriteAddresses}
               isLoading={loading || (isRemoteSegment(segment) && initialDeckPending && tokens.length === 0)}
-              isInteractionLocked={appLoading || creatingOrder || buyLoading}
+              isInteractionLocked={creatingOrder || buyLoading}
               onSwipeStateChange={setIsSwiping}
               onActiveCardChange={handleActiveCardChange}
               onRefresh={isRemoteSegment(segment) ? handleDeckRefresh : undefined}
+              isFavoritesMode={segment === 'favorites'}
+              showDisclaimer={showDisclaimer}
               emptyTitle={
                 segment === 'favorites'
                   ? '❤️ No favorites yet'
@@ -1590,8 +1680,8 @@ export default function HomeScreen() {
         </View>
 
         <ProfileSheet ref={profileSheetRef} />
+        <WalletSheet ref={walletSheetRef} />
         <SwipeHint visible={showSwipeHint} />
-        <AppLoader visible={appLoading} />
         <LoadingOverlay visible={creatingOrder || buyLoading} text="Executing trade..." />
         {showTwitterPrompt ? (
           <View style={styles.connectPromptOverlay} pointerEvents="auto">
@@ -1671,6 +1761,31 @@ export default function HomeScreen() {
           </View>
         ) : null}
 
+        {favoritePopup.visible ? (
+          <View style={styles.favoritePopupOverlay} pointerEvents="auto">
+            <View style={styles.favoritePopupCard}>
+              <LinearGradient
+                colors={['rgba(255,209,102,0.24)', 'rgba(255,128,180,0.16)']}
+                style={styles.favoritePopupGlow}
+              />
+              <Text style={styles.favoritePopupIcon}>♥</Text>
+              <Text style={styles.favoritePopupTitle}>Added to Favorites</Text>
+              <Text style={styles.favoritePopupText}>
+                {favoritePopup.tokenName} ({favoritePopup.tokenSymbol})
+              </Text>
+              <Pressable
+                style={styles.neverShowAgainRow}
+                onPress={handleNeverShowAgain}
+              >
+                <View style={styles.checkbox}>
+                  <Text style={styles.checkboxText}>✓</Text>
+                </View>
+                <Text style={styles.neverShowAgainText}>Never show again</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <Modal visible={editField !== null} transparent animationType="fade" onRequestClose={() => setEditField(null)}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.editModalOverlay}>
             <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditField(null)} />
@@ -1707,15 +1822,15 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#05070A',
+    backgroundColor: '#000',
   },
   safeArea: {
     flex: 1,
-    backgroundColor: '#05070A',
+    backgroundColor: '#000',
     paddingHorizontal: 0,
   },
   topBarWrap: {
-    backgroundColor: '#05070A',
+    backgroundColor: '#000',
     zIndex: 30,
   },
   screen: {
@@ -1781,7 +1896,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.78)',
   },
   topBarHeartActive: {
-    color: '#fff',
+    color: '#ff6b9d',
   },
   controlsRowWrap: {
     width: '100%',
@@ -1836,7 +1951,7 @@ const styles = StyleSheet.create({
   },
   sourceTabTextActive: {
     color: '#fff',
-    fontWeight: '700',
+    fontWeight: '600',
   },
   sourceTabsWrap: {
     paddingHorizontal: 20,
@@ -1845,12 +1960,17 @@ const styles = StyleSheet.create({
   },
   deckArea: {
     flex: 1,
-    paddingBottom: 88,
+    paddingBottom: 72,
   },
   deckWrapper: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  disclaimerTopContainer: {
+    paddingTop: 4,
+    paddingHorizontal: 20,
+    alignItems: 'center',
   },
   simplePill: {
     flex: 1,
@@ -1873,6 +1993,76 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  favoritePopupOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(3,7,12,0.58)',
+    paddingHorizontal: 20,
+    zIndex: 90,
+  },
+  favoritePopupCard: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,209,102,0.3)',
+    backgroundColor: 'rgba(8,14,28,0.98)',
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    gap: 8,
+    overflow: 'hidden',
+    alignItems: 'center',
+  },
+  favoritePopupGlow: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  favoritePopupIcon: {
+    fontSize: 32,
+    color: '#ffdd7a',
+    marginBottom: 4,
+  },
+  favoritePopupTitle: {
+    color: '#ffdd7a',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  favoritePopupText: {
+    color: '#e8f2ff',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  neverShowAgainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#ffdd7a',
+    backgroundColor: '#ffdd7a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxText: {
+    color: '#1a1a1a',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  neverShowAgainText: {
+    color: '#e8f2ff',
+    fontSize: 13,
+    fontWeight: '500',
   },
   tradePopupOverlay: {
     ...StyleSheet.absoluteFillObject,

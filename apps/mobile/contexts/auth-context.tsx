@@ -57,7 +57,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setBalance(currentBalance);
       setRequiresDeposit(ENFORCE_MIN_BALANCE ? currentBalance < MIN_BALANCE : false);
     } catch (err) {
-      console.log('Failed to check wallet balance', err);
       setBalance(null);
       setRequiresDeposit(false);
     } finally {
@@ -80,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         if (rawWallet) setWalletAddress(rawWallet);
       } catch (err) {
-        console.log('Failed to load auth state', err);
+        // Failed to load auth state
       } finally {
         if (active) setLoading(false);
       }

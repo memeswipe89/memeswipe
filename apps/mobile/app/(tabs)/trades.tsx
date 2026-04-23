@@ -1,13 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  interpolate,
+  runOnJS,
+} from 'react-native-reanimated';
 import { addBalance } from '@/lib/devWallet';
 import { notifyTradeClosed } from '@/lib/notifications';
+import { openExternalLink } from '@/lib/external-link-warning';
 import { useWalletContext } from '@/contexts/wallet-context';
+import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
@@ -16,6 +25,61 @@ import { getFriendlyCloseError } from '@/lib/user-friendly-errors';
 const SOLANA_MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const JUPITER_BASE_URLS = ['https://api.jup.ag/swap/v1', 'https://lite-api.jup.ag/swap/v1'];
+const formatSol = (value: number) => `${value.toFixed(4)} SOL`;
+
+// ─── Toast notification ───────────────────────────────────────────────────────
+function Toast({ message, visible, onHide, type = 'success' }: { message: string; visible: boolean; onHide: () => void; type?: 'success' | 'error' }) {
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (visible) {
+      opacity.value = withTiming(1, { duration: 200 });
+      const timer = setTimeout(() => {
+        opacity.value = withTiming(0, { duration: 200 }, (finished) => {
+          if (finished) runOnJS(onHide)();
+        });
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [visible, opacity, onHide]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: interpolate(opacity.value, [0, 1], [-20, 0]) }],
+  }));
+
+  if (!visible) return null;
+
+  const bgColor = type === 'success' ? 'rgba(48, 209, 88, 0.95)' : 'rgba(255, 69, 58, 0.95)';
+  const icon = type === 'success' ? 'checkmark-circle' : 'close-circle';
+
+  return (
+    <Animated.View style={[{
+      position: 'absolute',
+      top: 60,
+      left: 20,
+      right: 20,
+      zIndex: 1000,
+    }, animatedStyle]}>
+      <View style={{
+        backgroundColor: bgColor,
+        borderRadius: 12,
+        padding: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+      }}>
+        <MaterialIcons name={icon} size={24} color="#fff" />
+        <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700', flex: 1 }}>{message}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
 const parseApiJson = async <T,>(response: Response): Promise<T> => {
   const raw = await response.text();
   try {
@@ -137,9 +201,27 @@ const fetchJsonWithFallback = async <T,>(
     try {
       const response = await fetch(url, init);
       const raw = await response.text();
-      const isHtml404 = response.status === 404 && raw.trim().startsWith('<');
-      if (isHtml404) continue;
-      const json = JSON.parse(raw) as T;
+      
+      // Check if response is HTML (error page)
+      const isHtml = raw.trim().startsWith('<');
+      if (isHtml) {
+        if (response.status === 404) {
+          continue; // Try next endpoint
+        }
+        // For other HTML responses (502, 500, etc.), throw a user-friendly error
+        throw new Error(`Server returned HTML (${response.status}). The backend may be starting up — please try again in a moment.`);
+      }
+      
+      // Try to parse JSON
+      let json: T;
+      try {
+        json = JSON.parse(raw) as T;
+      } catch (parseError) {
+        // If JSON parsing fails, provide context about the response
+        const preview = raw.slice(0, 100);
+        throw new Error(`Invalid server response (${response.status}): ${preview || 'empty body'}`);
+      }
+      
       return { response, json, url };
     } catch (error) {
       lastError = error;
@@ -245,6 +327,7 @@ function TradeCard({
   closeTrade,
   markUncloseable,
   openSolscanTx,
+  hapticsEnabled,
 }: {
   item: TradeItem;
   solPriceUsd: number | null;
@@ -252,6 +335,7 @@ function TradeCard({
   closeTrade: (trade: TradeItem) => void;
   markUncloseable: (trade: TradeItem) => void;
   openSolscanTx: (sig: string) => void;
+  hapticsEnabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { pnlPct, pnlUsd } = getDisplayedPnl(item);
@@ -263,8 +347,15 @@ function TradeCard({
   const isWin = item.closeReason === 'tp' || (pnlUsd > 0 && item.status === 'closed');
   const isLoss = item.closeReason === 'sl' || (pnlUsd < 0 && item.status === 'closed');
 
+  const handleExpand = () => {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    }
+    setExpanded((v) => !v);
+  };
+
   return (
-    <Pressable style={styles.card} onPress={() => setExpanded((v) => !v)}>
+    <Pressable style={styles.card} onPress={handleExpand}>
       {/* Collapsed row */}
       <View style={styles.cardTop}>
         <View style={styles.cardTopLeft}>
@@ -350,7 +441,12 @@ function TradeCard({
           ) : null}
           {item.status === 'open' && !item.closeTxSignature && item.closeReason !== 'failed' ? (
             <Pressable
-              onPress={() => closeTrade(item)}
+              onPress={() => {
+                if (hapticsEnabled) {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+                }
+                closeTrade(item);
+              }}
               disabled={closingId === item.id}
               style={[styles.closeBtn, closingId === item.id && { opacity: 0.6 }]}
             >
@@ -373,27 +469,46 @@ function TradeCard({
 export default function TradesScreen() {
   const { getOrCreateTradingWalletAddress, getEmbeddedSolanaProvider, getOrCreateLocalUserId } =
     useWalletContext();
+  const { hapticsEnabled } = useTradeSettings();
   const [query, setQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
+  const [lastErrorTime, setLastErrorTime] = useState<number>(0);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastType, setToastType] = useState<'success' | 'error'>('success');
+  const [sortBy, setSortBy] = useState<'date' | 'pnl' | 'amount'>('date');
   const autoCloseRetryAfterRef = useRef<Record<string, number>>({});
   const lastAutoClosePriceFetchRef = useRef(0);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
   const pageSize = 20;
 
-  const loadTrades = useCallback(async () => {
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage(message);
+    setToastType(type);
+    setToastVisible(true);
+    if (hapticsEnabled) {
+      const feedbackType = type === 'success' 
+        ? Haptics.NotificationFeedbackType.Success 
+        : Haptics.NotificationFeedbackType.Error;
+      Haptics.notificationAsync(feedbackType).catch(() => undefined);
+    }
+  }, [hapticsEnabled]);
+
+  const loadTrades = useCallback(async (forceRefresh = false) => {
     try {
-      setLoading(true);
+      if (!forceRefresh) setLoading(true);
       setError(null);
       const resolvedUserId = await getOrCreateLocalUserId();
       if (!resolvedUserId) {
-        throw new Error('User id not found');
+        throw new Error('User session not found. Please restart the app.');
       }
       const { response: res, json } = await fetchJsonWithFallback<{
         orders?: {
@@ -426,7 +541,7 @@ export default function TradesScreen() {
         `/orders?userId=${encodeURIComponent(resolvedUserId)}&limit=200`,
       ]);
       if (!res.ok) {
-        throw new Error(json?.error || 'Failed to load trades');
+        throw new Error(json?.error || `Server error (${res.status}). Please try again.`);
       }
       const sourceOrders = json.orders || [];
 
@@ -495,11 +610,32 @@ export default function TradesScreen() {
       });
       setTrades(mapped);
     } catch (err: any) {
-      setError(err?.message || 'Failed to load trades');
+      const now = Date.now();
+      setLastErrorTime(now);
+      
+      // Provide user-friendly error messages
+      let errorMessage = 'Failed to load trades';
+      if (err?.message?.includes('Server returned HTML')) {
+        errorMessage = 'Backend server is starting up. Please wait a moment and try again.';
+      } else if (err?.message?.includes('JSON Parse error')) {
+        errorMessage = 'Server error. Please try again in a moment.';
+      } else if (err?.message) {
+        errorMessage = err.message;
+      }
+      setError(errorMessage);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [getOrCreateLocalUserId, solPriceUsd]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    }
+    await loadTrades(true);
+  }, [loadTrades, hapticsEnabled]);
 
   useEffect(() => {
     void loadTrades();
@@ -507,8 +643,12 @@ export default function TradesScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadTrades();
-    }, [loadTrades])
+      // Only auto-refresh if no recent error (within last 30 seconds)
+      const now = Date.now();
+      if (now - lastErrorTime > 30000) {
+        void loadTrades();
+      }
+    }, [loadTrades, lastErrorTime])
   );
 
   useEffect(() => {
@@ -749,7 +889,7 @@ export default function TradesScreen() {
         setClosingId(null);
       }
     },
-    [getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress]
+    [getEmbeddedSolanaProvider, getOrCreateLocalUserId, getOrCreateTradingWalletAddress, showToast]
   );
 
   const markUncloseable = useCallback(
@@ -864,7 +1004,7 @@ export default function TradesScreen() {
   }, [closeTrade, closingId, trades]);
 
   const filtered = useMemo(() => {
-    return trades.filter((trade) => {
+    let result = trades.filter((trade) => {
       const { livePnlUsd } = getLivePnl(trade);
       if (query && !trade.symbol.toLowerCase().includes(query.toLowerCase())) return false;
       if (filter === 'open' && trade.status !== 'open') return false;
@@ -879,7 +1019,25 @@ export default function TradesScreen() {
       if (filter === 'loss' && livePnlUsd >= 0) return false;
       return true;
     });
-  }, [filter, query, trades]);
+
+    // Apply sorting
+    result.sort((a, b) => {
+      if (sortBy === 'date') {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA; // newest first
+      } else if (sortBy === 'pnl') {
+        const pnlA = getDisplayedPnl(a).pnlUsd;
+        const pnlB = getDisplayedPnl(b).pnlUsd;
+        return pnlB - pnlA; // highest first
+      } else if (sortBy === 'amount') {
+        return b.displayAmountUsd - a.displayAmountUsd; // highest first
+      }
+      return 0;
+    });
+
+    return result;
+  }, [filter, query, trades, sortBy]);
 
   const totals = useMemo(() => {
     let totalProfit = 0;
@@ -907,24 +1065,17 @@ export default function TradesScreen() {
   const hasMore = paged.length < filtered.length;
   const openSolscanTx = useCallback(async (signature: string) => {
     const url = `https://solscan.io/tx/${encodeURIComponent(signature)}`;
-    const canOpen = await Linking.canOpenURL(url);
-    if (canOpen) {
-      await Linking.openURL(url);
-    }
+    await openExternalLink(url, {
+      title: 'View on Solscan',
+      message: 'This will open Solscan in your browser to view transaction details.',
+    });
   }, []);
 
   return (
     <SafeAreaView style={styles.root}>
+      <Toast message={toastMessage} visible={toastVisible} onHide={() => setToastVisible(false)} type={toastType} />
       <View style={styles.headerRow}>
         <Text style={styles.title}>Trades</Text>
-        <View style={styles.headerActions}>
-          <Pressable onPress={() => setShowSearch(v => !v)} style={styles.iconBtn}>
-            <MaterialIcons name={showSearch ? 'search-off' : 'search'} size={20} color="#fff" />
-          </Pressable>
-          <Pressable onPress={() => void loadTrades()} style={styles.refreshBtn}>
-            <Text style={styles.refreshText}>Refresh</Text>
-          </Pressable>
-        </View>
       </View>
 
       <View style={styles.summaryRow}>
@@ -969,11 +1120,37 @@ export default function TradesScreen() {
         {(['all', 'open', 'closed', 'profit', 'loss'] as Filter[]).map((item) => (
           <Pressable
             key={item}
-            onPress={() => setFilter(item)}
+            onPress={() => {
+              if (hapticsEnabled) {
+                Haptics.selectionAsync().catch(() => undefined);
+              }
+              setFilter(item);
+            }}
             style={[styles.filterChip, filter === item && styles.filterChipActive]}
           >
             <Text style={[styles.filterText, filter === item && styles.filterTextActive]}>
               {item.toUpperCase()}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {/* Sort dropdown */}
+      <View style={styles.sortRow}>
+        <Text style={styles.sortLabel}>Sort by:</Text>
+        {(['date', 'pnl', 'amount'] as const).map((item) => (
+          <Pressable
+            key={item}
+            onPress={() => {
+              if (hapticsEnabled) {
+                Haptics.selectionAsync().catch(() => undefined);
+              }
+              setSortBy(item);
+            }}
+            style={[styles.sortChip, sortBy === item && styles.sortChipActive]}
+          >
+            <Text style={[styles.sortText, sortBy === item && styles.sortTextActive]}>
+              {item === 'date' ? 'Date' : item === 'pnl' ? 'PnL' : 'Amount'}
             </Text>
           </Pressable>
         ))}
@@ -997,6 +1174,12 @@ export default function TradesScreen() {
       ) : error ? (
         <View style={styles.centerState}>
           <Text style={styles.error}>{error}</Text>
+          <Pressable 
+            onPress={() => void loadTrades(true)} 
+            style={styles.retryButton}
+          >
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </Pressable>
         </View>
       ) : (
         <FlatList
@@ -1010,6 +1193,7 @@ export default function TradesScreen() {
               closeTrade={(t) => void closeTrade(t)}
               markUncloseable={(t) => void markUncloseable(t)}
               openSolscanTx={(sig) => void openSolscanTx(sig)}
+              hapticsEnabled={hapticsEnabled}
             />
           )}
           contentContainerStyle={styles.listContent}
@@ -1018,6 +1202,15 @@ export default function TradesScreen() {
           }}
           onEndReachedThreshold={0.2}
           ListEmptyComponent={<Text style={styles.muted}>No trades found.</Text>}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#0a84ff"
+              colors={["#0a84ff"]}
+              progressBackgroundColor="rgba(28, 28, 30, 0.9)"
+            />
+          }
         />
       )}
     </SafeAreaView>
@@ -1025,44 +1218,28 @@ export default function TradesScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#05070f', padding: 16 },
+  root: { flex: 1, backgroundColor: '#000', padding: 16 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: '#fff', fontSize: 24, fontWeight: '800' },
   summaryRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
   summaryCard: {
     flex: 1,
     minWidth: 0,
-    borderRadius: 14,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(28, 28, 30, 0.7)',
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
-  summaryLabel: { color: '#8794b4', fontSize: 9, fontWeight: '800' },
-  summaryValue: { marginTop: 5, color: '#f4f7ff', fontSize: 12, fontWeight: '800' },
+  summaryLabel: { color: '#8794b4', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  summaryValue: { marginTop: 6, color: '#f4f7ff', fontSize: 13, fontWeight: '800', letterSpacing: 0.3 },
   summaryPositive: { color: '#4ade80' },
   summaryNegative: { color: '#ef4444' },
-  refreshBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-  },
-  iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  refreshText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   search: {
     height: 42,
     borderRadius: 12,
@@ -1074,6 +1251,19 @@ const styles = StyleSheet.create({
   },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 10 },
   totalsRow: { marginBottom: 12 },
+  sortRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  sortLabel: { color: '#8794b4', fontSize: 12, fontWeight: '600' },
+  sortChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  sortChipActive: { backgroundColor: 'rgba(10, 132, 255, 0.2)', borderColor: 'rgba(10, 132, 255, 0.5)' },
+  sortText: { color: '#8794b4', fontSize: 11, fontWeight: '600' },
+  sortTextActive: { color: '#0a84ff' },
   filterChip: {
     paddingVertical: 8,
     paddingHorizontal: 10,
@@ -1087,14 +1277,30 @@ const styles = StyleSheet.create({
   filterTextActive: { color: '#fff' },
   centerState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
   muted: { color: '#9db0db' },
-  error: { color: '#ff8a8a' },
+  error: { color: '#ff8a8a', textAlign: 'center', paddingHorizontal: 20, marginBottom: 16 },
+  retryButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   listContent: { paddingBottom: 110, gap: 10 },
   card: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(28, 28, 30, 0.7)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    borderRadius: 14,
-    padding: 12,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 16,
+    padding: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1114,18 +1320,23 @@ const styles = StyleSheet.create({
   green: { color: '#4ade80' },
   red: { color: '#ff6b81' },
   closeBtn: {
-    marginTop: 10,
-    borderRadius: 10,
-    paddingVertical: 8,
+    marginTop: 12,
+    borderRadius: 12,
+    paddingVertical: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255,120,120,0.6)',
-    backgroundColor: 'rgba(255,70,70,0.15)',
+    borderColor: 'rgba(255,120,120,0.5)',
+    backgroundColor: 'rgba(255,70,70,0.12)',
+    shadowColor: '#ff4646',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
   },
   closeBtnText: {
     color: '#ffd0d0',
     textAlign: 'center',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   closeBtnSecondary: {
     marginTop: 8,
@@ -1142,17 +1353,22 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   linkBtn: {
-    marginTop: 8,
-    borderRadius: 10,
-    paddingVertical: 8,
+    marginTop: 10,
+    borderRadius: 12,
+    paddingVertical: 10,
     borderWidth: 1,
-    borderColor: 'rgba(111,173,255,0.6)',
-    backgroundColor: 'rgba(111,173,255,0.14)',
+    borderColor: 'rgba(10, 132, 255, 0.5)',
+    backgroundColor: 'rgba(10, 132, 255, 0.12)',
+    shadowColor: '#0a84ff',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
   },
   linkBtnText: {
-    color: '#d6e7ff',
+    color: '#6fadff',
     textAlign: 'center',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
 });

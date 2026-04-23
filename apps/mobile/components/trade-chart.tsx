@@ -152,7 +152,7 @@ const styles = StyleSheet.create({
   badgeRow: {
     alignItems: 'flex-end',
     paddingHorizontal: 4,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   badge: {
     borderRadius: 999,
@@ -174,7 +174,7 @@ const styles = StyleSheet.create({
   },
   chartArea: {
     width: '100%',
-    height: 118,
+    height: 128,
   },
   timeRow: {
     flexDirection: 'row',
@@ -185,7 +185,7 @@ const styles = StyleSheet.create({
   timeBtn: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 7,
+    paddingVertical: 5,
     borderRadius: 999,
   },
   timeBtnActive: {
@@ -193,7 +193,7 @@ const styles = StyleSheet.create({
   },
   timeBtnText: {
     color: 'rgba(255,255,255,0.4)',
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '600',
   },
   timeBtnTextActive: {

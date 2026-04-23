@@ -7,12 +7,12 @@ import "fast-text-encoding";
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import Constants from "expo-constants";
 import { Stack, usePathname, useRouter } from 'expo-router';
-import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Text, View } from "react-native";
 import { PrivyProviderWrapper, usePrivy } from "@/lib/privy-runtime";
 import { OnboardingScreen } from '@/components/onboarding-screen';
+import { LoadingScreen } from '@/components/loading-screen';
 import React from 'react';
 
 import { AuthProvider, useAuth } from '@/contexts/auth-context';
@@ -68,7 +68,7 @@ export default function RootLayout() {
         appearance: {
           theme: 'dark',
         },
-        loginMethods: ['twitter', 'email'],
+        loginMethods: ['twitter', 'apple', 'email'],
         // Privy Expo SDK expects a path, not a full scheme URI.
         // Expo will build the full deep link with the correct scheme.
         redirectUri: "/privy/oauth",
@@ -103,11 +103,11 @@ export default function RootLayout() {
 
 function AuthGatedApp() {
   const { loading, requiresDeposit, balanceLoading, isLoggedIn } = useAuth();
-  const { twitterProfile } = useWalletContext();
   const { user: privyUser } = usePrivy();
   const { tradingWalletAddress, walletAddress } = useWalletContext();
   const router = useRouter();
   const pathname = usePathname();
+  const [isInitializing, setIsInitializing] = React.useState(true);
 
   React.useEffect(() => {
     if (loading || balanceLoading) return;
@@ -123,20 +123,42 @@ function AuthGatedApp() {
       ? (privyUser as any).linkedAccounts
       : [];
   const hasEmail = linkedAccounts.some((account: any) => account?.type === "email");
+  const hasTwitter = linkedAccounts.some((account: any) => account?.type === "twitter_oauth");
+  const hasApple = linkedAccounts.some((account: any) => account?.type === "apple_oauth" || account?.type === "apple");
+  const hasSocialLogin = hasTwitter || hasApple;
   const hasWallet = Boolean(tradingWalletAddress || walletAddress);
 
-  // Require Twitter + Email + Wallet before proceeding
-  if (!loading && (!isLoggedIn || !twitterProfile || !hasEmail || !hasWallet)) {
+  // Determine what needs to be shown
+  const showOnboarding = !isLoggedIn || !hasSocialLogin || !hasEmail || !hasWallet;
+
+  // Show loading screen while initializing or checking
+  React.useEffect(() => {
+    if (!loading && !balanceLoading) {
+      // Small delay to ensure smooth transition
+      const timer = setTimeout(() => {
+        setIsInitializing(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [loading, balanceLoading]);
+
+  // Show loading screen during initialization
+  if (isInitializing || loading || balanceLoading) {
+    return <LoadingScreen />;
+  }
+
+  // Show onboarding if needed (includes age verification and risk warning)
+  if (showOnboarding) {
     return <OnboardingScreen />;
   }
 
+  // All checks passed, show main app
   return (
-    <>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="deposit" options={{ title: 'Fund Wallet' }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-    </>
+    <Stack>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="terms" options={{ headerShown: false }} />
+      <Stack.Screen name="deposit" options={{ title: 'Fund Wallet' }} />
+      <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+    </Stack>
   );
 }

@@ -9,12 +9,16 @@ type TradeSettingsState = {
   tpROI: number;
   stopLoss: number;
   activeChain: ChainType;
+  showDisclaimer: boolean;
+  hapticsEnabled: boolean;
   hydrated: boolean;
   setProfileName: (value: string) => void;
   setTradeAmount: (value: number) => void;
   setTpROI: (value: number) => void;
   setStopLoss: (value: number) => void;
   setActiveChain: (value: ChainType) => void;
+  setShowDisclaimer: (value: boolean) => void;
+  setHapticsEnabled: (value: boolean) => void;
   resetSettings: () => void;
 };
 
@@ -24,11 +28,13 @@ const MAX_TRADE_AMOUNT_USD = 500;
 const MIN_PERCENT = 0.1;
 
 const DEFAULT_SETTINGS = {
-  profileName: 'Trader',
+  profileName: '',
   tradeAmount: 10,
   tpROI: 50,
   stopLoss: 15,
   activeChain: 'solana' as ChainType,
+  showDisclaimer: true,
+  hapticsEnabled: true,
 };
 
 const TradeSettingsContext = createContext<TradeSettingsState | undefined>(undefined);
@@ -51,6 +57,8 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
   const [tpROI, setTpROI] = useState(DEFAULT_SETTINGS.tpROI);
   const [stopLoss, setStopLoss] = useState(DEFAULT_SETTINGS.stopLoss);
   const [activeChain, setActiveChain] = useState<ChainType>(DEFAULT_SETTINGS.activeChain);
+  const [showDisclaimer, setShowDisclaimer] = useState(DEFAULT_SETTINGS.showDisclaimer);
+  const [hapticsEnabled, setHapticsEnabled] = useState(DEFAULT_SETTINGS.hapticsEnabled);
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate on mount
@@ -59,17 +67,24 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
     const hydrate = async () => {
       try {
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (!raw || !active) return;
+        if (!raw || !active) {
+          // First time user - ensure disclaimer is shown
+          if (active) setHydrated(true);
+          return;
+        }
         const parsed = JSON.parse(raw) as Partial<typeof DEFAULT_SETTINGS>;
         if (typeof parsed.profileName === 'string') setProfileName(parsed.profileName);
         if (typeof parsed.tradeAmount === 'number') setTradeAmount(parsed.tradeAmount);
         if (typeof parsed.tpROI === 'number') setTpROI(parsed.tpROI);
         if (typeof parsed.stopLoss === 'number') setStopLoss(parsed.stopLoss);
+        // Only load showDisclaimer from storage if it exists, otherwise keep default (true)
+        if (typeof parsed.showDisclaimer === 'boolean') setShowDisclaimer(parsed.showDisclaimer);
+        if (typeof parsed.hapticsEnabled === 'boolean') setHapticsEnabled(parsed.hapticsEnabled);
         if (parsed.activeChain === 'solana' || parsed.activeChain === 'base') {
           setActiveChain(parsed.activeChain);
         }
       } catch {
-        // ignore — defaults will be used
+        // ignore — defaults will be used (including showDisclaimer: true)
       } finally {
         if (active) setHydrated(true);
       }
@@ -108,12 +123,24 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
     void mergePersist({ activeChain: value });
   }, []);
 
+  const setShowDisclaimerSafe = useCallback((value: boolean) => {
+    setShowDisclaimer(value);
+    void mergePersist({ showDisclaimer: value });
+  }, []);
+
+  const setHapticsEnabledSafe = useCallback((value: boolean) => {
+    setHapticsEnabled(value);
+    void mergePersist({ hapticsEnabled: value });
+  }, []);
+
   const resetSettings = useCallback(() => {
     setProfileName(DEFAULT_SETTINGS.profileName);
     setTradeAmount(DEFAULT_SETTINGS.tradeAmount);
     setTpROI(DEFAULT_SETTINGS.tpROI);
     setStopLoss(DEFAULT_SETTINGS.stopLoss);
     setActiveChain(DEFAULT_SETTINGS.activeChain);
+    setShowDisclaimer(DEFAULT_SETTINGS.showDisclaimer);
+    setHapticsEnabled(DEFAULT_SETTINGS.hapticsEnabled);
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS));
   }, []);
 
@@ -124,18 +151,22 @@ export function TradeSettingsProvider({ children }: { children: React.ReactNode 
       tpROI,
       stopLoss,
       activeChain,
+      showDisclaimer,
+      hapticsEnabled,
       hydrated,
       setProfileName: setProfileNameSafe,
       setTradeAmount: setTradeAmountSafe,
       setTpROI: setTpROISafe,
       setStopLoss: setStopLossSafe,
       setActiveChain: setActiveChainSafe,
+      setShowDisclaimer: setShowDisclaimerSafe,
+      setHapticsEnabled: setHapticsEnabledSafe,
       resetSettings,
     }),
     [
-      activeChain, hydrated, profileName, resetSettings,
-      setActiveChainSafe, setProfileNameSafe, setStopLossSafe,
-      setTpROISafe, setTradeAmountSafe, stopLoss, tpROI, tradeAmount,
+      activeChain, hapticsEnabled, hydrated, profileName, resetSettings,
+      setActiveChainSafe, setHapticsEnabledSafe, setProfileNameSafe, setShowDisclaimerSafe, setStopLossSafe,
+      setTpROISafe, setTradeAmountSafe, showDisclaimer, stopLoss, tpROI, tradeAmount,
     ]
   );
 

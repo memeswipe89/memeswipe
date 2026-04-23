@@ -355,17 +355,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     async (amountSol: number, toAddress?: string): Promise<WithdrawResult> => {
       const destination = String(toAddress || "").trim();
       if (!destination) {
-        throw new Error("Destination wallet address is required");
+        throw new Error("Please enter a destination wallet address");
       }
 
       const lamports = Math.floor(Number(amountSol) * 1_000_000_000);
       if (!Number.isFinite(lamports) || lamports <= 0) {
-        throw new Error("Invalid withdraw amount");
+        throw new Error("Please enter a valid amount");
       }
 
       const fromAddress = await getOrCreateEmbeddedWalletAddress();
       if (!fromAddress) {
-        throw new Error("Embedded wallet not found");
+        throw new Error("Wallet not found. Please try again.");
       }
 
       const connection = new Connection(SOLANA_MAINNET_RPC, "confirmed");
@@ -405,23 +405,41 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!signedTx) {
-        throw new Error("Embedded wallet could not sign withdraw transaction");
+        throw new Error("Could not sign transaction. Please try again.");
       }
 
-      const txSignature = await connection.sendRawTransaction(signedTx.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
-      });
+      try {
+        const txSignature = await connection.sendRawTransaction(signedTx.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
 
-      await connection.confirmTransaction(txSignature, "confirmed");
+        await connection.confirmTransaction(txSignature, "confirmed");
 
-      const remainingLamports = await connection.getBalance(fromPubkey, "confirmed");
+        const remainingLamports = await connection.getBalance(fromPubkey, "confirmed");
 
-      return {
-        txSignature,
-        withdrawnSol: Number(amountSol),
-        remainingSol: Number(remainingLamports / 1_000_000_000),
-      };
+        return {
+          txSignature,
+          withdrawnSol: Number(amountSol),
+          remainingSol: Number(remainingLamports / 1_000_000_000),
+        };
+      } catch (error: any) {
+        // Convert technical blockchain errors to user-friendly messages
+        const errorStr = String(error?.message || error || '').toLowerCase();
+        
+        if (errorStr.includes('insufficient funds') || errorStr.includes('account (0)') || errorStr.includes('insufficient lamports')) {
+          throw new Error(`Insufficient balance. You need at least ${amountSol} SOL plus network fees to complete this transaction.`);
+        } else if (errorStr.includes('invalid') && errorStr.includes('address')) {
+          throw new Error('Invalid destination address. Please check the address and try again.');
+        } else if (errorStr.includes('blockhash not found')) {
+          throw new Error('Network error. Please try again in a moment.');
+        } else if (errorStr.includes('simulation failed')) {
+          throw new Error('Transaction failed. You may not have enough SOL to cover the transaction and network fees.');
+        } else {
+          // Re-throw with original message if we don't recognize it
+          throw new Error('Transaction failed. Please try again or contact support.');
+        }
+      }
     },
     [getEmbeddedSolanaProvider, getOrCreateEmbeddedWalletAddress]
   );

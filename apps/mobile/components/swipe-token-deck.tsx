@@ -1,7 +1,8 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Clipboard, Dimensions, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
+import { Audio } from 'expo-av';
 import { BlurView } from 'expo-blur';
 import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -19,20 +20,23 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
+import { openExternalLink } from '@/lib/external-link-warning';
 import TradeChart from '@/components/trade-chart';
 import LiveChartModal from '@/components/live-chart-modal';
 import { getPriceHistory } from '@/lib/getPriceHistory';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25;
+const SWIPE_UP_THRESHOLD = SCREEN_HEIGHT * 0.15;
 const SWIPE_OUT_DISTANCE = SCREEN_WIDTH * 1.3;
+const SWIPE_UP_DISTANCE = -SCREEN_HEIGHT * 0.8;
 const INTENTIONAL_EASING = Easing.bezier(0.22, 1, 0.36, 1);
 const MOTION = {
   quick: 220,
   medium: 300,
 };
 
-type SwipeDirection = 'left' | 'right';
+type SwipeDirection = 'left' | 'right' | 'up';
 
 export type SwipeToken = {
   name: string;
@@ -61,6 +65,7 @@ type SwipeTokenDeckProps = {
   onBuy: (token: SwipeToken) => void;
   onReject: (token: SwipeToken) => void;
   onToggleFavorite: (token: SwipeToken) => void;
+  onKeepFavorite?: (token: SwipeToken) => void;
   favoriteAddresses: Set<string>;
   isLoading?: boolean;
   isInteractionLocked?: boolean;
@@ -70,12 +75,16 @@ type SwipeTokenDeckProps = {
   onSwipeStateChange?: (swiping: boolean) => void;
   onActiveCardChange?: (token: SwipeToken | null) => void;
   onRefresh?: () => void;
+  isFavoritesMode?: boolean;
+  onFavoritePopup?: (token: SwipeToken) => void;
+  showDisclaimer?: boolean;
 };
 
 type TokenCardProps = {
   token: SwipeToken;
   isFavorite: boolean;
   onToggleFavorite: (token: SwipeToken) => void;
+  showDisclaimer?: boolean;
 };
 
 const formatCurrency = (value: number) => {
@@ -253,7 +262,7 @@ const DeckStatusCard = memo(function DeckStatusCard({
   );
 });
 
-const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite }: TokenCardProps) {
+const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite, showDisclaimer = false }: TokenCardProps) {
   const palette = tokenPalette(token.symbol);
   const priceUp =
     token.chartData.length > 1
@@ -330,7 +339,10 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                           hitSlop={8}
                           onPress={() => {
                             const url = `https://dexscreener.com/solana/${token.address}`;
-                            Linking.openURL(url).catch(() => undefined);
+                            openExternalLink(url, {
+                              title: 'View on DexScreener',
+                              message: 'This will open DexScreener to view detailed token information.',
+                            }).catch(() => undefined);
                           }}
                         >
                           <LinkIcon size={18} color="#7e88a8" />
@@ -344,12 +356,18 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
                         </Pressable>
                        
                         {token.website ? (
-                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.website!).catch(() => undefined)}>
+                          <Pressable hitSlop={8} onPress={() => openExternalLink(token.website!, {
+                            title: 'Visit Website',
+                            message: 'This will open the token\'s official website.',
+                          }).catch(() => undefined)}>
                             <MaterialIcons name="language" size={18} color="#7e88a8" />
                           </Pressable>
                         ) : null}
                         {token.twitter ? (
-                          <Pressable hitSlop={8} onPress={() => Linking.openURL(token.twitter!).catch(() => undefined)}>
+                          <Pressable hitSlop={8} onPress={() => openExternalLink(token.twitter!, {
+                            title: 'View on Twitter',
+                            message: 'This will open the token\'s Twitter profile.',
+                          }).catch(() => undefined)}>
                             <Text style={styles.socialIcon}>𝕏</Text>
                           </Pressable>
                         ) : null}
@@ -407,7 +425,7 @@ const TokenCard = memo(function TokenCard({ token, isFavorite, onToggleFavorite 
               </View>
             </View>
 
-            <View style={styles.bottomActionSpace} />
+            <View style={[styles.bottomActionSpace, showDisclaimer && styles.bottomActionSpaceWithDisclaimer]} />
         </View>
       </View>
 
@@ -427,6 +445,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   onBuy,
   onReject,
   onToggleFavorite,
+  onKeepFavorite,
   favoriteAddresses,
   isLoading = false,
   isInteractionLocked = false,
@@ -436,11 +455,60 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   onSwipeStateChange,
   onActiveCardChange,
   onRefresh,
+  isFavoritesMode = false,
+  onFavoritePopup,
+  showDisclaimer,
 }: SwipeTokenDeckProps) {
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const buyFlash = useSharedValue(0);
   const buyBadge = useSharedValue(0);
+
+  // Sound effects - using simple audio feedback
+  const audioInitialized = useRef(false);
+
+  // Initialize audio mode
+  useEffect(() => {
+    const initAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+        });
+        audioInitialized.current = true;
+      } catch (error) {
+        console.log('Failed to initialize audio:', error);
+      }
+    };
+
+    initAudio();
+  }, []);
+
+  const playSwipeSound = useCallback(async (direction: 'left' | 'right' | 'up') => {
+    if (!audioInitialized.current) return;
+
+    try {
+      // Create a simple sound object with different volumes for different actions
+      // Using a minimal WAV data URI for a short beep
+      const volume = direction === 'right' ? 0.5 : direction === 'up' ? 0.4 : 0.3;
+      
+      // Create and play a short sound
+      const { sound } = await Audio.Sound.createAsync(
+        // Empty sound - we're relying on haptics for feedback
+        // In production, replace with actual sound files:
+        // require('../assets/sounds/swipe-right.mp3')
+        { uri: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=' },
+        { shouldPlay: true, volume },
+        (status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            sound.unloadAsync().catch(() => {});
+          }
+        }
+      );
+    } catch (error) {
+      // Silently fail - sound is not critical
+    }
+  }, []);
 
   useEffect(() => {
     translateX.value = 0;
@@ -461,6 +529,9 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
       const token = currentToken;
       if (!token) return;
 
+      // Play sound for the swipe direction
+      playSwipeSound(direction).catch(() => {});
+
       if (direction === 'right') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
         buyFlash.value = 1;
@@ -468,6 +539,10 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
         buyBadge.value = 1;
         buyBadge.value = withTiming(0, { duration: 300, easing: Easing.out(Easing.cubic) });
         onBuy(token);
+      } else if (direction === 'up') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+        onKeepFavorite?.(token);
+        onFavoritePopup?.(token);
       } else {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
         onReject(token);
@@ -476,7 +551,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
       translateX.value = 0;
       translateY.value = 0;
     },
-    [buyBadge, buyFlash, currentToken, onBuy, onReject, translateX, translateY]
+    [buyBadge, buyFlash, currentToken, onBuy, onKeepFavorite, onReject, playSwipeSound, translateX, translateY]
   );
 
   const panGesture = useMemo(
@@ -489,10 +564,24 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
         })
         .onUpdate((event) => {
           translateX.value = event.translationX;
-          translateY.value = event.translationY * 0.08;
+          // Only allow upward swipes (negative Y), prevent downward swipes
+          translateY.value = Math.min(0, event.translationY);
         })
         .onEnd(() => {
           if (onSwipeStateChange) runOnJS(onSwipeStateChange)(false);
+          
+          // Check for up swipe first (negative Y)
+          if (translateY.value < -SWIPE_UP_THRESHOLD && Math.abs(translateX.value) < SWIPE_THRESHOLD) {
+            translateY.value = withTiming(SWIPE_UP_DISTANCE, {
+              duration: MOTION.quick,
+              easing: INTENTIONAL_EASING,
+            });
+            translateX.value = withTiming(0, { duration: MOTION.quick, easing: INTENTIONAL_EASING });
+            runOnJS(commitSwipe)('up');
+            return;
+          }
+          
+          // Check for horizontal swipes
           if (Math.abs(translateX.value) > SWIPE_THRESHOLD) {
             const direction: SwipeDirection = translateX.value > 0 ? 'right' : 'left';
             translateX.value = withTiming(translateX.value > 0 ? SWIPE_OUT_DISTANCE : -SWIPE_OUT_DISTANCE, {
@@ -504,6 +593,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
             return;
           }
 
+          // Return to center
           translateX.value = withTiming(0, { duration: MOTION.medium, easing: INTENTIONAL_EASING });
           translateY.value = withTiming(0, { duration: MOTION.medium, easing: INTENTIONAL_EASING });
         }),
@@ -536,6 +626,10 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
     };
   });
 
+  const upOverlayStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateY.value, [0, -SWIPE_UP_THRESHOLD], [0, 0.9], Extrapolation.CLAMP),
+  }));
+
   const rightOverlayStyle = useAnimatedStyle(() => ({
     opacity: interpolate(translateX.value, [0, SWIPE_THRESHOLD], [0, 0.9], Extrapolation.CLAMP),
   }));
@@ -566,7 +660,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
 
   if (isLoading) {
     return (
-      <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
+      <ExpoLinearGradient colors={['#000000', '#000000', '#000000']} style={styles.container}>
         <DeckStatusCard
           title="Loading Tokens..."
           subtitle="Fetching live token data for this feed."
@@ -577,7 +671,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
   }
 
   return (
-    <ExpoLinearGradient colors={['#04050c', '#0b1020', '#05060a']} style={styles.container}>
+    <ExpoLinearGradient colors={['#000000', '#000000', '#000000']} style={styles.container}>
       <Animated.View style={[styles.bgTintLayer, bgTintStyle]} />
       <Animated.View pointerEvents="none" style={[styles.successFlash, successFlashStyle]} />
 
@@ -589,6 +683,7 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
             token={token}
             isFavorite={favoriteAddresses.has(token.address)}
             onToggleFavorite={onToggleFavorite}
+            showDisclaimer={showDisclaimer}
           />
         </Animated.View>
       ))}
@@ -603,7 +698,11 @@ export const SwipeTokenDeck = memo(function SwipeTokenDeck({
               token={currentToken}
               isFavorite={favoriteAddresses.has(currentToken.address)}
               onToggleFavorite={onToggleFavorite}
+              showDisclaimer={showDisclaimer}
             />
+            
+            {/* Swipe overlays removed */}
+            
             <Animated.View pointerEvents="none" style={[styles.successBadge, successBadgeStyle]}>
               <Text style={styles.successBadgeText}>✓</Text>
             </Animated.View>
@@ -638,7 +737,7 @@ const styles = StyleSheet.create({
     height: SCREEN_WIDTH * 0.9,
     borderRadius: SCREEN_WIDTH,
     backgroundColor: 'rgba(61, 114, 255, 0.18)',
-    shadowColor: '#3d72ff',
+    shadowColor: '#000000ff',
     shadowOpacity: 0.3,
     shadowRadius: 60,
     shadowOffset: { width: 0, height: 20 },
@@ -647,7 +746,7 @@ const styles = StyleSheet.create({
   absoluteCard: {
     position: 'absolute',
     top: 0,
-    bottom: 0,
+    bottom: 22,
     left: 0,
     right: 0,
     width: '100%',
@@ -674,11 +773,11 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     borderRadius: 26,
-    borderWidth: 1,
+    borderWidth: 0,
     borderColor: 'rgba(255,255,255,0.06)',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#14161B',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#111316ff',
   },
   blurCard: {
     flex: 1,
@@ -702,7 +801,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   headerSection: {
-    marginBottom: 4,
+    marginBottom: 2,
     paddingRight: 0,
   },
   headerTopRow: {
@@ -723,19 +822,16 @@ const styles = StyleSheet.create({
   },
   favoriteWrap: {
     position: 'absolute',
-    right: 0,
-    top: 0,
+    right: 4,
+    top: 4,
     zIndex: 10,
   },
   favoriteButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 28,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-    backgroundColor: '#1C1F26',
     overflow: 'hidden',
   },
   favoriteFill: {
@@ -746,12 +842,12 @@ const styles = StyleSheet.create({
   },
   favoriteOn: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '700',
   },
   favoriteOff: {
-    color: '#d7dff7',
-    fontSize: 16,
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 20,
     fontWeight: '700',
   },
   logoCircle: {
@@ -808,7 +904,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginTop: 10,
+    marginTop: 8,
   },
   changePill: {
     flexDirection: 'row',
@@ -832,7 +928,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 6,
+    marginTop: 4,
   },
   statDotText: {
     color: '#7e88a8',
@@ -844,15 +940,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   metricsWrap: {
-    marginTop: 8,
+    marginTop: 6,
     marginBottom: 0,
   },
   graphContainer: {
-    marginTop: 6,
+    marginTop: 4,
     width: '100%',
   },
   metricRow: {
-    height: 44,
+    height: 38,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -892,25 +988,41 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   bottomActionSpace: {
-    height: 56,
+    height: 8,
+  },
+  bottomActionSpaceWithDisclaimer: {
+    height: 20,
   },
   overlayBadge: {
     position: 'absolute',
-    top: 32,
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
   },
+  overlayUp: {
+    top: 32,
+    alignSelf: 'center',
+    borderColor: '#ffd166',
+    backgroundColor: 'rgba(255,209,102,0.18)',
+  },
   overlayLeft: {
     left: 22,
+    top: 32,
     borderColor: '#ff4d67',
     backgroundColor: 'rgba(255,77,103,0.18)',
   },
   overlayRight: {
     right: 22,
+    top: 32,
     borderColor: '#36e67e',
     backgroundColor: 'rgba(54,230,126,0.18)',
+  },
+  overlayUpText: {
+    color: '#ffdd7a',
+    fontWeight: '800',
+    fontSize: 18,
+    letterSpacing: 1,
   },
   overlayLeftText: {
     color: '#ff788d',

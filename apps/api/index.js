@@ -46,7 +46,8 @@ const FEED_SOURCE_ORDER = ["pumpfun", "bags", "birdeye", "dexscreener"];
 const MIN_BAGS_VISIBLE = 50;
 
 // Cache
-const CACHE_TIME_MS = 20 * 1000;
+const CACHE_TIME_MS = 30 * 1000; // Increased to 30 seconds for better performance
+const API_TIMEOUT_MS = 3000; // 3 second timeout per API call
 
 let graduatedCache = null;
 let graduatedCacheTime = 0;
@@ -977,29 +978,59 @@ async function fetchBirdeyeTokens() {
     .filter((token) => Boolean(token.address));
 }
 
+function withTimeout(promise, timeoutMs = API_TIMEOUT_MS) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('API timeout')), timeoutMs)
+    )
+  ]);
+}
+
 const SOURCE_FETCHERS = [
   { name: "pumpfun", fetcher: fetchPumpfunTokens },
   { name: "bags", fetcher: fetchBagsTokens },
   { name: "birdeye", fetcher: fetchBirdeyeTokens },
   { name: "dexscreener", fetcher: fetchDexscreenerLatestTokens },
 ];
+
 async function buildGraduatedFeed() {
   const sourceBuckets = FEED_SOURCE_ORDER.reduce((acc, key) => {
     acc[key] = [];
     return acc;
   }, {});
 
-  for (const source of SOURCE_FETCHERS) {
+  // OPTIMIZATION: Run all API calls in parallel instead of sequentially
+  const fetchPromises = SOURCE_FETCHERS.map(async (source) => {
     try {
-      const tokens = await source.fetcher();
-      if (sourceBuckets[source.name]) {
-        sourceBuckets[source.name].push(...tokens);
-      } else {
-        sourceBuckets[source.name] = [...tokens];
-      }
-      logTokensBySource(source.name, tokens, "strict");
+      console.log(`[${source.name}] Starting fetch...`);
+      const startTime = Date.now();
+      
+      // Add timeout to prevent hanging
+      const tokens = await withTimeout(source.fetcher(), API_TIMEOUT_MS);
+      
+      const duration = Date.now() - startTime;
+      console.log(`[${source.name}] Completed in ${duration}ms, got ${tokens.length} tokens`);
+      
+      return { name: source.name, tokens, success: true };
     } catch (error) {
       console.error(`[${source.name}] fetch failed: ${error.message}`);
+      return { name: source.name, tokens: [], success: false, error: error.message };
+    }
+  });
+
+  // Wait for all API calls to complete (or timeout)
+  const results = await Promise.all(fetchPromises);
+  
+  // Process results
+  for (const result of results) {
+    if (result.success && result.tokens.length > 0) {
+      if (sourceBuckets[result.name]) {
+        sourceBuckets[result.name].push(...result.tokens);
+      } else {
+        sourceBuckets[result.name] = [...result.tokens];
+      }
+      logTokensBySource(result.name, result.tokens, "strict");
     }
   }
 
@@ -1188,14 +1219,27 @@ ROUTES
 */
 
 app.get("/health", (req, res) => {
+  const now = Date.now();
+  const cacheAge = graduatedCacheTime ? now - graduatedCacheTime : null;
+  const cacheValid = graduatedCache && cacheAge && cacheAge < CACHE_TIME_MS;
+  
   res.json({
     status: "ok",
     service: "memeswipe-api",
     hasMoralisKey: Boolean(MORALIS_API_KEY),
+    cache: {
+      valid: cacheValid,
+      age_ms: cacheAge,
+      tokens_cached: graduatedCache ? graduatedCache.length : 0,
+      cache_ttl_ms: CACHE_TIME_MS
+    },
+    timestamp: new Date().toISOString()
   });
 });
 
 app.get("/api/feed/solana/graduated", async (req, res) => {
+  const startTime = Date.now();
+  
   try {
     console.log("Route hit: /api/feed/solana/graduated");
 
@@ -1206,6 +1250,8 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const cursor = req.query.cursor ? Number(req.query.cursor) : 0;
 
     const fullFeed = await getCachedGraduatedFeed();
+    const cacheHit = graduatedCache && (Date.now() - graduatedCacheTime < CACHE_TIME_MS);
+    
     printTokenNamesToTerminal(fullFeed, 'FULL_FEED_TOKENS');
     const start = Number.isFinite(cursor) ? cursor : 0;
     const end = start + limit;
@@ -1213,21 +1259,35 @@ app.get("/api/feed/solana/graduated", async (req, res) => {
     const pageTokens = fullFeed.slice(start, end);
     const nextCursor = end < fullFeed.length ? String(end) : null;
 
+    const duration = Date.now() - startTime;
+    console.log(`[PERFORMANCE] Feed request completed in ${duration}ms (cache hit: ${cacheHit})`);
+
     printTokenNamesToTerminal(pageTokens, "MOBILE GRADUATED FEED PAGE");
     logFinalFeedTokens(pageTokens, 10);
 
     return res.json({
       tokens: pageTokens,
       cursor: nextCursor,
+      _meta: {
+        duration_ms: duration,
+        cache_hit: cacheHit,
+        total_tokens: fullFeed.length,
+        returned_tokens: pageTokens.length
+      }
     });
   } catch (error) {
-    console.error("GET /api/feed/solana/graduated error:", error.message);
+    const duration = Date.now() - startTime;
+    console.error(`GET /api/feed/solana/graduated error (${duration}ms):`, error.message);
 
     return res.status(500).json({
       tokens: [],
       cursor: null,
       error: "Failed to fetch graduated tokens",
       details: error.message,
+      _meta: {
+        duration_ms: duration,
+        cache_hit: false
+      }
     });
   }
 });

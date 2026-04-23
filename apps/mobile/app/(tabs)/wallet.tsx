@@ -1,27 +1,41 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Keyboard,
-  Platform,
+  Modal,
   Pressable,
+  RefreshControl,
   ScrollView,
   Text,
   TextInput,
   View,
-  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
+import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useLinkEmail, usePrivy } from "@privy-io/expo";
 import { Ionicons } from "@expo/vector-icons";
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import QRCode from 'react-native-qrcode-svg';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  interpolate,
+  runOnJS,
+} from 'react-native-reanimated';
+import { BlurView } from 'expo-blur';
 import { useAuth } from "@/contexts/auth-context";
 import { useWalletContext } from "@/contexts/wallet-context";
 import { useTradeSettings } from "@/contexts/trade-settings-context";
 import { getUserFriendlyAuthError } from "@/lib/user-friendly-errors";
+import { openExternalLink, openExternalLinkSilent } from "@/lib/external-link-warning";
 import { SolanaIcon } from "@/components/icons/SolanaIcon";
 import { API_BASE } from "@/lib/api-base";
 
@@ -46,27 +60,376 @@ const getSolBalance = async (address: string): Promise<number> => {
       params: [address],
     }),
   });
-
   const json = (await response.json()) as { result?: { value?: number } };
   const lamports = Number(json?.result?.value || 0);
   return lamports / 1_000_000_000;
 };
 
-const truncateMiddle = (value: string, keep = 6) => {
+const truncateMiddle = (value: string, keep = 5) => {
   if (value.length <= keep * 2 + 3) return value;
   return `${value.slice(0, keep)}...${value.slice(-keep)}`;
 };
-const formatSol = (value: number) => `${value.toFixed(9)} SOL`;
 
+const formatSol = (value: number) => `${value.toFixed(4)} SOL`;
+
+// ─── Toast notification ───────────────────────────────────────────────────────
+function Toast({ message, visible, onHide }: { message: string; visible: boolean; onHide: () => void }) {
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (visible) {
+      opacity.value = withTiming(1, { duration: 200 });
+      const timer = setTimeout(() => {
+        opacity.value = withTiming(0, { duration: 200 }, (finished) => {
+          if (finished) runOnJS(onHide)();
+        });
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [visible, opacity, onHide]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: interpolate(opacity.value, [0, 1], [-20, 0]) }],
+  }));
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View style={[{
+      position: 'absolute',
+      top: 60,
+      left: 20,
+      right: 20,
+      zIndex: 1000,
+    }, animatedStyle]}>
+      <View style={{
+        backgroundColor: 'rgba(48, 209, 88, 0.95)',
+        borderRadius: 12,
+        padding: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+      }}>
+        <Ionicons name="checkmark-circle" size={24} color="#fff" />
+        <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700', flex: 1 }}>{message}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── QR Code Modal ────────────────────────────────────────────────────────────
+function QRCodeModal({ visible, address, onClose }: { visible: boolean; address: string; onClose: () => void }) {
+  if (!visible || !address) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1 }} onPress={onClose}>
+        <BlurView intensity={30} tint="dark" style={{ flex: 1 }} />
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View style={{
+              backgroundColor: 'rgba(28, 28, 30, 0.98)',
+              borderRadius: 24,
+              padding: 30,
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.1)',
+              shadowColor: '#000',
+              shadowOpacity: 0.5,
+              shadowRadius: 20,
+              shadowOffset: { width: 0, height: 10 },
+            }}>
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 8, letterSpacing: 0.3 }}>
+                Deposit SOL
+              </Text>
+              <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14, marginBottom: 24, textAlign: 'center', fontWeight: '500' }}>
+                Scan this QR code to deposit SOL
+              </Text>
+              
+              <View style={{
+                backgroundColor: '#fff',
+                padding: 20,
+                borderRadius: 16,
+                marginBottom: 20,
+              }}>
+                <QRCode value={address} size={220} />
+              </View>
+
+              <Text style={{ 
+                color: 'rgba(255,255,255,0.5)', 
+                fontSize: 12, 
+                textAlign: 'center',
+                fontFamily: 'monospace',
+                marginBottom: 20,
+                fontWeight: '600',
+              }}>
+                {truncateMiddle(address, 8)}
+              </Text>
+
+              <Pressable
+                onPress={onClose}
+                style={{
+                  paddingHorizontal: 32,
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.2)',
+                }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Close</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ─── Avatar initials ──────────────────────────────────────────────────────────
+function Avatar({ name, size = 80 }: { name: string; size?: number }) {
+  const initials = name
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: "rgba(42, 42, 42, 0.6)",
+        alignItems: "center",
+        justifyContent: "center",
+        borderWidth: 3,
+        borderColor: "rgba(255,255,255,0.1)",
+        shadowColor: "#000",
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 4 },
+      }}
+    >
+      <Text style={{ color: "#fff", fontSize: size * 0.35, fontWeight: "800", letterSpacing: 1 }}>
+        {initials || "?"}
+      </Text>
+    </View>
+  );
+}
+
+// ─── Menu row ─────────────────────────────────────────────────────────────────
+function MenuRow({
+  icon,
+  iconBg,
+  label,
+  value,
+  onPress,
+  last = false,
+  destructive = false,
+  rightElement,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  iconBg: string;
+  label: string;
+  value?: string;
+  onPress?: () => void;
+  last?: boolean;
+  destructive?: boolean;
+  rightElement?: React.ReactNode;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        backgroundColor: pressed ? "rgba(255,255,255,0.05)" : "transparent",
+        borderBottomWidth: last ? 0 : 0.5,
+        borderBottomColor: "rgba(255,255,255,0.06)",
+      })}
+    >
+      <View
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 10,
+          backgroundColor: iconBg,
+          alignItems: "center",
+          justifyContent: "center",
+          marginRight: 14,
+          shadowColor: iconBg,
+          shadowOpacity: 0.4,
+          shadowRadius: 8,
+          shadowOffset: { width: 0, height: 2 },
+        }}
+      >
+        <Ionicons name={icon} size={18} color="#fff" />
+      </View>
+      <Text style={{ flex: 1, color: destructive ? "#ff453a" : "#fff", fontSize: 16, fontWeight: "600" }}>
+        {label}
+      </Text>
+      {rightElement ?? (
+        value ? (
+          <Text style={{ color: "#8e8e93", fontSize: 14, fontWeight: "500" }}>{value}</Text>
+        ) : null
+      )}
+    </Pressable>
+  );
+}
+
+// ─── Section card ─────────────────────────────────────────────────────────────
+function MenuSection({ children }: { children: React.ReactNode }) {
+  return (
+    <View
+      style={{
+        backgroundColor: "rgba(28, 28, 30, 0.7)",
+        borderRadius: 16,
+        marginBottom: 16,
+        overflow: "hidden",
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.08)",
+        shadowColor: "#000",
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+      }}
+    >
+      {children}
+    </View>
+  );
+}
+
+// ─── Withdraw sheet (inline) ──────────────────────────────────────────────────
+function WithdrawSheet({
+  visible,
+  onClose,
+  onWithdraw,
+  withdrawing,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onWithdraw: (address: string, amount: string) => void;
+  withdrawing: boolean;
+}) {
+  const [toAddress, setToAddress] = useState("");
+  const [amount, setAmount] = useState("0.01");
+  if (!visible) return null;
+  return (
+    <View style={{ 
+      backgroundColor: "rgba(28, 28, 30, 0.7)", 
+      borderRadius: 16, 
+      padding: 20, 
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: "rgba(255,255,255,0.08)",
+      shadowColor: "#000",
+      shadowOpacity: 0.2,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+    }}>
+      <Text style={{ color: "#fff", fontWeight: "800", fontSize: 17, marginBottom: 16, letterSpacing: 0.3 }}>
+        Send SOL
+      </Text>
+      <TextInput
+        value={toAddress}
+        onChangeText={setToAddress}
+        placeholder="Destination address"
+        placeholderTextColor="rgba(255,255,255,0.3)"
+        autoCapitalize="none"
+        autoCorrect={false}
+        style={{
+          backgroundColor: "rgba(255,255,255,0.05)",
+          borderRadius: 12,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          color: "#fff",
+          fontSize: 14,
+          marginBottom: 12,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.1)",
+          fontWeight: "500",
+        }}
+      />
+      <TextInput
+        value={amount}
+        onChangeText={setAmount}
+        placeholder="Amount (SOL)"
+        placeholderTextColor="rgba(255,255,255,0.3)"
+        keyboardType="decimal-pad"
+        style={{
+          backgroundColor: "rgba(255,255,255,0.05)",
+          borderRadius: 12,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          color: "#fff",
+          fontSize: 14,
+          marginBottom: 16,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.1)",
+          fontWeight: "500",
+        }}
+      />
+      <View style={{ flexDirection: "row", gap: 12 }}>
+        <Pressable
+          onPress={onClose}
+          style={{ 
+            flex: 1, 
+            backgroundColor: "rgba(255,255,255,0.08)", 
+            borderRadius: 12, 
+            paddingVertical: 14, 
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.1)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>Cancel</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => onWithdraw(toAddress, amount)}
+          disabled={withdrawing}
+          style={{ 
+            flex: 1, 
+            borderRadius: 12, 
+            paddingVertical: 14, 
+            alignItems: "center", 
+            opacity: withdrawing ? 0.6 : 1,
+            overflow: "hidden",
+          }}
+        >
+          <LinearGradient
+            colors={["#0a84ff", "#0066cc"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: 0,
+              bottom: 0,
+            }}
+          />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {withdrawing ? <ActivityIndicator color="#fff" size="small" /> : null}
+            <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{withdrawing ? "Sending…" : "Send"}</Text>
+          </View>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
 export default function WalletScreen() {
   const router = useRouter();
-  const { width, height } = useWindowDimensions();
-  const qrSize = useMemo(() => {
-    const byWidth = width * 0.56;
-    const byHeight = height * 0.24;
-    return Math.max(170, Math.min(230, byWidth, byHeight));
-  }, [height, width]);
-
   const {
     twitterProfile,
     setTwitterProfile,
@@ -79,46 +442,71 @@ export default function WalletScreen() {
   const { logout } = useAuth();
   const { user: privyUser } = usePrivy();
   const { sendCode, linkWithCode } = useLinkEmail();
-  const { profileName } = useTradeSettings();
+  const { profileName, setProfileName, hapticsEnabled } = useTradeSettings();
+
+  const appleUserId = (() => {
+    const accounts: any[] = (privyUser as any)?.linked_accounts ?? (privyUser as any)?.linkedAccounts ?? [];
+    const apple = accounts.find((a: any) => a?.type === "apple_oauth" || a?.type === "apple");
+    const id = apple?.subject ?? apple?.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  })();
+  const twitterUsername = typeof twitterProfile?.username === "string" && twitterProfile.username.length > 0 ? twitterProfile.username : null;
+  const authInitial =
+    (typeof twitterUsername === "string" ? twitterUsername.slice(0, 2) : null) ||
+    (typeof appleUserId === "string" ? appleUserId.slice(0, 2) : null);
+  const displayProfileName =
+    (!profileName || profileName.trim() === '') && authInitial
+      ? authInitial.toUpperCase()
+      : profileName || 'TR';
+
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
-  const [balanceError, setBalanceError] = useState<string | null>(null);
-  const [withdrawToAddress, setWithdrawToAddress] = useState("");
-  const [withdrawAmount, setWithdrawAmount] = useState("0.01");
+  const [withdrawVisible, setWithdrawVisible] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [qrVisible, setQrVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Editable profile name
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(displayProfileName);
+  const nameInputRef = useRef<TextInput>(null);
+
+  // Email link
   const [emailInput, setEmailInput] = useState("");
   const [codeInput, setCodeInput] = useState("");
   const [sendingCode, setSendingCode] = useState(false);
   const [verifyingCode, setVerifyingCode] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
+
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
 
-  const clearLocalAppData = async () => {
-    await AsyncStorage.multiRemove([
-      TWITTER_PROFILE_CACHE_KEY,
-      FAVORITES_KEY,
-      HIDDEN_TOKENS_KEY,
-      LAST_AMOUNT_KEY,
-      LAST_ROI_KEY,
-      BONUS_2000_APPLIED_KEY,
-      LOCAL_USER_ID_KEY,
-      TRADE_SETTINGS_KEY,
-    ]);
+  // Keep nameInput in sync when profileName loads from storage
+  useEffect(() => { setNameInput(displayProfileName); }, [displayProfileName]);
+
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setToastVisible(true);
+    if (hapticsEnabled) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    }
   };
 
-  const copyAddress = async () => {
-    if (!tradingWalletAddress) return;
-    await Clipboard.setStringAsync(tradingWalletAddress);
-    Alert.alert("Copied", "Wallet address copied to clipboard.");
+  const clearLocalAppData = async () => {
+    await AsyncStorage.multiRemove([
+      TWITTER_PROFILE_CACHE_KEY, FAVORITES_KEY, HIDDEN_TOKENS_KEY,
+      LAST_AMOUNT_KEY, LAST_ROI_KEY, BONUS_2000_APPLIED_KEY,
+      LOCAL_USER_ID_KEY, TRADE_SETTINGS_KEY,
+    ]);
   };
 
   const loadBalance = async (address: string) => {
     try {
       setBalanceLoading(true);
-      setBalanceError(null);
       const [next] = await Promise.all([
         getSolBalance(address),
         fetch(`${API_BASE}/api/solana/price-usd`)
@@ -130,11 +518,8 @@ export default function WalletScreen() {
           .catch(() => undefined),
       ]);
       setSolBalance(next);
-    } catch (error: any) {
-      setBalanceError(error?.message || "Failed to load SOL balance");
-    } finally {
-      setBalanceLoading(false);
-    }
+    } catch { /* ignore */ }
+    finally { setBalanceLoading(false); }
   };
 
   useEffect(() => {
@@ -143,183 +528,88 @@ export default function WalletScreen() {
   }, [tradingWalletAddress]);
 
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", (event) => {
-      setKeyboardHeight(event.endCoordinates?.height || 0);
-    });
-    const hide = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardHeight(0);
-    });
-    return () => {
-      show.remove();
-      hide.remove();
-    };
+    const show = Keyboard.addListener("keyboardDidShow", (e) => setKeyboardHeight(e.endCoordinates?.height || 0));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardHeight(0));
+    return () => { show.remove(); hide.remove(); };
   }, []);
 
-  const handleCreateWallet = async () => {
-    let applicationId = "unknown";
-    try {
-      // Avoid hard dependency crashes if expo-application is not installed in this environment.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Application = require("expo-application") as { applicationId?: string };
-      if (typeof Application?.applicationId === "string" && Application.applicationId.length > 0) {
-        applicationId = Application.applicationId;
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      console.log("[WALLET] Create Wallet clicked");
-      console.log("[APP]", Platform.OS, "applicationId:", applicationId);
-      const address = await getOrCreateTradingWalletAddress();
-      console.log("[WALLET] Embedded wallet address:", address);
-      Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
-    } catch (error: any) {
-      const message = String(error?.message || error || "");
-      console.log("[WALLET] Create wallet failed:", message);
-      if (message.toLowerCase().includes("allowed app identifier")) {
-        Alert.alert(
-          "Privy Setup Required",
-          `Add this app identifier in Privy allowlist: ${applicationId}\n\nAlso add host.exp.Exponent and host.exp.exponent, then restart Expo with: npx expo start -c`
-        );
-        return;
-      }
-      if (message.toLowerCase().includes("privy login required")) {
-        Alert.alert("Connect Privy", "Please connect to Privy before creating your wallet.");
-        return;
-      }
-      const friendly = getUserFriendlyAuthError(error, {
-        title: "Wallet",
-        message: "Could not create a wallet address right now.",
-      });
-      Alert.alert(friendly.title, friendly.message);
-    }
+  const saveName = () => {
+    const trimmed = nameInput.trim();
+    if (trimmed) setProfileName(trimmed);
+    else setNameInput(displayProfileName);
+    setEditingName(false);
   };
 
-  const handleSendCode = useCallback(async () => {
-    if (!privyUser) {
-      Alert.alert("Connect Twitter", "Please connect Twitter first, then link your email.");
-      return;
-    }
-    const email = emailInput.trim();
-    if (!email) {
-      Alert.alert("Connect Privy", "Enter a valid email address.");
-      return;
-    }
-    try {
-      setSendingCode(true);
-      await sendCode({ email });
-      setCodeSent(true);
-      Alert.alert("Check your email", "Enter the verification code we sent.");
-    } catch (error: any) {
-      const friendly = getUserFriendlyAuthError(error, {
-        title: "Could not send code",
-        message: "We couldn't send a verification code. Please try again.",
-      });
-      Alert.alert(friendly.title, friendly.message);
-    } finally {
-      setSendingCode(false);
-    }
-  }, [emailInput, privyUser, sendCode]);
-
-  const handleVerifyCode = useCallback(async () => {
-    if (!privyUser) {
-      Alert.alert("Connect Twitter", "Please connect Twitter first, then link your email.");
-      return;
-    }
-    const email = emailInput.trim();
-    const code = codeInput.trim();
-    if (!email || !code) {
-      Alert.alert("Connect Privy", "Enter your email and verification code.");
-      return;
-    }
-    try {
-      setVerifyingCode(true);
-      await linkWithCode({ email, code });
-      const address = await getOrCreateTradingWalletAddress();
-      Alert.alert("Wallet Ready", "Wallet created. You can now deposit SOL to this address.");
-      if (address) {
-        await loadBalance(address);
-      }
-    } catch (error: any) {
-      const friendly = getUserFriendlyAuthError(error, {
-        title: "Verification failed",
-        message: "The code could not be verified. Please check and try again.",
-      });
-      Alert.alert(friendly.title, friendly.message);
-    } finally {
-      setVerifyingCode(false);
-    }
-  }, [codeInput, emailInput, getOrCreateTradingWalletAddress, linkWithCode, privyUser]);
+  const copyAddress = async () => {
+    if (!tradingWalletAddress) return;
+    await Clipboard.setStringAsync(tradingWalletAddress);
+    showToast("Address copied to clipboard");
+  };
 
   const openPhantom = async () => {
     if (!tradingWalletAddress) return;
-
-    const transferLink = `phantom://v1/transfer?recipient=${encodeURIComponent(tradingWalletAddress)}&network=mainnet-beta`;
-    const appBaseLink = "phantom://";
-
+    if (hapticsEnabled) {
+      Haptics.selectionAsync().catch(() => undefined);
+    }
+    const link = `phantom://v1/transfer?recipient=${encodeURIComponent(tradingWalletAddress)}&network=mainnet-beta`;
     try {
-      if (await Linking.canOpenURL(transferLink)) {
-        await Linking.openURL(transferLink);
-        return;
-      }
-
-      if (await Linking.canOpenURL(appBaseLink)) {
-        await Linking.openURL(appBaseLink);
-        Alert.alert("Phantom", "Open Phantom and send SOL to the copied address.");
-        return;
-      }
-
-      await Linking.openURL("https://phantom.app/");
-      Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
+      if (await Linking.canOpenURL(link)) await openExternalLinkSilent(link);
+      else await openExternalLinkSilent("https://phantom.app/");
     } catch {
       Alert.alert("Phantom not found", "Copy the address and send SOL from any Solana wallet.");
     }
   };
 
-  const getFriendlyWithdrawErrorMessage = (error: unknown) => {
-    const text =
-      typeof error === "object" && error !== null && "message" in error
-        ? (error as { message?: string }).message
-        : String(error ?? "");
-    const normalized = (text ?? "").toLowerCase();
-    if (/\b(prior credit|insufficient funds|cannot debit|no record of a prior credit|attempt to debit)\b/i.test(normalized)) {
-      return "Insufficient balance. Please fund the embedded wallet before withdrawing.";
+  const handleShowQR = () => {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     }
-    return text || "Failed to withdraw.";
+    setQrVisible(true);
   };
 
-  const handleWithdraw = async () => {
-    try {
-      const amount = Number(withdrawAmount);
-      if (!Number.isFinite(amount) || amount <= 0) {
-        Alert.alert("Withdraw", "Enter valid SOL amount.");
-        return;
-      }
-      const destination = withdrawToAddress.trim();
-      if (!destination) {
-        Alert.alert("Withdraw", "Set a destination address first.");
-        return;
-      }
-      setWithdrawing(true);
-      const result = await withdrawFromTradingWallet(amount, destination);
-      Alert.alert("Withdraw Success", `Tx: ${result.txSignature}`);
-      if (tradingWalletAddress) {
-        await loadBalance(tradingWalletAddress);
-      }
-    } catch (error: unknown) {
-      Alert.alert("Withdraw Failed", getFriendlyWithdrawErrorMessage(error));
-    } finally {
-      setWithdrawing(false);
+  const handleRefreshBalance = () => {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     }
+    if (tradingWalletAddress) void loadBalance(tradingWalletAddress);
+  };
+
+  const onRefresh = useCallback(async () => {
+    if (!tradingWalletAddress) return;
+    setRefreshing(true);
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    }
+    try {
+      await loadBalance(tradingWalletAddress);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [tradingWalletAddress, loadBalance, hapticsEnabled]);
+
+  const handleWithdraw = async (toAddress: string, amountStr: string) => {
+    const amount = Number(amountStr);
+    if (!Number.isFinite(amount) || amount <= 0) { Alert.alert("Send SOL", "Enter a valid amount."); return; }
+    if (!toAddress.trim()) { Alert.alert("Send SOL", "Enter a destination address."); return; }
+    try {
+      setWithdrawing(true);
+      const result = await withdrawFromTradingWallet(amount, toAddress.trim());
+      setWithdrawVisible(false);
+      showToast(`Successfully sent ${amount} SOL!`);
+      if (tradingWalletAddress) void loadBalance(tradingWalletAddress);
+    } catch (error: any) {
+      Alert.alert("Send Failed", error?.message || "Failed to send SOL.");
+    } finally { setWithdrawing(false); }
   };
 
   const handleLogout = () => {
-    Alert.alert("Logout", "Are you sure you want to logout from this app?", [
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    }
+    Alert.alert("Sign Out", "Are you sure you want to sign out?", [
       { text: "Cancel", style: "cancel" },
       {
-        text: "Logout",
-        style: "destructive",
+        text: "Sign Out", style: "destructive",
         onPress: () => {
           void (async () => {
             try {
@@ -328,329 +618,572 @@ export default function WalletScreen() {
               await clearLocalAppData();
               await logout();
               router.replace("/(tabs)");
-              Alert.alert("Logged out", "You have been logged out.");
             } catch (error: any) {
-              Alert.alert("Logout", error?.message || "Failed to logout.");
-            } finally {
-              setLoggingOut(false);
-            }
+              Alert.alert("Sign Out", error?.message || "Failed to sign out.");
+            } finally { setLoggingOut(false); }
           })();
         },
       },
     ]);
   };
 
-  const showWalletDetails = Boolean(tradingWalletAddress);
-  const displayWalletAddress = tradingWalletAddress ?? "";
+  const handleCreateWallet = async () => {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    }
+    try {
+      const address = await getOrCreateTradingWalletAddress();
+      showToast("Wallet created successfully!");
+      if (address) void loadBalance(address);
+    } catch (error: any) {
+      const friendly = getUserFriendlyAuthError(error, { title: "Wallet", message: "Could not create a wallet right now." });
+      Alert.alert(friendly.title, friendly.message);
+    }
+  };
+
+  const handleSendCode = useCallback(async () => {
+    if (!privyUser) { Alert.alert("Connect Twitter", "Please connect Twitter first."); return; }
+    const email = emailInput.trim();
+    if (!email) { Alert.alert("Email required", "Enter a valid email address."); return; }
+    try {
+      setSendingCode(true);
+      await sendCode({ email });
+      setCodeSent(true);
+      Alert.alert("Check your email", "Enter the verification code we sent.");
+    } catch (error: any) {
+      const friendly = getUserFriendlyAuthError(error, { title: "Error", message: "Could not send code." });
+      Alert.alert(friendly.title, friendly.message);
+    } finally { setSendingCode(false); }
+  }, [emailInput, privyUser, sendCode]);
+
+  const handleVerifyCode = useCallback(async () => {
+    if (!privyUser) { Alert.alert("Connect Twitter", "Please connect Twitter first."); return; }
+    const email = emailInput.trim();
+    const code = codeInput.trim();
+    if (!email || !code) { Alert.alert("Required", "Enter your email and code."); return; }
+    try {
+      setVerifyingCode(true);
+      await linkWithCode({ email, code });
+      const address = await getOrCreateTradingWalletAddress();
+      Alert.alert("Wallet Ready", "Wallet created. Deposit SOL to start trading.");
+      if (address) void loadBalance(address);
+    } catch (error: any) {
+      const friendly = getUserFriendlyAuthError(error, { title: "Verification failed", message: "Check the code and try again." });
+      Alert.alert(friendly.title, friendly.message);
+    } finally { setVerifyingCode(false); }
+  }, [codeInput, emailInput, getOrCreateTradingWalletAddress, linkWithCode, privyUser]);
+
+  const hasWallet = Boolean(tradingWalletAddress);
+  const usdValue =
+    solBalance !== null && solPriceUsd !== null && solPriceUsd > 0
+      ? (solBalance * solPriceUsd).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : null;
+
+  // Linked email from Privy user
+  const linkedEmail = (() => {
+    if (!privyUser) return null;
+    const accounts: any[] = (privyUser as any)?.linked_accounts ?? (privyUser as any)?.linkedAccounts ?? [];
+    const emailAccount = accounts.find((a: any) => a?.type === "email");
+    return emailAccount?.address ?? emailAccount?.email ?? null;
+  })();
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#000" }}>
+      <Toast message={toastMessage} visible={toastVisible} onHide={() => setToastVisible(false)} />
+      <QRCodeModal visible={qrVisible} address={tradingWalletAddress ?? ''} onClose={() => setQrVisible(false)} />
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={{ paddingBottom: 110 + keyboardHeight }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 110 + keyboardHeight, paddingTop: 8 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#0a84ff"
+            colors={["#0a84ff"]}
+            progressBackgroundColor="rgba(28, 28, 30, 0.9)"
+          />
+        }
       >
-      <View
-        style={{
-          marginTop: 6,
-          borderRadius: 10,
-          paddingVertical: 10,
-          paddingHorizontal: 12,
-          borderWidth: 1,
-          borderColor: "#2a2a2a",
-          backgroundColor: "#111",
-        }}
-      >
-        <Text style={{ color: "#8aa0b6", fontSize: 12 }}>Profile</Text>
-        <Text style={{ color: "#fff", marginTop: 3, fontSize: 18, fontWeight: "700" }}>
-          {profileName || 'Trader'}
-        </Text>
-      </View>
+        {/* ── Header: avatar + editable name ── */}
+        <View style={{ alignItems: "center", paddingVertical: 24, paddingBottom: 20 }}>
+          <Avatar name={displayProfileName} size={84} />
 
-      <View
-        style={{
-          marginTop: 8,
-          borderRadius: 10,
-          paddingVertical: 10,
-          paddingHorizontal: 12,
-          borderWidth: 1,
-          borderColor: "#2a2a2a",
-          backgroundColor: "#111",
-        }}
-      >
-        <Text style={{ color: "#8aa0b6", fontSize: 12 }}>X.com</Text>
-        <Text style={{ color: "#fff", marginTop: 3, fontSize: 16, fontWeight: "600" }}>
-          {twitterProfile?.username ? `@${twitterProfile.username}` : "Not connected"}
-        </Text>
-      </View>
-
-      <Text style={{ color: "#bbb", marginTop: 10, fontSize: 13 }}>Your Privy Embedded Wallet Address</Text>
-
-      {walletLoading ? (
-        <View style={{ marginTop: 12 }}>
-          <ActivityIndicator />
-          <Text style={{ color: "#999", marginTop: 6 }}>Loading wallet address...</Text>
-        </View>
-      ) : showWalletDetails ? (
-        <View style={{ flex: 1 }}>
-          <View
-            style={{
-              marginTop: 8,
-              borderRadius: 10,
-              padding: 10,
-              borderWidth: 1,
-              borderColor: "#2a2a2a",
-              backgroundColor: "#111",
-            }}
-          >
-            <Text selectable style={{ color: "#fff", fontFamily: "Courier", fontSize: 13 }}>
-              {truncateMiddle(displayWalletAddress)}
-            </Text>
-            <Text selectable numberOfLines={1} style={{ color: "#666", fontFamily: "Courier", marginTop: 5, fontSize: 10 }}>
-              {displayWalletAddress}
-            </Text>
-          </View>
-
-          <Pressable
-            onPress={copyAddress}
-            style={{ marginTop: 8, backgroundColor: "#e9f3ff", borderRadius: 10, paddingVertical: 10 }}
-          >
-            <Text style={{ color: "#0a1a33", textAlign: "center", fontWeight: "700" }}>Copy Address</Text>
-          </Pressable>
-
-          <View style={{ marginTop: "auto", paddingBottom: 6 }}>
-            <View
-              style={{
-                marginTop: 8,
-                borderRadius: 10,
-                paddingVertical: 8,
-                paddingHorizontal: 10,
-                borderWidth: 1,
-                borderColor: "#2a2a2a",
-                backgroundColor: "#111",
-              }}
+          {/* Editable name */}
+          {editingName ? (
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 16, gap: 10 }}>
+              <TextInput
+                ref={nameInputRef}
+                value={nameInput}
+                onChangeText={setNameInput}
+                onSubmitEditing={saveName}
+                autoFocus
+                returnKeyType="done"
+                style={{
+                  color: "#fff",
+                  fontSize: 22,
+                  fontWeight: "800",
+                  borderBottomWidth: 2,
+                  borderBottomColor: "#0a84ff",
+                  minWidth: 140,
+                  textAlign: "center",
+                  paddingVertical: 4,
+                  paddingHorizontal: 8,
+                  letterSpacing: 0.5,
+                }}
+              />
+              <Pressable onPress={saveName} hitSlop={10}>
+                <Ionicons name="checkmark-circle" size={28} color="#0a84ff" />
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              onPress={() => { setEditingName(true); setTimeout(() => nameInputRef.current?.focus(), 50); }}
+              style={{ flexDirection: "row", alignItems: "center", marginTop: 16, gap: 8 }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  <SolanaIcon size={18} />
-                  <Text style={{ color: "#bbb", fontSize: 12 }}>SOL Balance</Text>
+              <Text style={{ color: "#fff", fontSize: 24, fontWeight: "800", letterSpacing: 0.3 }}>{displayProfileName}</Text>
+              <View style={{
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                backgroundColor: "rgba(255,255,255,0.1)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}>
+                <Ionicons name="pencil" size={12} color="rgba(255,255,255,0.6)" />
+              </View>
+            </Pressable>
+          )}
+
+          {twitterProfile?.username ? (
+            <View style={{
+              marginTop: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 4,
+              borderRadius: 12,
+              backgroundColor: "rgba(29, 161, 242, 0.15)",
+              borderWidth: 1,
+              borderColor: "rgba(29, 161, 242, 0.3)",
+            }}>
+              <Text style={{ color: "#1DA1F2", fontSize: 13, fontWeight: "600" }}>@{twitterProfile.username}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* ── Wallet / balance section ── */}
+        {walletLoading ? (
+          <View style={{ alignItems: "center", paddingVertical: 20 }}>
+            <ActivityIndicator color="#fff" />
+            <Text style={{ color: "#8e8e93", marginTop: 8 }}>Loading wallet…</Text>
+          </View>
+        ) : hasWallet ? (
+          <>
+            {/* Balance card */}
+            <MenuSection>
+              <View style={{ padding: 20 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <View style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      backgroundColor: "rgba(138, 99, 255, 0.15)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}>
+                      <SolanaIcon size={16} />
+                    </View>
+                    <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, fontWeight: "600", letterSpacing: 0.5 }}>SOL BALANCE</Text>
+                  </View>
+                  <Pressable
+                    onPress={handleRefreshBalance}
+                    hitSlop={10}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 10,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.1)",
+                    }}
+                  >
+                    {balanceLoading
+                      ? <ActivityIndicator size="small" color="#8e8e93" />
+                      : <Ionicons name="refresh" size={16} color="rgba(255,255,255,0.6)" />
+                    }
+                  </Pressable>
                 </View>
-                <Pressable
-                  onPress={() => (tradingWalletAddress ? void loadBalance(tradingWalletAddress) : undefined)}
-                  hitSlop={10}
-                  style={{
-                    width: 34,
-                    height: 30,
+                <Text style={{ color: "#fff", fontSize: 32, fontWeight: "800", letterSpacing: -0.5, marginBottom: 4 }}>
+                  {solBalance === null ? "—" : `${solBalance.toFixed(4)}`}
+                </Text>
+                <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 15, fontWeight: "600" }}>
+                  {solBalance === null ? "SOL" : "SOL"}
+                </Text>
+                {usdValue ? (
+                  <View style={{
+                    marginTop: 12,
+                    paddingTop: 12,
+                    borderTopWidth: 1,
+                    borderTopColor: "rgba(255,255,255,0.08)",
+                  }}>
+                    <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, fontWeight: "600" }}>
+                      ≈ ${usdValue} USD
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            </MenuSection>
+
+            {/* Deposit Button */}
+            <Pressable
+              onPress={handleShowQR}
+              style={({ pressed }) => ({
+                marginBottom: 16,
+                borderRadius: 16,
+                overflow: "hidden",
+                opacity: pressed ? 0.9 : 1,
+              })}
+            >
+              <LinearGradient
+                colors={["#0a84ff", "#0066cc"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{
+                  paddingVertical: 16,
+                  paddingHorizontal: 20,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 10,
+                }}
+              >
+                <Ionicons name="qr-code" size={24} color="#fff" />
+                <Text style={{ color: "#fff", fontSize: 17, fontWeight: "800", letterSpacing: 0.3 }}>
+                  Show Deposit QR Code
+                </Text>
+              </LinearGradient>
+            </Pressable>
+
+            {/* Wallet actions */}
+            <MenuSection>
+              <MenuRow
+                icon="copy-outline"
+                iconBg="#3a3a3c"
+                label="Copy Address"
+                value={truncateMiddle(tradingWalletAddress ?? "")}
+                onPress={copyAddress}
+              />
+              <MenuRow
+                icon="wallet-outline"
+                iconBg="#1a3a1a"
+                label="Deposit via Phantom"
+                onPress={openPhantom}
+              />
+              <MenuRow
+                icon="arrow-up-circle-outline"
+                iconBg="#1c3a5e"
+                label="Send SOL"
+                onPress={() => {
+                  if (hapticsEnabled) {
+                    Haptics.selectionAsync().catch(() => undefined);
+                  }
+                  setWithdrawVisible((v) => !v);
+                }}
+                last
+              />
+            </MenuSection>
+
+            {/* Inline withdraw form */}
+            <WithdrawSheet
+              visible={withdrawVisible}
+              onClose={() => setWithdrawVisible(false)}
+              onWithdraw={handleWithdraw}
+              withdrawing={withdrawing}
+            />
+
+            {/* Account info */}
+            <MenuSection>
+              <MenuRow
+                icon="logo-twitter"
+                iconBg="#1a2a3a"
+                label="X / Twitter"
+                value={twitterProfile?.username ? `@${twitterProfile.username}` : "Not connected"}
+                onPress={() => {}}
+              />
+              <MenuRow
+                icon="mail-outline"
+                iconBg="#2a1a3a"
+                label="Email"
+                value={linkedEmail ?? "Not linked"}
+                onPress={() => {}}
+                last
+              />
+            </MenuSection>
+
+            {/* Terms & Conditions */}
+            <MenuSection>
+              <MenuRow
+                icon="document-text-outline"
+                iconBg="#2a2a1a"
+                label="Terms & Conditions"
+                onPress={() => router.push("/terms")}
+                rightElement={<Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />}
+              />
+              <MenuRow
+                icon="shield-checkmark-outline"
+                iconBg="#1a2a2a"
+                label="Privacy Policy"
+                onPress={() => router.push({ pathname: "/terms", params: { section: "privacy" } })}
+                rightElement={<Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />}
+                last
+              />
+            </MenuSection>
+
+            {/* Contact Us */}
+            <MenuSection>
+              <View style={{ padding: 20 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <View style={{
+                    width: 36,
+                    height: 36,
                     borderRadius: 10,
+                    backgroundColor: "rgba(74, 222, 128, 0.2)",
                     alignItems: "center",
                     justifyContent: "center",
-                    borderWidth: 1,
-                    borderColor: "#254d78",
-                    backgroundColor: "#10233f",
-                    opacity: tradingWalletAddress ? 1 : 0.5,
+                    shadowColor: "#4ade80",
+                    shadowOpacity: 0.3,
+                    shadowRadius: 8,
+                    shadowOffset: { width: 0, height: 2 },
+                  }}>
+                    <MaterialIcons name="contact-support" size={20} color="#4ade80" />
+                  </View>
+                  <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800", letterSpacing: 0.3 }}>Contact Us</Text>
+                </View>
+                <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, marginBottom: 18, lineHeight: 20, fontWeight: "500" }}>
+                  Need help or have questions? Reach out to us!
+                </Text>
+                
+                {/* Email */}
+                <Pressable
+                  onPress={() => {
+                    if (hapticsEnabled) {
+                      Haptics.selectionAsync().catch(() => undefined);
+                    }
+                    openExternalLink('mailto:memeswipe89@gmail.com');
                   }}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: pressed ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
+                    borderRadius: 12,
+                    padding: 14,
+                    marginBottom: 12,
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.08)",
+                  })}
                 >
-                  <Ionicons name="refresh" size={16} color="#d7efff" />
+                  <View style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 10,
+                    backgroundColor: "rgba(74,222,128,0.15)",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    marginRight: 14,
+                    shadowColor: "#4ade80",
+                    shadowOpacity: 0.3,
+                    shadowRadius: 6,
+                    shadowOffset: { width: 0, height: 2 },
+                  }}>
+                    <MaterialIcons name="email" size={20} color="#4ade80" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginBottom: 3, fontWeight: "600", letterSpacing: 0.3 }}>Email</Text>
+                    <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>memeswipe89@gmail.com</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+                </Pressable>
+
+                {/* Twitter */}
+                <Pressable
+                  onPress={() => {
+                    if (hapticsEnabled) {
+                      Haptics.selectionAsync().catch(() => undefined);
+                    }
+                    openExternalLink('https://twitter.com/swipeitXYZ');
+                  }}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: pressed ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
+                    borderRadius: 12,
+                    padding: 14,
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.08)",
+                  })}
+                >
+                  <View style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 10,
+                    backgroundColor: "rgba(29,161,242,0.15)",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    marginRight: 14,
+                    shadowColor: "#1DA1F2",
+                    shadowOpacity: 0.3,
+                    shadowRadius: 6,
+                    shadowOffset: { width: 0, height: 2 },
+                  }}>
+                    <FontAwesome name="twitter" size={20} color="#1DA1F2" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginBottom: 3, fontWeight: "600", letterSpacing: 0.3 }}>Twitter</Text>
+                    <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>@swipeitXYZ</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
                 </Pressable>
               </View>
-              {balanceLoading ? (
-                <View style={{ marginTop: 6 }}>
-                  <ActivityIndicator />
-                </View>
-              ) : (
-                <>
-                  <Text style={{ color: "#fff", marginTop: 4, fontSize: 18, fontWeight: "700" }}>
-                    {solBalance === null ? "--" : formatSol(solBalance)}
+            </MenuSection>
+
+            {/* Sign out */}
+            <MenuSection>
+              <MenuRow
+                icon="log-out-outline"
+                iconBg="#3a1a1a"
+                label={loggingOut ? "Signing out…" : "Sign Out"}
+                onPress={handleLogout}
+                destructive
+                last
+              />
+            </MenuSection>
+          </>
+        ) : (
+          /* ── No wallet yet ── */
+          <>
+            <Text style={{ color: "#8e8e93", textAlign: "center", marginBottom: 16 }}>
+              {walletError || "No wallet found. Create one to start trading."}
+            </Text>
+
+            {privyUser ? (
+              <MenuSection>
+                <MenuRow
+                  icon="add-circle-outline"
+                  iconBg="#1a3a1a"
+                  label="Create Wallet"
+                  onPress={handleCreateWallet}
+                  last
+                />
+              </MenuSection>
+            ) : (
+              <MenuSection>
+                <View style={{ padding: 20 }}>
+                  <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, marginBottom: 14, fontWeight: "600", letterSpacing: 0.3 }}>
+                    Link your email to create a wallet
                   </Text>
-                  {solBalance !== null && solPriceUsd !== null && solPriceUsd > 0 ? (
-                    <Text style={{ color: "#8794b4", marginTop: 2, fontSize: 12, fontWeight: "500" }}>
-                      ≈ ${(solBalance * solPriceUsd).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
-                    </Text>
-                  ) : null}
-                </>
-              )}
-              {balanceError ? <Text style={{ color: "#ff8a8a", marginTop: 6, fontSize: 11 }}>{balanceError}</Text> : null}
-            </View>
-
-            <View
-              style={{
-                marginTop: 10,
-                borderRadius: 10,
-                padding: 10,
-                borderWidth: 1,
-                borderColor: "#2a2a2a",
-                backgroundColor: "#0f131a",
-              }}
-            >
-              <Text style={{ color: "#bbb", fontWeight: "600" }}>Send SOL to Phantom / external wallet</Text>
-              <TextInput
-                value={withdrawToAddress}
-                onChangeText={setWithdrawToAddress}
-                placeholder="Destination wallet address"
-                placeholderTextColor="#68738a"
-                autoCapitalize="none"
-                autoCorrect={false}
-                onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
-                style={{
-                  marginTop: 8,
-                  borderWidth: 1,
-                  borderColor: "#2a2a2a",
-                  borderRadius: 8,
-                  paddingHorizontal: 10,
-                  paddingVertical: 8,
-                  color: "#fff",
-                  fontSize: 12,
-                }}
-              />
-              <TextInput
-                value={withdrawAmount}
-                onChangeText={setWithdrawAmount}
-                placeholder="SOL amount (e.g. 0.01)"
-                placeholderTextColor="#68738a"
-                keyboardType="decimal-pad"
-                onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
-                style={{
-                  marginTop: 8,
-                  borderWidth: 1,
-                  borderColor: "#2a2a2a",
-                  borderRadius: 8,
-                  paddingHorizontal: 10,
-                  paddingVertical: 8,
-                  color: "#fff",
-                  fontSize: 12,
-                }}
-              />
-              <Pressable
-                onPress={() => void handleWithdraw()}
-                disabled={withdrawing}
-                style={{
-                  marginTop: 8,
-                  backgroundColor: "#2a1530",
-                  borderRadius: 8,
-                  paddingVertical: 10,
-                  borderWidth: 1,
-                  borderColor: "#63407a",
-                  opacity: withdrawing ? 0.7 : 1,
-                }}
-              >
-                <Text style={{ color: "#fff", textAlign: "center", fontWeight: "700" }}>
-                  {withdrawing ? "Sending..." : "Send SOL"}
-                </Text>
-              </Pressable>
-            </View>
-
-            <Pressable
-              onPress={handleLogout}
-              disabled={loggingOut}
-              style={{
-                marginTop: 12,
-                borderRadius: 10,
-                paddingVertical: 10,
-                borderWidth: 1,
-                borderColor: "#5f2128",
-                backgroundColor: "#2b1115",
-                opacity: loggingOut ? 0.7 : 1,
-              }}
-            >
-              <Text style={{ color: "#ffd7dd", textAlign: "center", fontWeight: "700" }}>
-                {loggingOut ? "Logging out..." : "Logout"}
-              </Text>
-            </Pressable>
-
-          </View>
-        </View>
-      ) : (
-        <View style={{ marginTop: 10, flex: 1, justifyContent: "center" }}>
-          <Text style={{ color: "#aaa" }}>{walletError || "No wallet address found yet."}</Text>
-          {privyUser ? (
-            <Pressable
-              onPress={handleCreateWallet}
-              style={{ marginTop: 10, backgroundColor: "#fff", borderRadius: 10, paddingVertical: 10 }}
-            >
-              <Text style={{ color: "#000", textAlign: "center", fontWeight: "700" }}>Create Privy Wallet</Text>
-            </Pressable>
-          ) : (
-            <View style={{ marginTop: 10 }}>
-              <TextInput
-                value={emailInput}
-                onChangeText={setEmailInput}
-                placeholder="Email address"
-                placeholderTextColor="#68738a"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
-                style={{
-                  borderWidth: 1,
-                  borderColor: "#2a2a2a",
-                  borderRadius: 8,
-                  paddingHorizontal: 10,
-                  paddingVertical: 8,
-                  color: "#fff",
-                  fontSize: 12,
-                }}
-              />
-              <Pressable
-                onPress={handleSendCode}
-                disabled={sendingCode}
-                style={{
-                  marginTop: 10,
-                  backgroundColor: "#0f223b",
-                  borderRadius: 10,
-                  paddingVertical: 10,
-                  borderWidth: 1,
-                  borderColor: "#254d78",
-                  opacity: sendingCode ? 0.7 : 1,
-                }}
-              >
-                <Text style={{ color: "#d7efff", textAlign: "center", fontWeight: "700" }}>
-                  {sendingCode ? "Sending..." : "Send Code"}
-                </Text>
-              </Pressable>
-              {codeSent ? (
-                <>
                   <TextInput
-                    value={codeInput}
-                    onChangeText={setCodeInput}
-                    placeholder="Verification code"
-                    placeholderTextColor="#68738a"
-                    keyboardType="number-pad"
-                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                    value={emailInput}
+                    onChangeText={setEmailInput}
+                    placeholder="Email address"
+                    placeholderTextColor="rgba(255,255,255,0.3)"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
                     style={{
-                      marginTop: 10,
-                      borderWidth: 1,
-                      borderColor: "#2a2a2a",
-                      borderRadius: 8,
-                      paddingHorizontal: 10,
-                      paddingVertical: 8,
+                      backgroundColor: "rgba(255,255,255,0.05)",
+                      borderRadius: 12,
+                      paddingHorizontal: 14,
+                      paddingVertical: 12,
                       color: "#fff",
-                      fontSize: 12,
+                      fontSize: 14,
+                      marginBottom: 12,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.1)",
+                      fontWeight: "500",
                     }}
                   />
                   <Pressable
-                    onPress={handleVerifyCode}
-                    disabled={verifyingCode}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#1a2a1a",
-                      borderRadius: 10,
-                      paddingVertical: 10,
-                      borderWidth: 1,
-                      borderColor: "#2f6b38",
-                      opacity: verifyingCode ? 0.7 : 1,
+                    onPress={handleSendCode}
+                    disabled={sendingCode}
+                    style={{ 
+                      borderRadius: 12, 
+                      paddingVertical: 14, 
+                      alignItems: "center", 
+                      opacity: sendingCode ? 0.6 : 1,
+                      overflow: "hidden",
                     }}
                   >
-                    <Text style={{ color: "#d7ffd9", textAlign: "center", fontWeight: "700" }}>
-                      {verifyingCode ? "Verifying..." : "Verify & Connect"}
-                    </Text>
+                    <LinearGradient
+                      colors={["#0a84ff", "#0066cc"]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                      }}
+                    />
+                    <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{sendingCode ? "Sending…" : "Send Code"}</Text>
                   </Pressable>
-                </>
-              ) : null}
-            </View>
-          )}
-        </View>
-      )}
+                  {codeSent ? (
+                    <>
+                      <TextInput
+                        value={codeInput}
+                        onChangeText={setCodeInput}
+                        placeholder="Verification code"
+                        placeholderTextColor="rgba(255,255,255,0.3)"
+                        keyboardType="number-pad"
+                        style={{
+                          backgroundColor: "rgba(255,255,255,0.05)",
+                          borderRadius: 12,
+                          paddingHorizontal: 14,
+                          paddingVertical: 12,
+                          color: "#fff",
+                          fontSize: 14,
+                          marginTop: 12,
+                          marginBottom: 12,
+                          borderWidth: 1,
+                          borderColor: "rgba(255,255,255,0.1)",
+                          fontWeight: "500",
+                        }}
+                      />
+                      <Pressable
+                        onPress={handleVerifyCode}
+                        disabled={verifyingCode}
+                        style={{ 
+                          borderRadius: 12, 
+                          paddingVertical: 14, 
+                          alignItems: "center", 
+                          opacity: verifyingCode ? 0.6 : 1,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <LinearGradient
+                          colors={["#30d158", "#28a745"]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                          }}
+                        />
+                        <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>{verifyingCode ? "Verifying…" : "Verify & Connect"}</Text>
+                      </Pressable>
+                    </>
+                  ) : null}
+                </View>
+              </MenuSection>
+            )}
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

@@ -6,18 +6,60 @@
     "version": "1.0.0",
     "icon": "./assets/images/appicon.png",
     "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
     "jsEngine": "hermes",
+<<<<<<< HEAD
     "plugins": ["expo-router"],
     "ios": {
       "icon": "./assets/images/appicon.png",
       "bundleIdentifier": "com.memeswipe.mobile",
+=======
+    "plugins": [
+      "expo-router",
+      "expo-apple-authentication",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/images/icon.png",
+          "imageWidth": 200
+        }
+      ]
+    ],
+    "ios": {
+      "bundleIdentifier": "com.memeswipe.mobile",
+      "usesAppleSignIn": true,
+      "icon": "./assets/images/icon.png",
+      "supportsTablet": false,
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#FFFFFF"
+      },
+>>>>>>> newui
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.memeswipe.mobile"
+      "package": "com.memeswipe.mobile",
+      "icon": "./assets/images/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png",
+        "backgroundColor": "#000000"
+      },
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#FFFFFF"
+      }
     },
     "extra": {
       "apiBase": "https://memeswipe.onrender.com",

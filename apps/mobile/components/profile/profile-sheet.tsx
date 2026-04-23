@@ -38,7 +38,9 @@ import Animated, {
 import { useTradeSettings } from '@/contexts/trade-settings-context';
 import { useAuth } from '@/contexts/auth-context';
 import { useWalletContext } from '@/contexts/wallet-context';
+import { usePrivy } from '@privy-io/expo';
 import { API_BASE } from '@/lib/api-base';
+import { router } from 'expo-router';
 
 import { TradeSettings } from './trade-settings';
 import { SolanaIcon } from '../icons/SolanaIcon';
@@ -80,10 +82,21 @@ export const ProfileSheet = memo(
       tradeAmount,
       tpROI,
       stopLoss,
+      showDisclaimer,
+      setShowDisclaimer,
       resetSettings,
     } = useTradeSettings();
     const { logout } = useAuth();
     const { twitterProfile, setTwitterProfile, tradingWalletAddress, walletAddress } = useWalletContext();
+    const { user: privyUser } = usePrivy();
+
+    const appleUserId = (() => {
+      const accounts: any[] = (privyUser as any)?.linked_accounts ?? (privyUser as any)?.linkedAccounts ?? [];
+      const apple = accounts.find((a: any) => a?.type === "apple_oauth" || a?.type === "apple");
+      const id = apple?.subject ?? apple?.id;
+      return typeof id === "string" && id.length > 0 ? id : null;
+    })();
+    const twitterUsername = typeof twitterProfile?.username === "string" && twitterProfile.username.length > 0 ? twitterProfile.username : null;
 
     const closeSheet = useCallback(() => {
       setOpen(false);
@@ -246,9 +259,15 @@ export const ProfileSheet = memo(
 
     const initials = useMemo(() => {
       const trimmed = profileName.trim();
-      if (!trimmed) return 'TR';
+      if (!trimmed) {
+        // Use first 2 letters of Twitter username or Apple ID if profile name is empty
+        const authInitial =
+          (typeof twitterUsername === "string" ? twitterUsername.slice(0, 2) : null) ||
+          (typeof appleUserId === "string" ? appleUserId.slice(0, 2) : null);
+        return authInitial ? authInitial.toUpperCase() : 'TR';
+      }
       return trimmed.slice(0, 2).toUpperCase();
-    }, [profileName]);
+    }, [profileName, twitterUsername, appleUserId]);
 
     const handleLogout = useCallback(async () => {
       try {
@@ -258,7 +277,6 @@ export const ProfileSheet = memo(
         resetSettings();
         closeSheet();
       } catch (err) {
-        console.log('Failed to logout', err);
         Alert.alert('Logout failed', 'Please try again.');
       }
     }, [closeSheet, logout, resetSettings, setTwitterProfile]);
@@ -355,6 +373,36 @@ export const ProfileSheet = memo(
                   </View>
 
                   <TradeSettings onInputFocusChange={setInputFocused} />
+
+                  <View style={styles.actionsWrap}>
+                    <Text style={[styles.sectionTitle, styles.networkTitle]}>Display</Text>
+                    <Pressable 
+                      style={styles.toggleRow} 
+                      onPress={() => setShowDisclaimer(!showDisclaimer)}
+                    >
+                      <View style={styles.toggleLeft}>
+                        <Text style={styles.toggleLabel}>Show Disclaimer</Text>
+                        <Text style={styles.toggleSubtext}>Display risk warning on main screen</Text>
+                      </View>
+                      <View style={[styles.toggleSwitch, showDisclaimer && styles.toggleSwitchActive]}>
+                        <View style={[styles.toggleThumb, showDisclaimer && styles.toggleThumbActive]} />
+                      </View>
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.actionsWrap}>
+                    <Text style={[styles.sectionTitle, styles.networkTitle]}>Legal</Text>
+                    <Pressable 
+                      style={styles.legalButton} 
+                      onPress={() => {
+                        closeSheet();
+                        router.push('/terms');
+                      }}
+                    >
+                      <Text style={styles.legalText}>Terms of Service & Privacy Policy</Text>
+                      <Text style={styles.legalArrow}>›</Text>
+                    </Pressable>
+                  </View>
 
                   <View style={styles.actionsWrap}>
                     <Text style={[styles.sectionTitle, styles.networkTitle]}>Actions</Text>
@@ -590,6 +638,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  legalButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  legalText: {
+    color: '#d7e4ff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  legalArrow: {
+    color: '#a7b4d5',
+    fontSize: 20,
+    fontWeight: '300',
+  },
   version: {
     marginTop: 2,
     color: '#94a3c8',
@@ -599,5 +669,56 @@ const styles = StyleSheet.create({
     marginTop: 12,
     color: '#7f8fb5',
     fontSize: 12,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  toggleLeft: {
+    flex: 1,
+    marginRight: 12,
+  },
+  toggleLabel: {
+    color: '#d7e4ff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  toggleSubtext: {
+    color: '#8794b4',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  toggleSwitch: {
+    width: 48,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleSwitchActive: {
+    backgroundColor: '#4ade80',
+  },
+  toggleThumb: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  toggleThumbActive: {
+    transform: [{ translateX: 20 }],
   },
 });
