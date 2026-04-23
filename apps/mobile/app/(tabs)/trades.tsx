@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
@@ -257,6 +258,7 @@ type TradeItem = {
   livePriceUsd: number | null;
   tpRoi: number;
   stopLossPct: number | null;
+  imageUrl?: string;
 };
 
 type Filter = 'all' | 'open' | 'closed' | 'profit' | 'loss';
@@ -359,10 +361,24 @@ function TradeCard({
       {/* Collapsed row */}
       <View style={styles.cardTop}>
         <View style={styles.cardTopLeft}>
-          <Text style={styles.symbol}>{item.symbol}</Text>
-          <Text style={[styles.statusBadge, item.status === 'open' ? styles.statusOpen : styles.statusClosed]}>
-            {item.status.toUpperCase()}
-          </Text>
+          {item.imageUrl ? (
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.tokenImage}
+              contentFit="cover"
+              transition={200}
+            />
+          ) : (
+            <View style={styles.tokenImagePlaceholder}>
+              <Text style={styles.placeholderText}>{item.symbol[0]}</Text>
+            </View>
+          )}
+          <View style={styles.tokenInfo}>
+            <Text style={styles.symbol}>{item.symbol}</Text>
+            <Text style={[styles.statusBadge, item.status === 'open' ? styles.statusOpen : styles.statusClosed]}>
+              {item.status.toUpperCase()}
+            </Text>
+          </View>
         </View>
         <View style={styles.cardTopRight}>
           <Text style={styles.amountText}>${item.displayAmountUsd.toFixed(5)}</Text>
@@ -534,6 +550,7 @@ export default function TradesScreen() {
           closed_at?: string | null;
           close_error?: string | null;
           output_mint?: string | null;
+          image_url?: string | null;
         }[];
         error?: string;
       }>([
@@ -606,9 +623,46 @@ export default function TradesScreen() {
           closedAt: typeof order.closed_at === 'string' ? order.closed_at : null,
           livePriceUsd: null,
           tokenAddress: order.token_address || order.output_mint || '',
+          imageUrl: typeof order.image_url === 'string' ? order.image_url : undefined,
         } as TradeItem;
       });
       setTrades(mapped);
+      
+      // Fetch token images from Dexscreener for trades without images
+      const tradesNeedingImages = mapped.filter(t => !t.imageUrl && t.tokenAddress && t.chain === 'solana');
+      if (tradesNeedingImages.length > 0) {
+        const addresses = tradesNeedingImages.map(t => t.tokenAddress).filter(Boolean);
+        if (addresses.length > 0) {
+          try {
+            const url = `https://api.dexscreener.com/latest/dex/tokens/${addresses.join(',')}`;
+            const res = await fetch(url);
+            if (res.ok) {
+              const data = await res.json();
+              const imageMap: Record<string, string> = {};
+              
+              if (data?.pairs && Array.isArray(data.pairs)) {
+                for (const pair of data.pairs) {
+                  const addr = pair?.baseToken?.address;
+                  const img = pair?.info?.imageUrl;
+                  if (addr && img && !imageMap[addr]) {
+                    imageMap[addr] = img;
+                  }
+                }
+              }
+              
+              // Update trades with images
+              setTrades(prev => prev.map(t => {
+                if (!t.imageUrl && t.tokenAddress && imageMap[t.tokenAddress]) {
+                  return { ...t, imageUrl: imageMap[t.tokenAddress] };
+                }
+                return t;
+              }));
+            }
+          } catch {
+            // Ignore image fetch errors
+          }
+        }
+      }
     } catch (err: any) {
       const now = Date.now();
       setLastErrorTime(now);
@@ -1303,10 +1357,36 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
   },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  tokenImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  tokenImagePlaceholder: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(82,130,255,0.2)',
+    borderWidth: 2,
+    borderColor: 'rgba(82,130,255,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeholderText: {
+    color: '#5282ff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  tokenInfo: {
+    flex: 1,
+  },
   cardTopRight: { alignItems: 'flex-end', gap: 2 },
-  symbol: { color: '#fff', fontWeight: '800', fontSize: 16 },
-  statusBadge: { fontSize: 10, fontWeight: '700', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 999 },
+  symbol: { color: '#fff', fontWeight: '800', fontSize: 16, marginBottom: 4 },
+  statusBadge: { fontSize: 9, fontWeight: '700', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start' },
   statusOpen: { backgroundColor: 'rgba(74,222,128,0.15)', color: '#4ade80' },
   statusClosed: { backgroundColor: 'rgba(255,255,255,0.08)', color: '#9db0db' },
   amountText: { color: '#fff', fontSize: 13, fontWeight: '600' },

@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
 
 type TradeItem = {
   id: string;
@@ -7,13 +8,42 @@ type TradeItem = {
   entryPrice: string;
   roi: string;
   status: 'open' | 'closed';
+  imageUrl?: string;
 };
 
 const MOCK_TRADES: TradeItem[] = [
-  { id: '1', symbol: 'PEPE', entryPrice: '$0.000011', roi: '+8.2%', status: 'open' },
-  { id: '2', symbol: 'BONK', entryPrice: '$0.000024', roi: '-2.6%', status: 'open' },
-  { id: '3', symbol: 'WIF', entryPrice: '$2.11', roi: '+16.9%', status: 'closed' },
-  { id: '4', symbol: 'FLOKI', entryPrice: '$0.00017', roi: '+4.1%', status: 'closed' },
+  { 
+    id: '1', 
+    symbol: 'PEPE', 
+    entryPrice: '$0.000011', 
+    roi: '+8.2%', 
+    status: 'open',
+    imageUrl: 'https://dd.dexscreener.com/ds-data/tokens/ethereum/0x6982508145454ce325ddbe47a25d4ec3d2311933.png'
+  },
+  { 
+    id: '2', 
+    symbol: 'BONK', 
+    entryPrice: '$0.000024', 
+    roi: '-2.6%', 
+    status: 'open',
+    imageUrl: 'https://dd.dexscreener.com/ds-data/tokens/solana/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263.png'
+  },
+  { 
+    id: '3', 
+    symbol: 'WIF', 
+    entryPrice: '$2.11', 
+    roi: '+16.9%', 
+    status: 'closed',
+    imageUrl: 'https://dd.dexscreener.com/ds-data/tokens/solana/EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm.png'
+  },
+  { 
+    id: '4', 
+    symbol: 'FLOKI', 
+    entryPrice: '$0.00017', 
+    roi: '+4.1%', 
+    status: 'closed',
+    imageUrl: 'https://dd.dexscreener.com/ds-data/tokens/ethereum/0xcf0c122c6b73ff809c693db761e7baebe62b6a2e.png'
+  },
 ];
 
 export const LiveTradesList = memo(function LiveTradesList() {
@@ -23,9 +53,23 @@ export const LiveTradesList = memo(function LiveTradesList() {
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false} nestedScrollEnabled>
         {MOCK_TRADES.map((trade) => (
           <View key={trade.id} style={styles.row}>
-            <View>
-              <Text style={styles.symbol}>{trade.symbol}</Text>
-              <Text style={styles.sub}>Entry {trade.entryPrice}</Text>
+            <View style={styles.leftCol}>
+              {trade.imageUrl ? (
+                <Image
+                  source={{ uri: trade.imageUrl }}
+                  style={styles.tokenImage}
+                  contentFit="cover"
+                  transition={200}
+                />
+              ) : (
+                <View style={styles.tokenImagePlaceholder}>
+                  <Text style={styles.placeholderText}>{trade.symbol[0]}</Text>
+                </View>
+              )}
+              <View style={styles.tokenInfo}>
+                <Text style={styles.symbol}>{trade.symbol}</Text>
+                <Text style={styles.sub}>Entry {trade.entryPrice}</Text>
+              </View>
             </View>
             <View style={styles.rightCol}>
               <Text style={[styles.roi, trade.roi.startsWith('+') ? styles.green : styles.red]}>{trade.roi}</Text>
@@ -62,6 +106,39 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
     backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  leftCol: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  tokenImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  tokenImagePlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+    backgroundColor: 'rgba(82,130,255,0.2)',
+    borderWidth: 2,
+    borderColor: 'rgba(82,130,255,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeholderText: {
+    color: '#5282ff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  tokenInfo: {
+    flex: 1,
   },
   symbol: {
     color: '#f0f5ff',
